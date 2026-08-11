@@ -1,0 +1,11 @@
+# This file contains settings for cargo-hakari.
+# The generated workspace-hack crate keeps dependency features identical across
+# the CLI and processor so their Crane artifacts can be reused.
+hakari-package = "cf-nix-cache-workspace-hack"
+dep-format-version = "4"
+resolver = "2"
+platforms = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "aarch64-apple-darwin",
+]

@@ -1,0 +1,102 @@
+import { DurableObject } from 'cloudflare:workers';
+import type { Grant, PageResponse, TokenSummary } from '../../../types';
+import type { RpcResult } from '../../../rpc';
+import { initialize } from '../../../infrastructure/durable/shared';
+import { TokenAudit } from './audit';
+import { TokenIssuance } from './issuance';
+import { TokenManagement } from './management';
+import { TokenSigner } from './signer';
+
+const schema = `CREATE TABLE IF NOT EXISTS tokens (
+  jti TEXT PRIMARY KEY, subject TEXT NOT NULL, expires_at INTEGER NOT NULL,
+  issued_at INTEGER NOT NULL, grants TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0,
+  token TEXT NOT NULL, operation_id TEXT UNIQUE NOT NULL, fingerprint TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS token_operations (operation_id TEXT PRIMARY KEY, jti TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS bootstrap (key INTEGER PRIMARY KEY CHECK (key = 1), operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS audit_outbox (event_id TEXT PRIMARY KEY, event TEXT NOT NULL, created_at INTEGER NOT NULL);`;
+
+export class TokenCatalog extends DurableObject<Env> {
+  private readonly issuance: TokenIssuance;
+  private readonly management: TokenManagement;
+  private readonly audit: TokenAudit;
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    initialize(ctx, schema);
+    this.audit = new TokenAudit(ctx, env);
+    this.issuance = new TokenIssuance(
+      ctx,
+      env,
+      new TokenSigner(env),
+      this.audit,
+    );
+    this.management = new TokenManagement(ctx, this.audit);
+  }
+
+  bootstrap(input: {
+    operation_id: string;
+    fingerprint: string;
+    subject: string;
+    grants: Grant[];
+    expires_at: number;
+    secret: string;
+  }): Promise<
+    RpcResult<{
+      id: string;
+      token: string;
+      expires_at: number;
+      repeated: boolean;
+    }>
+  > {
+    return this.issuance.bootstrap(input);
+  }
+
+  issue(input: {
+    operation_id: string;
+    fingerprint: string;
+    actor: string;
+    subject: string;
+    grants: Grant[];
+    expires_at: number;
+  }): Promise<
+    RpcResult<{
+      id: string;
+      token: string;
+      expires_at: number;
+      repeated: boolean;
+    }>
+  > {
+    return this.issuance.issue(input);
+  }
+
+  check(input: {
+    jti: string;
+    exp: number;
+  }): Promise<RpcResult<{ active: boolean }>> {
+    return this.management.check(input);
+  }
+
+  revoke(input: {
+    operation_id: string;
+    jti: string;
+    actor: string;
+  }): Promise<RpcResult<void>> {
+    return this.management.revoke(input);
+  }
+
+  list(input: {
+    limit: number;
+    cursor: string | null;
+  }): Promise<RpcResult<PageResponse<TokenSummary>>> {
+    return this.management.list(input);
+  }
+
+  alarm(): Promise<void> {
+    return this.audit.alarm();
+  }
+
+  fetch(): Response {
+    return Response.json({ code: 'rpc_only' }, { status: 404 });
+  }
+}

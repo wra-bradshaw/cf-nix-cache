@@ -1,0 +1,85 @@
+import { DurableObject } from 'cloudflare:workers';
+import type {
+  CompleteUploadRequest,
+  ProcessResult,
+  UploadManifest,
+  UploadState,
+  UploadStateResponse,
+} from '../../../types';
+import type { RpcResult } from '../../../rpc';
+import { failure } from './model';
+import { UploadMultipart } from './multipart';
+import { UploadPublication } from './publication';
+import { UploadStorage } from './storage';
+
+export class UploadJob extends DurableObject<Env> {
+  private readonly storage: UploadStorage;
+  private readonly multipart: UploadMultipart;
+  private readonly publication: UploadPublication;
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    this.storage = new UploadStorage(ctx);
+    this.multipart = new UploadMultipart(ctx, env, this.storage);
+    this.publication = new UploadPublication(ctx, env, this.storage);
+  }
+
+  async access(): Promise<RpcResult<{ cache: string; state: UploadState }>> {
+    const row = this.storage.row();
+    return row
+      ? { ok: true, value: { cache: row.cache, state: row.state } }
+      : failure('not_found', 'upload not found', 404);
+  }
+
+  init(input: {
+    job_id: string;
+    cache: string;
+    cache_id: string;
+    incarnation: string;
+    staging_key: string;
+    manifest: UploadManifest;
+    compressed_size: number;
+    idempotency_key: string;
+    fingerprint: string;
+  }): Promise<RpcResult<{ job_id: string; state: UploadState }>> {
+    return this.multipart.init(input);
+  }
+
+  putPart(input: {
+    number: number;
+    length: number;
+    body: ReadableStream<Uint8Array> | null;
+  }): Promise<RpcResult<{ part_number: number; etag: string }>> {
+    return this.multipart.putPart(input);
+  }
+
+  complete(
+    input: CompleteUploadRequest,
+  ): Promise<RpcResult<UploadStateResponse>> {
+    return this.multipart.complete(input);
+  }
+
+  processing(): Promise<RpcResult<void>> {
+    return this.publication.processing();
+  }
+
+  publish(result: ProcessResult): Promise<RpcResult<void>> {
+    return this.publication.publish(result);
+  }
+
+  fail(message: string, terminal = true): Promise<RpcResult<void>> {
+    return this.publication.fail(message, terminal);
+  }
+
+  abort(): Promise<RpcResult<UploadStateResponse>> {
+    return this.publication.abort();
+  }
+
+  state(): Promise<RpcResult<UploadStateResponse>> {
+    return this.publication.state();
+  }
+
+  fetch(): Response {
+    return Response.json({ code: 'rpc_only' }, { status: 404 });
+  }
+}

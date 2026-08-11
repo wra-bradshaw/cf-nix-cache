@@ -1,0 +1,44 @@
+{
+  "name": "cf-nix-cache-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit && tsc -p tsconfig.node.json && eslint . && prettier --check . && pnpm boundaries:check && pnpm contracts:check && knip",
+    "fix": "eslint . --fix && prettier --write .",
+    "dev": "vite dev",
+    "predev": "pnpm contracts:generate",
+    "build": "vite build",
+    "prebuild": "pnpm contracts:generate",
+    "deploy": "vite build && wrangler deploy",
+    "test": "vitest run",
+    "pretest": "pnpm contracts:generate",
+    "contracts:generate": "node ../../scripts/generate-contracts.mts",
+    "precheck": "pnpm contracts:generate",
+    "pree2e": "pnpm contracts:generate",
+    "precontracts:check": "pnpm contracts:generate",
+    "contracts:check": "node ../../scripts/check-contracts.mts",
+    "boundaries:check": "node ../../scripts/check-boundaries.mts",
+    "e2e": "vitest run --config vitest.e2e.config.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.51.2",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.13.3",
+    "ajv": "^8.20.0",
+    "eslint": "^10.8.1",
+    "jsonc-parser": "^3.3.1",
+    "json-schema-to-typescript": "^15.0.4",
+    "knip": "^6.32.1",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.66.0",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.120.1"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7",
+    "hono": "^4.7.10",
+    "jose": "^6.0.10"
+  }
+}

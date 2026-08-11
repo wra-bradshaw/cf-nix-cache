@@ -1,0 +1,11 @@
+target/
+/result*
+/.direnv
+.terraform
+*.tfstate*
+crash.log
+.DS_Store
+node_modules/
+apps/worker/src/generated/
+.wrangler/
+.wrangler.production.json

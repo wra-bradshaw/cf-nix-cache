@@ -1,0 +1,24 @@
+[package]
+name = "cf-nix-cache-processor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+async-compression.workspace = true
+axum.workspace = true
+cf-nix-cache-core = { path = "../core" }
+fastcdc.workspace = true
+futures.workspace = true
+nix-nar.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+zstd.workspace = true
+thiserror.workspace = true
+cf-nix-cache-workspace-hack = { version = "0.1", path = "../workspace-hack" }

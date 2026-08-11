@@ -1,0 +1,1 @@
+export { controlRoutes } from './routes';

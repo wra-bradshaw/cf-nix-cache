@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cf-nix-cache.dev/schemas/api.json",
+  "title": "cf-nix-cache API contract",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "role": { "enum": ["pull", "push", "admin"] },
+    "grant": { "type": "object", "additionalProperties": false, "required": ["cache", "role"], "properties": { "cache": { "type": "string", "pattern": "^(\\*|[a-z0-9_-]{1,64})$" }, "role": { "$ref": "#/$defs/role" } } },
+    "manifest": { "type": "object", "additionalProperties": false, "required": ["cache", "store_hash", "store_path", "nar_hash", "nar_size", "references"], "properties": { "cache": { "type": "string", "pattern": "^[a-z0-9_-]{1,64}$" }, "store_hash": { "type": "string", "pattern": "^[0-9abcdfghijklmnpqrsvwxyz]{32}$" }, "store_path": { "type": "string", "pattern": "^/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-.+$", "maxLength": 512 }, "nar_hash": { "type": "string", "pattern": "^sha256:[0-9abcdfghijklmnpqrsvwxyz]{52}$" }, "nar_size": { "type": "integer", "minimum": 1, "maximum": 10737418240 }, "references": { "type": "array", "maxItems": 1024, "items": { "type": "string", "maxLength": 512 } }, "deriver": { "type": ["string", "null"], "maxLength": 512 }, "ca": { "type": ["string", "null"], "maxLength": 512 } } },
+    "create_cache": { "type": "object", "additionalProperties": false, "required": ["name", "quota_bytes"], "properties": { "name": { "type": "string", "pattern": "^[a-z0-9_-]{1,64}$" }, "public": { "type": "boolean", "default": false }, "quota_bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }, "encoding_id": { "const": "fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1" } } },
+    "configure_cache": { "type": "object", "additionalProperties": false, "required": ["public"], "properties": { "public": { "type": "boolean" } } },
+    "cache": { "type": "object", "additionalProperties": false, "required": ["id", "name", "public", "quota_bytes", "logical_bytes", "encoding_id", "created_at", "lifecycle"], "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 128 }, "name": { "type": "string", "pattern": "^[a-z0-9_-]{1,64}$" }, "public": { "type": "boolean" }, "quota_bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }, "logical_bytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }, "encoding_id": { "const": "fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1" }, "created_at": { "type": "integer", "minimum": 1 }, "lifecycle": { "enum": ["CREATING", "ACTIVE", "DELETING"] } } },
+    "token_request": { "type": "object", "additionalProperties": false, "required": ["subject", "valid_for_seconds", "grants"], "properties": { "subject": { "type": "string", "minLength": 1, "maxLength": 256 }, "valid_for_seconds": { "type": "integer", "minimum": 1, "maximum": 157680000 }, "grants": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/grant" } } } },
+    "bootstrap_request": { "type": "object", "additionalProperties": false, "required": ["subject", "valid_for_seconds", "grants", "secret"], "properties": { "subject": { "type": "string", "minLength": 1, "maxLength": 256 }, "valid_for_seconds": { "type": "integer", "minimum": 1, "maximum": 157680000 }, "grants": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/grant" } }, "secret": { "type": "string", "minLength": 1 } } },
+    "upload_request": { "type": "object", "additionalProperties": false, "required": ["manifest", "compressed_size"], "properties": { "manifest": { "$ref": "#/$defs/manifest" }, "compressed_size": { "type": "integer", "minimum": 1, "maximum": 12884901888 } } },
+    "missing_paths": { "type": "object", "additionalProperties": false, "required": ["store_hashes"], "properties": { "store_hashes": { "type": "array", "maxItems": 100, "items": { "type": "string", "pattern": "^[0-9abcdfghijklmnpqrsvwxyz]{32}$" } } } },
+    "upload_status": { "enum": ["CREATED", "UPLOADING", "COMPLETING", "QUEUED", "PROCESSING", "PUBLISHING", "READY", "FAILED", "ABORTED"] },
+    "upload_state": { "type": "object", "additionalProperties": false, "required": ["id", "status", "error"], "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 128 }, "status": { "$ref": "#/$defs/upload_status" }, "error": { "type": ["string", "null"], "maxLength": 2000 } } },
+    "token_response": { "type": "object", "additionalProperties": false, "required": ["id", "token", "expires_at"], "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 128 }, "token": { "type": "string", "minLength": 1 }, "expires_at": { "type": "integer", "minimum": 1 } } },
+    "token_summary": { "type": "object", "additionalProperties": false, "required": ["id", "subject", "grants", "issued_at", "expires_at", "revoked"], "properties": { "id": { "type": "string" }, "subject": { "type": "string" }, "grants": { "type": "array", "items": { "$ref": "#/$defs/grant" } }, "issued_at": { "type": "integer", "minimum": 1 }, "expires_at": { "type": "integer", "minimum": 1 }, "revoked": { "type": "boolean" } } },
+    "audit_event": { "type": "object", "additionalProperties": false, "required": ["id", "timestamp", "actor", "action", "resource", "outcome", "metadata"], "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 256 }, "timestamp": { "type": "integer", "minimum": 1 }, "actor": { "type": "string", "minLength": 1, "maxLength": 256 }, "action": { "type": "string", "minLength": 1, "maxLength": 128 }, "resource": { "type": "string", "minLength": 1, "maxLength": 512 }, "outcome": { "type": "string", "enum": ["success", "accepted", "failure"] }, "metadata": { "type": "object", "additionalProperties": { "type": "string" } } } },
+    "complete_upload": { "type": "object", "additionalProperties": false, "properties": { "parts": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["part_number", "etag"], "properties": { "part_number": { "type": "integer", "minimum": 1 }, "etag": { "type": "string", "minLength": 1 } } } } } }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/create_cache" },
+    { "$ref": "#/$defs/token_request" },
+    { "$ref": "#/$defs/bootstrap_request" },
+    { "$ref": "#/$defs/upload_request" },
+    { "$ref": "#/$defs/upload_state" },
+    { "$ref": "#/$defs/configure_cache" },
+    { "$ref": "#/$defs/cache" },
+    { "$ref": "#/$defs/missing_paths" },
+    { "$ref": "#/$defs/token_response" },
+    { "$ref": "#/$defs/token_summary" },
+    { "$ref": "#/$defs/audit_event" },
+    { "$ref": "#/$defs/complete_upload" }
+  ]
+}

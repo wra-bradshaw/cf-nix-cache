@@ -1,0 +1,13 @@
+[package]
+name = "cf-nix-cache-contracts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+typify.workspace = true
+regress.workspace = true
+uuid.workspace = true
+cf-nix-cache-workspace-hack = { version = "0.1", path = "../workspace-hack" }
