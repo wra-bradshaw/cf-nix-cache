@@ -9,6 +9,18 @@ permissions:
   contents: read
 
 jobs:
+  release-metadata:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:check --allow-placeholder
+
   checks:
     runs-on: ubuntu-24.04
     steps:
@@ -23,6 +35,8 @@ jobs:
           nix develop --command pnpm --dir apps/worker check
           nix develop --command pnpm --dir apps/worker test
           nix develop --command pnpm --dir apps/worker build
+          nix develop --command pnpm --dir packages/cf-nix-cache-worker build
+          nix develop --command npm pack ./packages/cf-nix-cache-worker --dry-run
           nix develop --command pnpm --dir apps/worker contracts:check
           nix develop --command pnpm --dir apps/worker boundaries:check
           nix develop --command terraform -chdir=infra fmt -check -recursive

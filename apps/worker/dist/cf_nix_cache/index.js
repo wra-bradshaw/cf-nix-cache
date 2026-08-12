@@ -8745,19 +8745,19 @@ class UploadPublication {
         "upload cannot be aborted after processing has started",
         409
       );
-    if (row.upload_id && ["UPLOADING", "COMPLETING"].includes(row.state))
-      await this.env.CACHE_BUCKET.resumeMultipartUpload(
-        row.staging_key,
-        row.upload_id
-      ).abort().catch(() => void 0);
     this.ctx.storage.transactionSync(() => {
       const current = this.storage.row();
-      if (current && !["READY", "FAILED", "ABORTED"].includes(current.state))
+      if (current && ["UPLOADING", "COMPLETING", "QUEUED"].includes(current.state))
         this.ctx.storage.sql.exec(
           "UPDATE job SET state = 'ABORTED' WHERE job_id = ?",
           current.job_id
         );
     });
+    if (row.upload_id && ["UPLOADING", "COMPLETING"].includes(row.state))
+      await this.env.CACHE_BUCKET.resumeMultipartUpload(
+        row.staging_key,
+        row.upload_id
+      ).abort().catch(() => void 0);
     return { ok: true, value: state(this.storage.row()) };
   }
   async state() {

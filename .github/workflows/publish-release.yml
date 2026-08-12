@@ -1,0 +1,167 @@
+name: Publish release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/cf-nix-cache-worker/package.json"
+      - "packages/cf-nix-cache-worker/release-manifest.json"
+      - "cf-nix-cache-template/package.json"
+      - "cf-nix-cache-template/wrangler.jsonc"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-release
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: release
+    outputs:
+      ready: ${{ steps.release.outputs.ready }}
+      package_name: ${{ steps.release.outputs.package_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - uses: docker/setup-buildx-action@v3
+      - run: pnpm install --frozen-lockfile
+
+      - name: Determine whether a pinned release is ready
+        id: release
+        run: |
+          if ! node -e "process.exit(require('./packages/cf-nix-cache-worker/release-manifest.json').releaseReady === true ? 0 : 1)"; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Release metadata has not been finalized by Prepare release artifacts; nothing to publish."
+            exit 0
+          fi
+          pnpm release:check --github-output
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check npm publication state
+        if: steps.release.outputs.ready == 'true'
+        id: npm
+        env:
+          PACKAGE_NAME: ${{ steps.release.outputs.package_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if npm view "$PACKAGE_NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify the public processor digest
+        if: steps.release.outputs.ready == 'true' && steps.npm.outputs.published == 'false'
+        env:
+          PROCESSOR_IMAGE: ${{ steps.release.outputs.image }}
+        run: docker buildx imagetools inspect "$PROCESSOR_IMAGE"
+
+      - name: Verify an existing npm publication
+        if: steps.release.outputs.ready == 'true' && steps.npm.outputs.published == 'true'
+        env:
+          PACKAGE_NAME: ${{ steps.release.outputs.package_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          package_dir="$(mktemp -d)"
+          tarball="$(npm pack "$PACKAGE_NAME@$VERSION" --pack-destination "$package_dir" --silent)"
+          tar -xOf "$package_dir/$tarball" package/release-manifest.json | jq -S . > "$package_dir/published.json"
+          jq -S . packages/cf-nix-cache-worker/release-manifest.json > "$package_dir/expected.json"
+          diff -u "$package_dir/expected.json" "$package_dir/published.json"
+
+      - name: Build and test the npm artifact
+        if: steps.release.outputs.ready == 'true' && steps.npm.outputs.published == 'false'
+        run: |
+          pnpm --dir apps/worker install --frozen-lockfile
+          pnpm --dir apps/worker check
+          pnpm --dir apps/worker test
+          pnpm --dir apps/worker build
+          pnpm --dir packages/cf-nix-cache-worker build
+          npm pack ./packages/cf-nix-cache-worker --dry-run
+
+      - name: Publish npm package with trusted publishing
+        if: steps.release.outputs.ready == 'true' && steps.npm.outputs.published == 'false'
+        env:
+          # Leave NPM_TOKEN unset after trusted publishing is configured. It is
+          # supported only to bootstrap the package's first release.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm install --global npm@11
+          npm publish ./packages/cf-nix-cache-worker --access public
+
+      - name: Create the GitHub release
+        if: steps.release.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "GitHub release $tag already exists"
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --generate-notes --title "$tag"
+          fi
+
+  update-template:
+    name: Update public deployment template
+    needs: publish
+    if: needs.publish.outputs.ready == 'true' && vars.TEMPLATE_REPOSITORY != ''
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the release source
+        uses: actions/checkout@v4
+        with:
+          path: source
+      - name: Check out the public template
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.TEMPLATE_REPOSITORY }}
+          token: ${{ secrets.TEMPLATE_REPO_TOKEN }}
+          path: template
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Refresh the standalone template and lockfile
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+          TEMPLATE_REPOSITORY: ${{ vars.TEMPLATE_REPOSITORY }}
+          TEMPLATE_REPO_TOKEN: ${{ secrets.TEMPLATE_REPO_TOKEN }}
+        run: |
+          rsync -a --delete --exclude .git source/cf-nix-cache-template/ template/
+          pnpm --dir template install --lockfile-only
+          cd template
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Template repository is already current."
+            exit 0
+          fi
+          branch="release/v$VERSION"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "Template update branch $branch already exists."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add --all
+          git commit -m "Update cf-nix-cache to v$VERSION"
+          git push origin "$branch"
+          GH_TOKEN="$TEMPLATE_REPO_TOKEN" gh pr create \
+            --repo "$TEMPLATE_REPOSITORY" \
+            --base main \
+            --head "$branch" \
+            --title "Update cf-nix-cache to v$VERSION" \
+            --body "Updates the deployment template and lockfile for cf-nix-cache v$VERSION."

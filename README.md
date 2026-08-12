@@ -19,10 +19,32 @@ a native Rust Container validates NARs and produces deterministic zstd frames.
 - `crates/cli`: Nix publisher and administration client.
 - `schemas`: JSON contracts shared by Worker and Rust.
 - `infra`: Terraform-managed R2, lifecycle, DNS, and Worker route resources.
+- `packages/cf-nix-cache-worker`: the published Worker runtime and its
+  immutable processor release manifest.
+- `cf-nix-cache-template`: the isolated public Deploy-to-Cloudflare template.
 
 Terraform owns account resources. Wrangler owns the Worker bundle, Durable
 Object namespaces, Workflows, and Container image deployment; the same Worker
 must not be managed by both tools.
+
+## Cloudflare distribution
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wra-bradshaw/cf-nix-cache-template)
+
+The supported customer distribution is the standalone
+[`cf-nix-cache-template`](cf-nix-cache-template/README.md). It contains only a
+tiny Worker entrypoint, pinned Wrangler/dependency versions, customer-owned
+`wrangler.jsonc`, and setup/upgrade helpers. Cloudflare Workers Builds runs
+`pnpm deploy`; external CI can run the same command. No deployment from that
+template builds Rust or a Container image.
+
+Releases publish `cf-nix-cache@X.Y.Z` and the matching public
+`linux/amd64` processor image. The package's release manifest records the
+immutable image digest, so Dependabot/Renovate updates one dependency. The
+template renders a temporary Wrangler config that changes only the processor
+image and leaves customer names, scaling, placement, routes, and observability
+intact. The development flake below remains useful for local builds and
+integration tests; it is not the customer upgrade path.
 
 ## Local checks
 

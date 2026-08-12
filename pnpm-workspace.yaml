@@ -1,0 +1,6 @@
+packages:
+  - packages/*
+
+# apps/worker intentionally retains its existing isolated lockfile. The public
+# deployment template is also installed independently, exactly as Cloudflare
+# Workers Builds will install it after cloning the template repository.

@@ -1,0 +1,38 @@
+{
+  "name": "cf-nix-cache",
+  "version": "0.1.0",
+  "description": "The published Cloudflare Worker runtime for cf-nix-cache",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wra-bradshaw/cf-nix-cache.git",
+    "directory": "packages/cf-nix-cache-worker"
+  },
+  "homepage": "https://github.com/wra-bradshaw/cf-nix-cache#readme",
+  "bugs": {
+    "url": "https://github.com/wra-bradshaw/cf-nix-cache/issues"
+  },
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "release-manifest.json"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./release-manifest.json": "./release-manifest.json"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "prepack": "pnpm build"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

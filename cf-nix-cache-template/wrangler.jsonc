@@ -1,0 +1,64 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "cf-nix-cache",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-10",
+  "workers_dev": true,
+  "r2_buckets": [
+    {
+      "binding": "CACHE_BUCKET",
+      "bucket_name": "cf-nix-cache",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SYSTEM_CONTROL", "class_name": "SystemControl" },
+      { "name": "TOKEN_CATALOG", "class_name": "TokenCatalog" },
+      { "name": "AUDIT_LOG", "class_name": "AuditLog" },
+      { "name": "CACHE_COORDINATOR", "class_name": "CacheCoordinator" },
+      { "name": "CACHE_INDEX", "class_name": "CacheIndexShard" },
+      { "name": "UPLOAD_JOB", "class_name": "UploadJob" },
+      { "name": "PROCESSOR", "class_name": "ProcessorContainer" },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "SystemControl",
+        "TokenCatalog",
+        "AuditLog",
+        "CacheCoordinator",
+        "CacheIndexShard",
+        "UploadJob",
+        "ProcessorContainer",
+      ],
+    },
+  ],
+  "containers": [
+    {
+      "class_name": "ProcessorContainer",
+      "image": "docker.io/willlol/cf-nix-cache@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "max_instances": 10,
+    },
+  ],
+  "workflows": [
+    {
+      "name": "process-upload",
+      "binding": "PROCESS_UPLOAD",
+      "class_name": "ProcessUploadWorkflow",
+    },
+    {
+      "name": "delete-cache",
+      "binding": "DELETE_CACHE",
+      "class_name": "DeleteCacheWorkflow",
+    },
+  ],
+  "vars": {
+    "CF_NIX_CACHE_CONFIG_SCHEMA": "1",
+    "TOKEN_ISSUER": "cf-nix-cache",
+    "TOKEN_AUDIENCE": "cf-nix-cache",
+    "NIX_SIGNING_KEY_NAME": "cache.nix-signing",
+  },
+  "observability": { "enabled": true },
+}
