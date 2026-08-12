@@ -14,6 +14,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm check
+      - name: Check whether the pinned runtime is published
+        id: runtime
+        run: |
+          version="$(node -p "require('./package.json').dependencies['cf-nix-cache']")"
+          if npm view "cf-nix-cache@$version" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::cf-nix-cache@$version is not published yet; full template validation starts after the initial release."
+          fi
+      - name: Install the standalone template
+        if: steps.runtime.outputs.published == 'true'
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm install --no-frozen-lockfile
+          fi
+      - if: steps.runtime.outputs.published == 'true'
+        run: pnpm check
