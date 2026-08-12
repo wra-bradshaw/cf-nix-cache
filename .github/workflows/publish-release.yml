@@ -35,7 +35,7 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - run: pnpm install --frozen-lockfile
 
       - name: Determine whether a pinned release is ready
