@@ -10,6 +10,6 @@
     "version-packages": "changeset version && node scripts/sync-release-version.mts"
   },
   "devDependencies": {
-    "@changesets/cli": "2.29.7"
+    "@changesets/cli": "3.0.2"
   }
 }
