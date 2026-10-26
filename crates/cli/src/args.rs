@@ -2,8 +2,6 @@ use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use reqwest::Url;
 
-pub(crate) mod handlers;
-
 #[derive(Parser)]
 #[command(
     version,

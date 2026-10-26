@@ -8,15 +8,13 @@ use reqwest::Method;
 use std::process::Command;
 
 use crate::{
-    features::{
-        commands::{
-            page_path, AuditCommand, CacheCommand, CommandKind, TokenCommand, TokenOutput,
-            UploadCommand,
-        },
-        nix::{command_json, store_hash},
-        uploads::upload_path,
+    args::{
+        page_path, AuditCommand, CacheCommand, CommandKind, TokenCommand, TokenOutput,
+        UploadCommand,
     },
-    infrastructure::client::Api,
+    client::Api,
+    nix::{command_json, store_hash},
+    upload::upload_path,
 };
 
 pub(crate) async fn run(command: CommandKind, api: Api) -> Result<()> {

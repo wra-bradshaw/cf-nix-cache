@@ -11,7 +11,7 @@ use std::io::Cursor;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
-use super::{
+use crate::{
     nar::{LimitedReader, NarValidator},
     object_store::ObjectStore,
 };
@@ -213,7 +213,7 @@ fn now_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::features::processing::object_store::ObjectBody;
+    use crate::object_store::ObjectBody;
     use async_trait::async_trait;
     use cf_nix_cache_core::ENCODING_ID;
     use std::{

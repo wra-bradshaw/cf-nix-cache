@@ -83,7 +83,10 @@ tests keep the Vitest file focused on lifecycle and scenario declarations;
 harness setup, HTTP assertions, process utilities, and scenario implementations
 are split under `e2e/support` and `e2e/scenarios`.
 
-The Rust workspace follows the same ownership model: `core/src/domain` owns
-shared protocol semantics, `processor/src/features/processing` owns processing
-and storage adapters, and `cli/src/features` owns command flows while
-`cli/src/infrastructure` owns the HTTP/configuration client.
+The Rust crates are small, so each uses a flat module layout. `core/src`
+owns shared protocol semantics (`identifiers`, `manifests`, `wire`, `error`).
+The processor splits into `main` (HTTP bootstrap), `service` (processing),
+`nar` (NAR validation), and `object_store` (storage adapter). The CLI splits
+into `args` (command definitions), `handlers` (command flows), `nix` and
+`upload` (local Nix and multipart upload helpers), `client` (HTTP client),
+and `config` (credential storage).

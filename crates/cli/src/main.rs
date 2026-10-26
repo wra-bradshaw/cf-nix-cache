@@ -2,12 +2,16 @@ use anyhow::{Context, Result};
 use cf_nix_cache_core::{CreateTokenRequest, TokenGrant};
 use clap::Parser;
 
-mod features;
-mod infrastructure;
+mod args;
+mod client;
+mod config;
+mod handlers;
+mod nix;
+mod upload;
 
-use features::commands::handlers;
-use features::commands::{Args, CommandKind, TokenOutput};
-use infrastructure::client::{bootstrap, config_path, load_config, save_config, Api};
+use args::{Args, CommandKind, TokenOutput};
+use client::{bootstrap, Api};
+use config::{config_path, load_config, save_config};
 
 #[tokio::main]
 async fn main() -> Result<()> {

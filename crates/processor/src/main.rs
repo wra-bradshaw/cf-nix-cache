@@ -11,11 +11,13 @@ use axum::{
 };
 use cf_nix_cache_core::contracts::process_job::CfNixCacheProcessorJob;
 use cf_nix_cache_core::{ProcessJob, ProcessResult, ENCODING_ID};
-use features::processing::object_store::HttpObjectStore;
+use object_store::HttpObjectStore;
 use serde::Serialize;
 use tokio::net::TcpListener;
 
-mod features;
+mod nar;
+mod object_store;
+mod service;
 
 #[derive(Clone)]
 struct AppState {
@@ -66,7 +68,7 @@ async fn process(
             "unsupported processing contract",
         ));
     }
-    features::processing::service::process_job(&state.store, &job)
+    service::process_job(&state.store, &job)
         .await
         .map(Json)
         .map_err(ProcessorRejection::from_failure)
@@ -83,12 +85,10 @@ impl ProcessorRejection {
             },
         )
     }
-    fn from_failure(error: features::processing::service::ProcessFailure) -> Self {
+    fn from_failure(error: service::ProcessFailure) -> Self {
         match error {
-            features::processing::service::ProcessFailure::Permanent(message) => {
-                Self::permanent(message)
-            }
-            features::processing::service::ProcessFailure::Retryable(error) => Self(
+            service::ProcessFailure::Permanent(message) => Self::permanent(message),
+            service::ProcessFailure::Retryable(error) => Self(
                 StatusCode::SERVICE_UNAVAILABLE,
                 ErrorBody {
                     code: "retryable_failure",
@@ -109,12 +109,7 @@ mod tests {
     use super::*;
     #[test]
     fn invalid_input_is_not_retryable() {
-        let error = features::processing::service::ProcessFailure::Permanent(
-            "trailing bytes after NAR archive".into(),
-        );
-        assert!(matches!(
-            error,
-            features::processing::service::ProcessFailure::Permanent(_)
-        ));
+        let error = service::ProcessFailure::Permanent("trailing bytes after NAR archive".into());
+        assert!(matches!(error, service::ProcessFailure::Permanent(_)));
     }
 }

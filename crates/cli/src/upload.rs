@@ -1,6 +1,6 @@
 use crate::{
-    features::nix::{basename, make_nar, nix_hash, store_hash},
-    infrastructure::client::{upload_part_with_retry, Api},
+    client::{upload_part_with_retry, Api},
+    nix::{basename, make_nar, nix_hash, store_hash},
 };
 use anyhow::{bail, Context, Result};
 use cf_nix_cache_core::{
