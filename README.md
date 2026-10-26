@@ -11,7 +11,7 @@ a native Rust Container validates NARs and produces deterministic zstd frames.
 
 - `apps/worker`: HTTP API, Nix substituter, authentication, Durable Objects,
   Container binding, and Workflows.
-- `crates/core`: Rust protocol values, NAR-info signing helpers, and manifest
+- `crates/core`: Rust protocol values, encoding parameters, and manifest
   validation.
 - `crates/contracts`: generated Rust wire DTOs from the JSON Schemas.
 - `crates/processor`: native Container service for zstd/NAR validation,
