@@ -72,7 +72,7 @@ cacheRoutes.post('/api/caches', async (c) => {
 });
 
 cacheRoutes.get('/api/caches', async (c) => {
-  await authenticate(c.req.raw, c.env, '*', 'admin');
+  await authenticateGlobal(c.req.raw, c.env, 'admin');
   const limit = pageLimit(c.req.query('limit'));
   const after = decodeCursor<string>(c.req.query('cursor') ?? null) ?? null;
   const page = unwrapRpc(await system(c.env).listCaches({ after, limit }));
@@ -96,7 +96,7 @@ cacheRoutes.get('/api/caches/:name', async (c) => {
   const name = c.req.param('name');
   assertCacheName(name);
   const cache = await getCache(c.env, name);
-  await authenticate(c.req.raw, c.env, '*', 'admin');
+  await authenticateGlobal(c.req.raw, c.env, 'admin');
   return c.json(publicCache(cache));
 });
 

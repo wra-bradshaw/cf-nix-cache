@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { authenticate, authenticateAny } from '../auth/authentication';
+import { authenticateAny, authenticateGlobal } from '../auth/authentication';
 import { canDelegate } from '../auth/authorization';
 import {
   assertOpaqueId,
@@ -66,7 +66,7 @@ tokenRoutes.post('/api/tokens', async (c) => {
 });
 
 tokenRoutes.get('/api/tokens', async (c) => {
-  await authenticate(c.req.raw, c.env, '*', 'admin');
+  await authenticateGlobal(c.req.raw, c.env, 'admin');
   const result = unwrapRpc(
     await namedStub(c.env.TOKEN_CATALOG, 'catalog').list({
       limit: pageLimit(c.req.query('limit')),
@@ -78,7 +78,7 @@ tokenRoutes.get('/api/tokens', async (c) => {
 
 tokenRoutes.delete('/api/tokens/:jti', async (c) => {
   const operationId = idempotency(c.req.raw);
-  const admin = await authenticate(c.req.raw, c.env, '*', 'admin');
+  const admin = await authenticateGlobal(c.req.raw, c.env, 'admin');
   const jti = c.req.param('jti');
   assertOpaqueId(jti, 'token');
   unwrapRpc(
@@ -92,7 +92,7 @@ tokenRoutes.delete('/api/tokens/:jti', async (c) => {
 });
 
 tokenRoutes.get('/api/audit', async (c) => {
-  await authenticate(c.req.raw, c.env, '*', 'admin');
+  await authenticateGlobal(c.req.raw, c.env, 'admin');
   const limit = pageLimit(c.req.query('limit'));
   const cursor = c.req.query('cursor') ?? null;
   const pages = await Promise.all(
