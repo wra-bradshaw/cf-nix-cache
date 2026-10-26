@@ -1,15 +1,16 @@
 import { Hono } from 'hono';
 import { authenticate, authenticateAny } from '../auth/authentication';
+import { canDelegate } from '../auth/authorization';
 import {
   assertOpaqueId,
   BootstrapRequestSchema,
+  DomainError,
   encodeCursor,
   parseJsonSchema,
   TokenRequestSchema,
 } from '../domain/validation';
 import type { AuditEvent, PageResponse, TokenSummary } from '../../types';
 import { idempotency, parseJson, type AppEnv } from '../runtime/http';
-import { issueFromInput } from '../runtime/tokens';
 import { namedStub, unwrapRpc } from '../../rpc';
 import { auditShardNames } from '../audit/shard';
 import { pageLimit } from './helpers';
@@ -44,11 +45,22 @@ tokenRoutes.post('/api/tokens', async (c) => {
   const operationId = idempotency(c.req.raw);
   const admin = await authenticateAny(c.req.raw, c.env, 'admin');
   const input = parseJsonSchema(TokenRequestSchema, await parseJson(c.req.raw));
-  const result = await issueFromInput(
-    c.env,
-    input,
-    `token:${operationId}`,
-    admin,
+  const expiresAt = Math.floor(Date.now() / 1000) + input.valid_for_seconds;
+  if (!canDelegate(admin, input.grants, expiresAt))
+    throw new DomainError(
+      'forbidden',
+      'requested grants must be individually covered by an administrator grant and expire no later than the issuer',
+      403,
+    );
+  const result = unwrapRpc(
+    await namedStub(c.env.TOKEN_CATALOG, 'catalog').issue({
+      operation_id: `token:${operationId}`,
+      fingerprint: JSON.stringify(input),
+      actor: admin.sub,
+      subject: input.subject,
+      grants: input.grants,
+      expires_at: expiresAt,
+    }),
   );
   return c.json(result, result.repeated ? 200 : 201);
 });
