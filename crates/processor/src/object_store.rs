@@ -89,24 +89,29 @@ impl ObjectStore for HttpObjectStore {
     }
 }
 
+/// In-memory store for tests. Like R2 conditional writes, `put_if_absent`
+/// leaves an existing object untouched and returns `false`.
 #[cfg(test)]
-mod tests {
+pub(crate) mod memory {
     use super::*;
     use std::{
         collections::HashMap,
         io::Cursor,
         sync::{Arc, Mutex},
     };
-    use tokio::io::AsyncReadExt;
 
     #[derive(Clone, Default)]
-    struct InMemoryObjectStore(Arc<Mutex<HashMap<String, Vec<u8>>>>);
+    pub(crate) struct MemoryStore {
+        pub(crate) objects: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+        /// Every key passed to `put_if_absent`, including rejected writes.
+        pub(crate) writes: Arc<Mutex<Vec<String>>>,
+    }
 
     #[async_trait]
-    impl ObjectStore for InMemoryObjectStore {
+    impl ObjectStore for MemoryStore {
         async fn get(&self, key: &str) -> Result<ObjectBody> {
             let body = self
-                .0
+                .objects
                 .lock()
                 .unwrap()
                 .get(key)
@@ -121,7 +126,8 @@ mod tests {
             body: Vec<u8>,
             _content_type: &str,
         ) -> Result<bool> {
-            let mut objects = self.0.lock().unwrap();
+            self.writes.lock().unwrap().push(key.into());
+            let mut objects = self.objects.lock().unwrap();
             if objects.contains_key(key) {
                 return Ok(false);
             }
@@ -129,22 +135,41 @@ mod tests {
             Ok(true)
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{http::HeaderMap, Router};
+
+    /// Serves one fixed status for every request (400 if the conditional
+    /// header is missing) and performs one `put_if_absent` against it.
+    async fn put_against(status: u16) -> Result<bool> {
+        let app = Router::new().fallback(move |headers: HeaderMap| async move {
+            if headers
+                .get(reqwest::header::IF_NONE_MATCH)
+                .map(|v| v.as_bytes())
+                != Some(b"*")
+            {
+                return StatusCode::BAD_REQUEST;
+            }
+            StatusCode::from_u16(status).unwrap()
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        HttpObjectStore::new(&format!("http://{address}"))
+            .unwrap()
+            .put_if_absent("chunks/x", vec![1], "application/zstd")
+            .await
+    }
 
     #[tokio::test]
-    async fn content_addressed_writes_are_conditional_and_deduplicated() {
-        let store = InMemoryObjectStore::default();
-        assert!(store
-            .put_if_absent("chunks/x", vec![1], "application/zstd")
-            .await
-            .unwrap());
-        assert!(!store
-            .put_if_absent("chunks/x", vec![1], "application/zstd")
-            .await
-            .unwrap());
-        let mut body = store.get("chunks/x").await.unwrap();
-        let mut bytes = Vec::new();
-        body.read_to_end(&mut bytes).await.unwrap();
-        assert_eq!(bytes.len(), 1);
+    async fn put_if_absent_maps_conditional_write_statuses() {
+        assert!(put_against(201).await.unwrap());
+        assert!(!put_against(412).await.unwrap());
+        assert!(put_against(200).await.is_err());
+        assert!(put_against(500).await.is_err());
     }
 
     #[test]

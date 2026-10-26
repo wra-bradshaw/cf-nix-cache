@@ -107,9 +107,20 @@ impl IntoResponse for ProcessorRejection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use service::ProcessFailure;
+
     #[test]
-    fn invalid_input_is_not_retryable() {
-        let error = service::ProcessFailure::Permanent("trailing bytes after NAR archive".into());
-        assert!(matches!(error, service::ProcessFailure::Permanent(_)));
+    fn failures_map_to_status_and_code() {
+        let permanent = ProcessorRejection::from_failure(ProcessFailure::Permanent(
+            "trailing bytes after NAR archive".into(),
+        ));
+        assert_eq!(permanent.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(permanent.1.code, "invalid_input");
+
+        let retryable = ProcessorRejection::from_failure(ProcessFailure::Retryable(
+            anyhow::anyhow!("object store unavailable"),
+        ));
+        assert_eq!(retryable.0, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(retryable.1.code, "retryable_failure");
     }
 }

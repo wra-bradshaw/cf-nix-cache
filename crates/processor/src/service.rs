@@ -199,54 +199,12 @@ fn now_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object_store::ObjectBody;
-    use anyhow::Result;
-    use async_trait::async_trait;
+    use crate::object_store::memory::MemoryStore;
     use cf_nix_cache_core::ENCODING_ID;
-    use std::{
-        collections::HashMap,
-        io::Cursor,
-        sync::{Arc, Mutex},
-    };
-
-    #[derive(Clone, Default)]
-    struct MemoryStore {
-        objects: Arc<Mutex<HashMap<String, Vec<u8>>>>,
-        writes: Arc<Mutex<Vec<String>>>,
-    }
-
-    #[async_trait]
-    impl ObjectStore for MemoryStore {
-        async fn get(&self, key: &str) -> Result<ObjectBody> {
-            let bytes = self
-                .objects
-                .lock()
-                .unwrap()
-                .get(key)
-                .cloned()
-                .context("missing object")?;
-            Ok(Box::pin(Cursor::new(bytes)))
-        }
-
-        async fn put_if_absent(
-            &self,
-            key: &str,
-            body: Vec<u8>,
-            _content_type: &str,
-        ) -> Result<bool> {
-            self.writes.lock().unwrap().push(key.to_owned());
-            self.objects
-                .lock()
-                .unwrap()
-                .entry(key.to_owned())
-                .or_insert(body);
-            Ok(true)
-        }
-    }
 
     #[tokio::test]
     async fn malformed_nar_does_not_write_permanent_chunks() {
-        let compressed = zstd::encode_all(Cursor::new(b"not a NAR"), 3).unwrap();
+        let compressed = zstd::encode_all(&b"not a NAR"[..], 3).unwrap();
         let store = MemoryStore::default();
         store
             .objects
