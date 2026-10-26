@@ -5,6 +5,7 @@ import {
   ok,
   type SqlRow,
 } from '../../../infrastructure/durable/shared';
+import { lifecycleFailure } from '../../domain/errors';
 
 export class CoordinatorUploads {
   constructor(
@@ -25,14 +26,9 @@ export class CoordinatorUploads {
         ),
       );
       if (!cache) return failure('not_found', 'cache not found', 404);
-      if (cache.lifecycle !== 'ACTIVE')
-        return failure(
-          cache.lifecycle === 'DELETING'
-            ? 'cache_deleting'
-            : 'cache_unavailable',
-          'cache is not active',
-          cache.lifecycle === 'DELETING' ? 410 : 503,
-        );
+      const blocked = lifecycleFailure(cache.lifecycle);
+      if (blocked)
+        return failure(blocked.code, blocked.message, blocked.status);
       const old = first(
         this.ctx.storage.sql.exec<SqlRow>(
           'SELECT fingerprint, upload_id, staging_key FROM upload_allocations WHERE operation_id = ?',

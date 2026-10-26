@@ -29,3 +29,11 @@ export function parseJsonSchema<T>(
   }
   return value as T;
 }
+
+/** The error for a request against a cache that is not ACTIVE, if any. */
+export function lifecycleFailure(lifecycle: string): DomainError | null {
+  if (lifecycle === 'ACTIVE') return null;
+  return lifecycle === 'DELETING'
+    ? new DomainError('cache_deleting', 'cache is being deleted', 410)
+    : new DomainError('cache_unavailable', 'cache is not active', 503);
+}

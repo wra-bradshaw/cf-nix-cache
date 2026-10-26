@@ -24,16 +24,14 @@ export function errorResponse(
   );
 }
 
-function errorStatus(error: AuthError): number {
-  if (error.code === 'missing_token') return 401;
-  if (error.code === 'cache_deleting') return 410;
-  if (error.code === 'cache_unavailable') return 503;
-  return 403;
-}
-
 export function handleError(caught: unknown, c: RequestContext): Response {
   if (caught instanceof AuthError)
-    return errorResponse(c, caught.code, caught.message, errorStatus(caught));
+    return errorResponse(
+      c,
+      caught.code,
+      caught.message,
+      caught.code === 'missing_token' ? 401 : 403,
+    );
   if (caught instanceof DomainError)
     return errorResponse(c, caught.code, caught.message, caught.status);
   if (caught instanceof ApiCallError)

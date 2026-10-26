@@ -1,7 +1,11 @@
 import type { Context } from 'hono';
 import type { AppEnv } from '../runtime/http';
 import type { CacheState, PathRecord } from '../../types';
-import { ChunkManifestSchema, parseJsonSchema } from '../domain/validation';
+import {
+  ChunkManifestSchema,
+  DomainError,
+  parseJsonSchema,
+} from '../domain/validation';
 import { planRange, parseRange } from './range';
 import { indexShard } from '../../rpc';
 
@@ -10,19 +14,11 @@ export async function serveNarObject(
   cache: CacheState,
   storeHash: string,
   record: PathRecord,
-  requestId: string,
 ): Promise<Response> {
   const request = c.req.raw;
   const object = await c.env.CACHE_BUCKET.get(record.manifest_key);
   if (!object)
-    return Response.json(
-      {
-        code: 'corrupt_manifest',
-        message: 'manifest is missing',
-        request_id: requestId,
-      },
-      { status: 500 },
-    );
+    throw new DomainError('corrupt_manifest', 'manifest is missing', 500);
   const manifest = parseJsonSchema(
     ChunkManifestSchema,
     await object.json<unknown>(),
@@ -32,13 +28,10 @@ export async function serveNarObject(
     0,
   );
   if (total !== manifest.file_size)
-    return Response.json(
-      {
-        code: 'corrupt_manifest',
-        message: 'manifest chunk sizes do not match file size',
-        request_id: requestId,
-      },
-      { status: 500 },
+    throw new DomainError(
+      'corrupt_manifest',
+      'manifest chunk sizes do not match file size',
+      500,
     );
   const range = parseRange(request.headers.get('range'), manifest.file_size);
   const plan = planRange(manifest.chunks, range);

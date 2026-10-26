@@ -1,6 +1,9 @@
 import { authenticate } from '../auth/authentication';
-import { AuthError } from '../auth/errors';
-import { assertCacheName, assertStoreHash } from '../domain/validation';
+import {
+  assertCacheName,
+  assertStoreHash,
+  lifecycleFailure,
+} from '../domain/validation';
 import type {
   CacheConfig,
   CacheReference,
@@ -120,17 +123,19 @@ export function isNotFound(error: unknown): boolean {
   return error instanceof ApiCallError && error.code === 'not_found';
 }
 
+/** Rejects requests against a cache that is not ACTIVE. */
+export function assertActive(cache: CacheState): void {
+  const blocked = lifecycleFailure(cache.lifecycle);
+  if (blocked) throw blocked;
+}
+
 export async function authFor(
   request: Request,
   env: Env,
   cache: CacheState,
   required: Role,
 ): Promise<{ sub: string }> {
-  if (cache.lifecycle !== 'ACTIVE')
-    throw new AuthError(
-      cache.lifecycle === 'DELETING' ? 'cache_deleting' : 'cache_unavailable',
-      'cache is not active',
-    );
+  assertActive(cache);
   if (required === 'pull' && cache.public) return { sub: 'anonymous' };
   return authenticate(request, env, cache.name, required);
 }

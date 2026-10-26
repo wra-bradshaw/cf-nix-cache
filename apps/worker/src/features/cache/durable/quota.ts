@@ -1,6 +1,7 @@
 import type { QuotaReservation } from '../../../types';
 import type { RpcResult } from '../../../rpc';
 import { failure, first, ok } from '../../../infrastructure/durable/shared';
+import { lifecycleFailure } from '../../domain/errors';
 
 export class CoordinatorQuota {
   constructor(private readonly ctx: DurableObjectState) {}
@@ -44,14 +45,9 @@ export class CoordinatorQuota {
         }>('SELECT lifecycle, logical_bytes, quota_bytes FROM cache LIMIT 1'),
       );
       if (!cache) return failure('not_found', 'cache not found', 404);
-      if (cache.lifecycle !== 'ACTIVE')
-        return failure(
-          cache.lifecycle === 'DELETING'
-            ? 'cache_deleting'
-            : 'cache_unavailable',
-          'cache is not active',
-          cache.lifecycle === 'DELETING' ? 410 : 503,
-        );
+      const blocked = lifecycleFailure(cache.lifecycle);
+      if (blocked)
+        return failure(blocked.code, blocked.message, blocked.status);
       const pending =
         first(
           this.ctx.storage.sql.exec<{ value: number }>(
