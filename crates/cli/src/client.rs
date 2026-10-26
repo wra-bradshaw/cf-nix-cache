@@ -30,7 +30,7 @@ pub(crate) async fn bootstrap(endpoint: String, body: Value) -> Result<CreateTok
     let endpoint = endpoint.trim_end_matches('/');
     let url = format!("{endpoint}/api/bootstrap");
     let client = retrying_client();
-    let key = idempotency_key(&Method::POST, "/api/bootstrap", Some(&body));
+    let key = new_idempotency_key();
     let body = canonical_api_request("/api/bootstrap", body)
         .context("bootstrap request does not match the API contract")?;
     let response = client
@@ -87,8 +87,11 @@ impl Api {
                 .request(method.clone(), format!("{}{}", self.endpoint, path))
         }
         .bearer_auth(&self.token);
-        if let Some(key) = idempotency_header(&method, path, body.as_ref()) {
-            request = request.header("Idempotency-Key", key);
+        if matches!(
+            method,
+            Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+        ) {
+            request = request.header("Idempotency-Key", new_idempotency_key());
         }
         if let Some(value) = body {
             request = request.json(&value);
@@ -115,7 +118,7 @@ impl Api {
     }
 
     pub(crate) async fn empty(&self, method: Method, path: &str) -> Result<()> {
-        let key = idempotency_key(&method, path, None);
+        let key = new_idempotency_key();
         let request = if retry_safe(&method, path) {
             self.retry_client
                 .request(method.clone(), format!("{}{}", self.endpoint, path))
@@ -149,20 +152,11 @@ fn retry_safe(method: &Method, path: &str) -> bool {
         || path == "/api/uploads"
 }
 
-fn idempotency_header(method: &Method, path: &str, body: Option<&Value>) -> Option<String> {
-    matches!(
-        method,
-        &Method::POST | &Method::PUT | &Method::PATCH | &Method::DELETE
-    )
-    .then(|| idempotency_key(method, path, body))
-}
-
-fn idempotency_key(method: &Method, path: &str, body: Option<&Value>) -> String {
-    // The key identifies one user-intended operation, not the content of a
-    // request forever. The retry middleware reuses this request (and its
-    // header) for transient retries, while a later CLI invocation gets a new
-    // operation and can legitimately upload or issue an identical resource.
-    let _ = (method, path, body);
+/// A key identifies one user-intended operation, not the content of a
+/// request forever. The retry middleware reuses the request (and this
+/// header) for transient retries, while a later CLI invocation gets a new
+/// operation and can legitimately upload or issue an identical resource.
+fn new_idempotency_key() -> String {
     Uuid::new_v4().simple().to_string()
 }
 
@@ -176,7 +170,7 @@ pub(crate) async fn upload_part_with_retry(
         .retry_client
         .put(url)
         .bearer_auth(&api.token)
-        .header("Idempotency-Key", idempotency_key(&Method::PUT, url, None))
+        .header("Idempotency-Key", new_idempotency_key())
         .body(bytes)
         .send()
         .await?;
@@ -209,8 +203,8 @@ mod tests {
 
     #[test]
     fn each_cli_invocation_gets_a_fresh_operation_key() {
-        let first = idempotency_key(&Method::POST, "/api/tokens", None);
-        let second = idempotency_key(&Method::POST, "/api/tokens", None);
+        let first = new_idempotency_key();
+        let second = new_idempotency_key();
         assert_ne!(first, second);
         assert_eq!(first.len(), 32);
         assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
