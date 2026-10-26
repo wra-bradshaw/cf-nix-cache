@@ -1,18 +1,10 @@
 {
   "entry": [
     "src/index.ts",
-    "vite.config.ts",
-    "vitest.config.ts",
-    "vitest.e2e.config.ts",
-    "../../scripts/generate-contracts.mts",
-    "scripts/render-wrangler-config.mts"
+    "scripts/render-wrangler-config.mts",
+    "build/json-contracts.ts"
   ],
-  "ignoreDependencies": ["cloudflare", "json-schema-to-typescript", "wrangler"],
+  "ignoreDependencies": ["cloudflare", "json-schema-to-typescript"],
   "ignoreBinaries": ["nix-store"],
-  "ignore": [
-    "build/json-contracts.ts",
-    "src/generated/contracts.ts",
-    "src/generated/json-contracts.ts",
-    "dist/**"
-  ]
+  "ignore": ["dist/**"]
 }

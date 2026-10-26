@@ -9,7 +9,7 @@
     "predev": "pnpm contracts:generate",
     "build": "vite build",
     "prebuild": "pnpm contracts:generate",
-    "deploy": "vite build && wrangler deploy",
+    "deploy": "pnpm build && wrangler deploy",
     "test": "vitest run",
     "pretest": "pnpm contracts:generate",
     "contracts:generate": "node ../../scripts/generate-contracts.mts",

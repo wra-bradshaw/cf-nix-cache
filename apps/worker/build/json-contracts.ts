@@ -8,7 +8,6 @@ import {
 import { basename, dirname, resolve } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
 import standaloneCode from 'ajv/dist/standalone/index.js';
-import type { Plugin, ViteDevServer } from 'vite';
 
 const generatedFileHeader =
   '// GENERATED FROM schemas/*.json. Do not edit by hand.\n' +
@@ -124,48 +123,10 @@ export function writeJsonContracts(
     import.meta.dirname,
     '../src/generated/json-contracts.ts',
   ),
-): boolean {
+): void {
   const generated = generateModule(schemaDirectory);
   if (existsSync(outputFile) && readFileSync(outputFile, 'utf8') === generated)
-    return false;
+    return;
   mkdirSync(dirname(outputFile), { recursive: true });
   writeFileSync(outputFile, generated);
-  return true;
-}
-
-export function jsonContracts(
-  schemaDirectory = resolve(import.meta.dirname, '../../../schemas'),
-  outputFile = resolve(
-    import.meta.dirname,
-    '../src/generated/json-contracts.ts',
-  ),
-): Plugin {
-  const schemaPath = resolve(schemaDirectory);
-  const isSchemaFile = (file: string): boolean =>
-    resolve(file).startsWith(`${schemaPath}/`) && file.endsWith('.json');
-  const regenerate = (): boolean =>
-    writeJsonContracts(schemaDirectory, outputFile);
-
-  return {
-    name: 'cf-nix-cache-json-contracts',
-    buildStart() {
-      regenerate();
-      for (const file of globSync('**/*.json', { cwd: schemaDirectory }))
-        this.addWatchFile(resolve(schemaDirectory, file));
-    },
-    configureServer(server: ViteDevServer) {
-      const onSchemaChange = (file: string): void => {
-        if (!isSchemaFile(file) || !regenerate()) return;
-        server.ws.send({ type: 'full-reload' });
-      };
-      server.watcher.on('add', onSchemaChange);
-      server.watcher.on('change', onSchemaChange);
-      server.watcher.on('unlink', onSchemaChange);
-      server.httpServer?.once('close', () => {
-        server.watcher.off('add', onSchemaChange);
-        server.watcher.off('change', onSchemaChange);
-        server.watcher.off('unlink', onSchemaChange);
-      });
-    },
-  };
 }
