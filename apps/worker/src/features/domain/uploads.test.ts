@@ -4,18 +4,34 @@ import {
   transition,
   validateUploadManifest,
 } from './uploads';
-import { DomainError } from './errors';
+import { DomainError, parseJsonSchema } from './errors';
+import { UploadRequestSchema } from './schemas';
 import { manifest } from './test-fixtures';
 
 describe('upload invariants', () => {
   it('rejects metadata injection before multipart state exists', () => {
     expect(() =>
-      validateUploadManifest(
-        { ...manifest, store_path: `${manifest.store_path}\nSig: forged` },
-        1,
-      ),
+      validateUploadManifest({
+        ...manifest,
+        store_path: `${manifest.store_path}\nSig: forged`,
+      }),
     ).toThrow(DomainError);
-    expect(() => validateUploadManifest(manifest, 1)).not.toThrow();
+    expect(() => validateUploadManifest(manifest)).not.toThrow();
+  });
+
+  it('ties the store path to the declared store hash', () => {
+    expect(() =>
+      validateUploadManifest({
+        ...manifest,
+        store_path: `/nix/store/${'1'.repeat(32)}-hello`,
+      }),
+    ).toThrow('store path does not match the declared store hash');
+    expect(() =>
+      validateUploadManifest({
+        ...manifest,
+        store_path: `${manifest.store_path}/bin`,
+      }),
+    ).toThrow('store path does not match the declared store hash');
   });
 
   it('has one authoritative upload transition graph', () => {
@@ -33,22 +49,22 @@ describe('upload invariants', () => {
 
   it('uses the real Nix base32 alphabet and UTF-8 byte limits', () => {
     expect(() =>
-      validateUploadManifest({ ...manifest, store_hash: 'o'.repeat(32) }, 1),
+      parseJsonSchema(UploadRequestSchema, {
+        manifest: { ...manifest, store_hash: 'o'.repeat(32) },
+        compressed_size: 1,
+      }),
     ).toThrow(DomainError);
     expect(() =>
-      validateUploadManifest(
-        {
-          ...manifest,
-          store_path: `/nix/store/${'0'.repeat(32)}-${'é'.repeat(300)}`,
-        },
-        1,
-      ),
+      validateUploadManifest({
+        ...manifest,
+        store_path: `/nix/store/${'0'.repeat(32)}-${'é'.repeat(300)}`,
+      }),
     ).toThrow(DomainError);
     expect(() =>
-      validateUploadManifest(
-        { ...manifest, references: [`${'0'.repeat(32)}-ok\nforged`] },
-        1,
-      ),
+      validateUploadManifest({
+        ...manifest,
+        references: [`${'0'.repeat(32)}-ok\nforged`],
+      }),
     ).toThrow(DomainError);
   });
 });

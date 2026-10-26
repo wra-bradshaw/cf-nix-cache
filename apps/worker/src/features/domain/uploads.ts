@@ -5,100 +5,57 @@ import type {
   UploadState,
 } from '../../types';
 import { MAX_METADATA_BYTES } from '../../types';
-import { GrantSchema, ManifestSchema, UploadRequestSchema } from './schemas';
-import { DomainError, parseJsonSchema } from './errors';
+import { GrantSchema } from './schemas';
+import { DomainError } from './errors';
 import {
-  assertCacheName,
-  assertStoreHash,
   hasControlCharacters,
+  STORE_HASH_PATTERN,
   utf8Bytes,
 } from './identifiers';
 
-const NIX_BASE32 = '0123456789abcdfghijklmnpqrsvwxyz';
-
-function assertSafeInteger(
-  value: unknown,
-  label: string,
-): asserts value is number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-    throw new DomainError(
-      'invalid_number',
-      `${label} must be a non-negative safe integer`,
-      422,
-    );
-  }
-}
+const PATH_NAME = new RegExp(`^${STORE_HASH_PATTERN}-.{1,479}$`, 'u');
 
 function validPathName(value: string): boolean {
   return (
-    new RegExp(`^[${NIX_BASE32}]{32}-.{1,479}$`, 'u').test(value) &&
+    PATH_NAME.test(value) &&
     utf8Bytes(value) <= 512 &&
     !hasControlCharacters(value, true)
   );
+}
+
+function invalid(message: string): DomainError {
+  return new DomainError('validation_failed', message, 422);
 }
 
 export function validateGrant(grant: unknown): grant is Grant {
   return Boolean(GrantSchema.validate(grant));
 }
 
-export function validateUploadManifest(
-  manifest: UploadManifest,
-  compressedSize: number,
-): void {
-  const validManifest = parseJsonSchema(ManifestSchema, manifest);
-  parseJsonSchema(UploadRequestSchema, {
-    manifest: validManifest,
-    compressed_size: compressedSize,
-  });
-  assertSafeInteger(compressedSize, 'compressed_size');
-  assertCacheName(validManifest.cache);
-  assertStoreHash(validManifest.store_hash);
+/**
+ * Upload metadata rules that UploadRequestSchema cannot express: UTF-8 byte
+ * limits, control characters, the store path/hash relation, and the total
+ * metadata size. The manifest must already match the schema.
+ */
+export function validateUploadManifest(manifest: UploadManifest): void {
   if (
-    utf8Bytes(validManifest.store_path) > 512 ||
-    hasControlCharacters(validManifest.store_path)
-  ) {
-    throw new DomainError(
-      'validation_failed',
-      'store metadata contains invalid characters',
-      422,
-    );
-  }
-  const basename = validManifest.store_path.split('/').at(-1) ?? '';
+    utf8Bytes(manifest.store_path) > 512 ||
+    hasControlCharacters(manifest.store_path)
+  )
+    throw invalid('store metadata contains invalid characters');
   if (
-    !validManifest.store_path.startsWith('/nix/store/') ||
-    validManifest.store_path.split('/').length !== 4 ||
-    !basename.startsWith(`${validManifest.store_hash}-`) ||
-    basename.length <= validManifest.store_hash.length + 1
-  ) {
-    throw new DomainError(
-      'validation_failed',
-      'store path does not match the declared store hash',
-      422,
-    );
-  }
+    manifest.store_path.split('/').length !== 4 ||
+    !manifest.store_path.startsWith(`/nix/store/${manifest.store_hash}-`)
+  )
+    throw invalid('store path does not match the declared store hash');
+  if (utf8Bytes(JSON.stringify(manifest)) > MAX_METADATA_BYTES)
+    throw invalid('upload metadata is too large');
   if (
-    new TextEncoder().encode(JSON.stringify(validManifest)).byteLength >
-    MAX_METADATA_BYTES
-  ) {
-    throw new DomainError(
-      'validation_failed',
-      'upload metadata is too large',
-      422,
-    );
-  }
-  if (
-    validManifest.references.some((reference) => !validPathName(reference)) ||
-    (validManifest.deriver != null && !validPathName(validManifest.deriver)) ||
-    (validManifest.ca != null &&
-      (utf8Bytes(validManifest.ca) > 512 ||
-        hasControlCharacters(validManifest.ca)))
-  ) {
-    throw new DomainError(
-      'validation_failed',
-      'store metadata contains invalid characters',
-      422,
-    );
-  }
+    manifest.references.some((reference) => !validPathName(reference)) ||
+    (manifest.deriver != null && !validPathName(manifest.deriver)) ||
+    (manifest.ca != null &&
+      (utf8Bytes(manifest.ca) > 512 || hasControlCharacters(manifest.ca)))
+  )
+    throw invalid('store metadata contains invalid characters');
 }
 
 export function requestFingerprint(input: {

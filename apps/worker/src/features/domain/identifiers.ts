@@ -1,7 +1,9 @@
 import { DomainError } from './errors';
 
+/** Nix base32 alphabet (no e, o, u, t) and a store hash written in it. */
 const NIX_BASE32 = '0123456789abcdfghijklmnpqrsvwxyz';
-const NIX32 = new RegExp(`^[${NIX_BASE32}]{32}$`);
+export const STORE_HASH_PATTERN = `[${NIX_BASE32}]{32}`;
+const STORE_HASH = new RegExp(`^${STORE_HASH_PATTERN}$`);
 const CACHE_NAME = /^[a-z0-9_-]{1,64}$/;
 
 export function hasControlCharacters(
@@ -46,7 +48,7 @@ export function assertNamespaceId(
 }
 
 export function assertStoreHash(value: unknown): asserts value is string {
-  if (typeof value !== 'string' || !NIX32.test(value))
+  if (typeof value !== 'string' || !STORE_HASH.test(value))
     throw new DomainError('invalid_store_hash', 'invalid store hash', 422);
 }
 

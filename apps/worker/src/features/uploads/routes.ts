@@ -23,7 +23,7 @@ uploadRoutes.post('/api/uploads', async (c) => {
     UploadRequestSchema,
     await parseJson(c.req.raw),
   );
-  validateUploadManifest(input.manifest, input.compressed_size);
+  validateUploadManifest(input.manifest);
   const cache = await getCache(c.env, input.manifest.cache);
   await authFor(c.req.raw, c.env, cache, 'push');
   const fingerprint = requestFingerprint(input);

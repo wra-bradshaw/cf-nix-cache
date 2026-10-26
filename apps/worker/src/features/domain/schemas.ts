@@ -5,7 +5,6 @@ export {
   ConfigureCacheSchema,
   CreateCacheSchema,
   GrantSchema,
-  ManifestSchema,
   MissingPathsSchema,
   TokenRequestSchema,
   UploadRequestSchema,

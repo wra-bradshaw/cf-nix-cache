@@ -29,7 +29,6 @@ pathRoutes.post('/api/caches/:name/missing', async (c) => {
   const input = parseJsonSchema(MissingPathsSchema, await parseJson(c.req.raw));
   const missing: string[] = [];
   for (const storeHash of input.store_hashes) {
-    assertStoreHash(storeHash);
     try {
       await getPath(c.env, cache, storeHash);
     } catch (caught) {
