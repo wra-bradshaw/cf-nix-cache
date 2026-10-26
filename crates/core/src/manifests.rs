@@ -15,22 +15,6 @@ pub enum UploadStatus {
     Aborted,
 }
 
-impl UploadStatus {
-    pub fn transition(self, next: Self) -> Result<Self, Error> {
-        use UploadStatus::*;
-        match (self, next) {
-            (Created, Uploading | Aborted | Failed)
-            | (Uploading, Completing | Aborted | Failed)
-            | (Completing, Queued | Aborted | Failed)
-            | (Queued, Processing | Aborted | Failed)
-            | (Processing, Publishing | Failed)
-            | (Publishing, Ready | Failed) => Ok(next),
-            (a, b) if a == b => Ok(b),
-            _ => Err(Error::InvalidTransition(self, next)),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UploadManifest {
     pub cache: CacheName,

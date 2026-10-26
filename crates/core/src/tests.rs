@@ -6,25 +6,6 @@ fn validates_names() {
     assert!(serde_json::from_str::<CacheName>(r#""Bad/cache""#).is_err());
 }
 #[test]
-fn enforces_transitions() {
-    assert_eq!(
-        UploadStatus::Uploading.transition(UploadStatus::Aborted),
-        Ok(UploadStatus::Aborted)
-    );
-    assert_eq!(
-        UploadStatus::Uploading.transition(UploadStatus::Completing),
-        Ok(UploadStatus::Completing)
-    );
-    assert_eq!(
-        UploadStatus::Completing.transition(UploadStatus::Queued),
-        Ok(UploadStatus::Queued)
-    );
-    assert!(UploadStatus::Ready
-        .transition(UploadStatus::Uploading)
-        .is_err());
-}
-
-#[test]
 fn validates_chunk_manifest_totals_and_encoding() {
     let manifest = ChunkManifest {
         encoding_id: ENCODING_ID.into(),
@@ -50,61 +31,6 @@ fn validates_chunk_manifest_totals_and_encoding() {
     invalid_hash.file_hash = format!("sha256:{}", "o".repeat(52));
     assert!(invalid_hash.validate().is_err());
 }
-#[test]
-fn permissions_are_scoped() {
-    let c = TokenClaims {
-        sub: "me".into(),
-        iat: 0,
-        exp: 1,
-        iss: "issuer".into(),
-        aud: "audience".into(),
-        jti: "id".into(),
-        grants: vec![TokenGrant {
-            cache: "foo".into(),
-            role: Role::Pull,
-        }],
-    };
-    assert!(c.allows("foo", Role::Pull));
-    assert!(!c.allows("foo", Role::Push));
-    assert!(!c.allows("bar", Role::Pull));
-    assert!(!c.can_delegate(&[TokenGrant {
-        cache: "foo".into(),
-        role: Role::Pull
-    }]));
-    let admin = TokenClaims {
-        grants: vec![TokenGrant {
-            cache: "*".into(),
-            role: Role::Admin,
-        }],
-        ..c
-    };
-    assert!(admin.can_delegate(&[TokenGrant {
-        cache: "foo".into(),
-        role: Role::Push
-    }]));
-}
-#[test]
-fn narinfo_format_and_fingerprint() {
-    let n = NarInfo {
-        store_path: "/nix/store/abc-x".into(),
-        url: "nar/abc.nar".into(),
-        compression: "zstd".into(),
-        file_hash: "sha256:f".into(),
-        file_size: 1,
-        nar_hash: "sha256:n".into(),
-        nar_size: 2,
-        references: vec!["r".into()],
-        deriver: None,
-        ca: None,
-        signature: None,
-    };
-    assert_eq!(
-        n.fingerprint(),
-        "1;/nix/store/abc-x;sha256:n;2;/nix/store/r"
-    );
-    assert!(n.render().contains("Compression: zstd\n"));
-}
-
 #[test]
 fn validates_manifest_identity() {
     let manifest = UploadManifest {
@@ -169,38 +95,6 @@ fn references_use_nix_store_path_basenames() {
         "ca": null
     }))
     .is_err());
-}
-
-#[test]
-fn delegated_tokens_cannot_outlive_the_issuer() {
-    let claims = TokenClaims {
-        sub: "me".into(),
-        iat: 10,
-        exp: 20,
-        iss: "issuer".into(),
-        aud: "audience".into(),
-        jti: "id".into(),
-        grants: vec![TokenGrant {
-            cache: "foo".into(),
-            role: Role::Admin,
-        }],
-    };
-    assert!(claims.can_delegate_until(
-        &[TokenGrant {
-            cache: "foo".into(),
-            role: Role::Pull
-        }],
-        19,
-        10
-    ));
-    assert!(!claims.can_delegate_until(
-        &[TokenGrant {
-            cache: "foo".into(),
-            role: Role::Pull
-        }],
-        21,
-        10
-    ));
 }
 
 #[test]

@@ -11,15 +11,6 @@ pub enum Role {
     Admin,
 }
 
-impl Role {
-    pub fn permits(&self, required: &Self) -> bool {
-        matches!(
-            (self, required),
-            (Self::Admin, _) | (Self::Push, Self::Pull | Self::Push) | (Self::Pull, Self::Pull)
-        )
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenGrant {
     pub cache: String,

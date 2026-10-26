@@ -1,28 +1,21 @@
-//! Shared protocol primitives split into identifiers, manifests, NAR metadata,
-//! and wire exports. Wire DTOs are deliberately kept separate from semantic
+//! Shared protocol primitives split into identifiers, manifests, and wire
+//! exports. Wire DTOs are deliberately kept separate from semantic
 //! validation and application policy.
 
-mod auth;
 mod error;
 mod identifiers;
 mod manifests;
-mod narinfo;
 mod wire;
 
-pub use auth::TokenClaims;
 pub use cf_nix_cache_contracts as contracts;
 pub use error::Error;
 pub use identifiers::*;
 pub use manifests::*;
-pub use narinfo::NarInfo;
 pub use wire::*;
 
 pub const MAX_NAR_SIZE: u64 = 10 * 1024 * 1024 * 1024;
 pub const MAX_COMPRESSED_SIZE: u64 = 12 * 1024 * 1024 * 1024;
 pub const MULTIPART_PART_SIZE: u64 = 64 * 1024 * 1024;
-pub const CANONICAL_FORMAT_VERSION: u32 = 1;
-pub const CANONICAL_COMPRESSION: &str = "zstd";
-pub const CANONICAL_COMPRESSION_LEVEL: i32 = 3;
 pub const ENCODING_ID: &str = "fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1";
 pub(crate) fn default_encoding_id() -> String {
     ENCODING_ID.into()
@@ -30,16 +23,6 @@ pub(crate) fn default_encoding_id() -> String {
 
 pub fn nix_base32(bytes: &[u8]) -> String {
     nix_base32::to_nix_base32(bytes)
-}
-
-pub fn validate_idempotency_key(value: &str) -> Result<(), Error> {
-    if value.is_empty()
-        || value.len() > 128
-        || !value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
-    {
-        return Err(Error::InvalidIdempotencyKey);
-    }
-    Ok(())
 }
 
 pub fn validate_store_hash(value: &str) -> Result<(), Error> {
