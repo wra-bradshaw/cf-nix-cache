@@ -73,37 +73,28 @@ pub(crate) async fn upload_path(
             }),
         )
         .await?;
-    if matches!(init.status, UploadStatus::Ready) {
-        println!("already uploaded {path}");
-        return Ok(());
+    match init.status {
+        UploadStatus::Ready => {
+            println!("already uploaded {path}");
+            return Ok(());
+        }
+        UploadStatus::Queued | UploadStatus::Processing | UploadStatus::Publishing => {
+            return wait_for_upload(api, &init.id, path).await;
+        }
+        UploadStatus::Uploading => {}
+        status => bail!("upload {} is not uploadable: {status:?}", init.id),
     }
-    if matches!(init.status, UploadStatus::Completing) {
-        let _: UploadStateResponse = api
-            .request(
-                Method::POST,
-                &api_path(&["uploads", &init.id, "complete"]),
-                Some(&contract::CompleteUpload { parts: vec![] }),
-            )
-            .await?;
-        return wait_for_upload(api, &init.id, path).await;
-    }
-    if matches!(
-        init.status,
-        UploadStatus::Queued | UploadStatus::Processing | UploadStatus::Publishing
-    ) {
-        return wait_for_upload(api, &init.id, path).await;
-    }
-    if !matches!(
-        init.status,
-        UploadStatus::Uploading | UploadStatus::Completing
-    ) {
-        bail!("upload {} is not uploadable: {:?}", init.id, init.status);
+    let expected_parts = size.div_ceil(part_size);
+    if init.parts.len() as u64 != expected_parts {
+        bail!(
+            "server returned {} upload parts for a {size}-byte NAR; expected {expected_parts}",
+            init.parts.len()
+        );
     }
     let mut completed = Vec::new();
     for part in init.parts {
-        let offset = (part.part_number as u64 - 1) * part_size;
-        let len = (size - offset).min(part_size) as usize;
-        let mut bytes = vec![0; len];
+        let (offset, len) = part_range(part.part_number, part_size, size)?;
+        let mut bytes = vec![0; usize::try_from(len)?];
         file.seek(SeekFrom::Start(offset))?;
         file.read_exact(&mut bytes)?;
         let etag = api
@@ -126,6 +117,20 @@ pub(crate) async fn upload_path(
     wait_for_upload(api, &init.id, path).await
 }
 
+/// The `(offset, len)` byte range of 1-based `part_number` in a `size`-byte
+/// file split into `part_size` parts.
+fn part_range(part_number: i32, part_size: u64, size: u64) -> Result<(u64, u64)> {
+    let index = u64::try_from(part_number)
+        .ok()
+        .and_then(|number| number.checked_sub(1))
+        .context("upload part numbers start at 1")?;
+    let offset = index
+        .checked_mul(part_size)
+        .filter(|offset| *offset < size)
+        .with_context(|| format!("upload part {part_number} is past the end of the NAR"))?;
+    Ok((offset, (size - offset).min(part_size)))
+}
+
 async fn wait_for_upload(api: &Api, id: &str, path: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60 * 60);
     let mut delay = Duration::from_secs(2);
@@ -146,4 +151,20 @@ async fn wait_for_upload(api: &Api, id: &str, path: &str) -> Result<()> {
     }
     println!("uploaded {path}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn part_ranges_are_checked() {
+        assert_eq!(part_range(1, 64, 100).unwrap(), (0, 64));
+        assert_eq!(part_range(2, 64, 100).unwrap(), (64, 36));
+        assert_eq!(part_range(1, 64, 64).unwrap(), (0, 64));
+        assert!(part_range(2, 64, 64).is_err());
+        assert!(part_range(0, 64, 100).is_err());
+        assert!(part_range(-1, 64, 100).is_err());
+        assert!(part_range(i32::MAX, u64::MAX, 100).is_err());
+    }
 }
