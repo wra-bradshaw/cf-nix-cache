@@ -10,3 +10,5 @@ apps/worker/src/generated/
 .dev.vars
 .dev.vars.*
 !.dev.vars.example
+/apps/worker/dist/
+/packages/cf-nix-cache-worker/dist/
