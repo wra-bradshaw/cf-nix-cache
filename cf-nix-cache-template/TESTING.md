@@ -19,6 +19,6 @@ repository independently.
 | External CI            | Run the same `pnpm deploy` from GitHub Actions, GitLab CI, and a shell runner with Wrangler credentials.                                                                                          |
 | Teardown safety        | Delete the Worker while the bucket is non-empty; verify the bucket and objects remain until explicitly removed.                                                                                   |
 
-Private keys must not occur in repository files, command arguments, Wrangler
-logs, or Terraform state. The helper's bulk secret input is stdin-only and all
+Private keys must not occur in repository files, command arguments, or Wrangler
+logs. The helper's bulk secret input is stdin-only and all
 temporary Wrangler configs are removed after deployment.

@@ -94,8 +94,8 @@ part of `pnpm deploy` or `pnpm doctor`.
 ## Required secret names
 
 Only the bootstrap value is supplied to the Deploy button. The helper creates
-these Worker secrets and keeps private values out of Git, logs, command
-arguments, and Terraform state:
+these Worker secrets and keeps private values out of Git, logs, and command
+arguments:
 
 `AUTH_PRIVATE_JWK`, `AUTH_PUBLIC_JWKS`, `NIX_PRIVATE_JWK`, `NIX_PUBLIC_KEYS`,
 and `BOOTSTRAP_SECRET_HASH`.

@@ -18,14 +18,14 @@ a native Rust Container validates NARs and produces deterministic zstd frames.
   FastCDC v2020 chunking, deterministic compression, and R2 writes.
 - `crates/cli`: Nix publisher and administration client.
 - `schemas`: JSON contracts shared by Worker and Rust.
-- `infra`: Terraform-managed R2, lifecycle, DNS, and Worker route resources.
 - `packages/cf-nix-cache-worker`: the published Worker runtime and its
   immutable processor release manifest.
 - `cf-nix-cache-template`: the isolated public Deploy-to-Cloudflare template.
 
-Terraform owns account resources. Wrangler owns the Worker bundle, Durable
-Object namespaces, Workflows, and Container image deployment; the same Worker
-must not be managed by both tools.
+`wrangler.jsonc` is the source of truth for the Worker, its bindings, and
+routes. The deploy app ensures the R2 bucket and its staging/multipart
+lifecycle rules via the Wrangler CLI before deploying; custom hostnames are a
+`routes` entry in `wrangler.jsonc`.
 
 ## Cloudflare distribution
 
@@ -56,13 +56,13 @@ pnpm --dir apps/worker check
 pnpm --dir apps/worker test
 pnpm --dir apps/worker contracts:check
 pnpm --dir apps/worker boundaries:check
-terraform -chdir=infra init -backend=false -input=false
-terraform -chdir=infra validate
 ```
 
 The deployment app has explicit `plan`, `apply`, and `destroy` modes. Only
 `apply` requires Cloudflare credentials, verifies required Wrangler secrets,
-and deploys the Worker; `plan` and `destroy` do not deploy code.
+ensures the R2 bucket and lifecycle rules, and deploys the Worker; `plan` is a
+dry-run deploy and `destroy` prints manual teardown steps instead of deleting
+anything.
 
 Run the full local integration test with Miniflare, local R2, the native Rust
 processor, and a real Nix closure:
@@ -95,8 +95,9 @@ nix run .#dev
 ```
 
 For production, the deploy app builds the same cached Nix image, pushes an
-immutable tag to Cloudflare Registry, and deploys a generated Wrangler config
-that references that tag:
+immutable tag to Cloudflare Registry, ensures the production R2 bucket and
+lifecycle rules, and deploys a generated Wrangler config that references that
+tag:
 
 ```console
 nix run .#deploy -- apply
@@ -104,7 +105,7 @@ nix run .#deploy -- apply
 
 The first local run requires a Docker-compatible engine. Subsequent runs reuse
 the loaded image when the Nix output is unchanged. Secrets are installed with
-`wrangler secret put` and never belong in Terraform state:
+`wrangler secret put` and never committed to the repository:
 
 ```console
 pnpm --dir apps/worker exec wrangler secret put AUTH_PRIVATE_JWK --config "$PWD/wrangler.jsonc"
