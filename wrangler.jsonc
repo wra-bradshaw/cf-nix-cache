@@ -4,6 +4,11 @@
   "main": "apps/worker/src/index.ts",
   "compatibility_date": "2026-08-10",
   "workers_dev": true,
+  // Custom hostname: add a "routes" entry, e.g.
+  // "routes": [{ "pattern": "cache.example.com/*", "zone_id": "<zone-id>" }],
+  // R2 bucket lifecycle rules (staging/multipart expiry) are ensured by
+  // `nix run .#deploy -- apply`, not expressed here: wrangler.jsonc has no
+  // lifecycle field.
   "r2_buckets": [
     {
       "binding": "CACHE_BUCKET",
