@@ -118,6 +118,7 @@ jobs:
     needs: publish
     if: needs.publish.outputs.ready == 'true' && vars.TEMPLATE_REPOSITORY != ''
     runs-on: ubuntu-24.04
+    environment: release
     steps:
       - name: Check out the release source
         uses: actions/checkout@v4
