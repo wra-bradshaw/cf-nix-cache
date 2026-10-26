@@ -5,7 +5,7 @@ import type {
   UploadState,
   UploadStateResponse,
 } from '../../../types';
-import { ENCODING_ID, MULTIPART_PART_SIZE } from '../../../types';
+import { MULTIPART_PART_SIZE } from '../../../types';
 import type { RpcResult } from '../../../rpc';
 import { ensureWorkflow } from '../../workflows/enqueue';
 import { processJob, state, type UploadRow } from './model';
@@ -134,7 +134,6 @@ export class UploadMultipart {
       );
       return ok(state(this.storage.row()!));
     }
-    if (row.state === 'READY') return ok(state(row));
     if (row.state !== 'UPLOADING' && row.state !== 'COMPLETING')
       return ok(state(row));
     if (row.state === 'COMPLETING') return this.completeMultipart(row);
@@ -187,13 +186,7 @@ export class UploadMultipart {
     if (completed.size !== row.compressed_size)
       return this.failSize(row, completed.size);
     this.storage.setQueued(row.job_id);
-    await ensureWorkflow(this.env.PROCESS_UPLOAD!, row.job_id, {
-      job_id: row.job_id,
-      staging_key: row.staging_key,
-      nar_hash: row.manifest.nar_hash,
-      nar_size: row.manifest.nar_size,
-      encoding_id: ENCODING_ID,
-    });
+    await ensureWorkflow(this.env.PROCESS_UPLOAD!, row.job_id, processJob(row));
     return ok(state(this.storage.row()!));
   }
 

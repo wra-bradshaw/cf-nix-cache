@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  requestFingerprint,
-  transition,
-  validateUploadManifest,
-} from './uploads';
+import { requestFingerprint, validateUploadManifest } from './uploads';
 import { DomainError, parseJsonSchema } from './errors';
 import { UploadRequestSchema } from './schemas';
 import { manifest } from './test-fixtures';
@@ -32,13 +28,6 @@ describe('upload invariants', () => {
         store_path: `${manifest.store_path}/bin`,
       }),
     ).toThrow('store path does not match the declared store hash');
-  });
-
-  it('has one authoritative upload transition graph', () => {
-    expect(() => transition('UPLOADING', 'COMPLETING')).not.toThrow();
-    expect(() => transition('READY', 'UPLOADING')).toThrow(DomainError);
-    expect(() => transition('PROCESSING', 'ABORTED')).toThrow(DomainError);
-    expect(() => transition('PUBLISHING', 'ABORTED')).toThrow(DomainError);
   });
 
   it('keeps fingerprints stable', () => {

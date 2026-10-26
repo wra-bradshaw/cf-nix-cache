@@ -1,9 +1,4 @@
-import type {
-  Grant,
-  PathRecord,
-  UploadManifest,
-  UploadState,
-} from '../../types';
+import type { Grant, PathRecord, UploadManifest } from '../../types';
 import { MAX_METADATA_BYTES } from '../../types';
 import { GrantSchema } from './schemas';
 import { DomainError } from './errors';
@@ -70,27 +65,6 @@ export function requestFingerprint(input: {
 
 export function partsFor(size: number, partSize: number): number {
   return Math.ceil(size / partSize);
-}
-
-export function transition(from: UploadState, to: UploadState): void {
-  if (from === to) return;
-  const allowed: Record<UploadState, UploadState[]> = {
-    CREATED: ['UPLOADING', 'ABORTED', 'FAILED'],
-    UPLOADING: ['COMPLETING', 'ABORTED', 'FAILED'],
-    COMPLETING: ['QUEUED', 'ABORTED', 'FAILED'],
-    QUEUED: ['PROCESSING', 'ABORTED', 'FAILED'],
-    PROCESSING: ['PUBLISHING', 'FAILED'],
-    PUBLISHING: ['READY', 'FAILED'],
-    READY: [],
-    FAILED: [],
-    ABORTED: [],
-  };
-  if (!allowed[from].includes(to))
-    throw new DomainError(
-      'invalid_transition',
-      `invalid upload transition from ${from} to ${to}`,
-      409,
-    );
 }
 
 export function deltaFor(

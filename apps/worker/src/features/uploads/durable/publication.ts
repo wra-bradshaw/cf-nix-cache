@@ -3,7 +3,6 @@ import {
   ChunkManifestSchema,
   DomainError,
   parseJsonSchema,
-  transition,
 } from '../../domain/validation';
 import type {
   CacheState,
@@ -39,7 +38,6 @@ export class UploadPublication {
           'upload is not queued for processing',
           409,
         );
-      transition(row.state, 'PROCESSING');
       this.ctx.storage.sql.exec(
         "UPDATE job SET state = 'PROCESSING' WHERE job_id = ?",
         row.job_id,
@@ -169,8 +167,7 @@ export class UploadPublication {
     if (!row) return failure('not_found', 'upload not found', 404);
     // Once processing has started, publication may be in flight outside this
     // Durable Object. Allowing an abort here would race that publication and
-    // could leave an ABORTED job with a live path in the cache. The domain
-    // transition graph intentionally permits abort only before PROCESSING.
+    // could leave an ABORTED job with a live path in the cache.
     if (row.state === 'PROCESSING' || row.state === 'PUBLISHING')
       return failure(
         'invalid_transition',
