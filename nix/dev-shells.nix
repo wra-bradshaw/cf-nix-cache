@@ -16,7 +16,6 @@ forEachSupportedSystem (
           pnpm
           docker-client
           nix
-          terraform
           zstd
         ]
         ++ lib.optionals pkgs.stdenv.isDarwin [

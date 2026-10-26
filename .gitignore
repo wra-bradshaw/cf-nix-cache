@@ -1,8 +1,6 @@
 target/
 /result*
 /.direnv
-.terraform
-*.tfstate*
 crash.log
 .DS_Store
 node_modules/
