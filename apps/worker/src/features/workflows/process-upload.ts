@@ -67,17 +67,17 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
         throw new PermanentWorkflowError(publication.permanent_error);
       return processed.result;
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught);
-      const terminal = caught instanceof PermanentWorkflowError;
-      const failed = await step.do('mark failed', async () => {
-        const result = await upload.fail(message, terminal);
-        if (!result.ok)
-          throw new Error(
-            `unable to mark upload failed: ${result.error.message}`,
-          );
-        return { failed: true };
-      });
-      void failed;
+      // Transient failures leave the job in its current state so the workflow
+      // can be restarted; only permanent ones are recorded as FAILED.
+      if (caught instanceof PermanentWorkflowError)
+        await step.do('mark failed', async () => {
+          const result = await upload.fail(caught.message);
+          if (!result.ok)
+            throw new Error(
+              `unable to mark upload failed: ${result.error.message}`,
+            );
+          return { failed: true };
+        });
       throw caught;
     }
   }

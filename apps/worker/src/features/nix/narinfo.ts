@@ -12,7 +12,7 @@ export async function renderNarInfo(
   manifest: ChunkManifest,
 ): Promise<string> {
   const references = record.references.join(' ');
-  const fingerprint = `1;${record.store_path};${record.nar_hash};${record.nar_size};${record.references.map((reference) => (reference.startsWith('/') ? reference : `/nix/store/${reference}`)).join(',')}`;
+  const fingerprint = `1;${record.store_path};${record.nar_hash};${record.nar_size};${record.references.map((reference) => `/nix/store/${reference}`).join(',')}`;
   const key = await crypto.subtle.importKey(
     'jwk',
     JSON.parse(env.NIX_PRIVATE_JWK) as JsonWebKey,

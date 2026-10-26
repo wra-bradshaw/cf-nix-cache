@@ -157,8 +157,6 @@ export class UploadMultipart {
   ): Promise<RpcResult<UploadStateResponse>> {
     const completed = await this.env.CACHE_BUCKET.head(row.staging_key);
     if (!completed) {
-      if (!row.upload_id)
-        return failure('not_uploadable', 'upload is not multipart active', 409);
       const parts = Object.entries(row.parts).map(([part_number, etag]) => ({
         partNumber: Number(part_number),
         etag,
@@ -167,7 +165,7 @@ export class UploadMultipart {
         return failure('missing_parts', 'no uploaded parts were supplied', 400);
       await this.env.CACHE_BUCKET.resumeMultipartUpload(
         row.staging_key,
-        row.upload_id,
+        row.upload_id!,
       ).complete(parts);
     }
     return this.finishCompletion(this.storage.row()!);

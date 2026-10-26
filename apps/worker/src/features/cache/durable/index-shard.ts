@@ -1,5 +1,9 @@
 import { deltaFor } from '../../domain/uploads';
-import type { CacheMutation, PathRecord } from '../../../types';
+import type {
+  CacheMutation,
+  PathRecord,
+  PreparedMutation,
+} from '../../../types';
 import type { RpcResult } from '../../../rpc';
 import {
   failure,
@@ -11,13 +15,7 @@ import {
 import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
 
 type Mutation = Exclude<CacheMutation, { kind: 'clear' }>;
-type Prepared = {
-  operation_id: string;
-  delta: number;
-  previous: PathRecord | null;
-  record: PathRecord | null;
-  status: 'PREPARED' | 'COMMITTED' | 'ABORTED';
-};
+type Prepared = Omit<PreparedMutation, 'cache' | 'store_hash'>;
 
 export class CacheIndexShard extends RpcOnlyDurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -86,37 +84,30 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
         input.mutation.kind === 'upsert'
           ? input.mutation.record.store_hash
           : input.mutation.store_hash;
-      const previousRow = storeHash
-        ? first(
-            this.ctx.storage.sql.exec<{ record: string }>(
-              'SELECT record FROM paths WHERE store_hash = ?',
-              storeHash,
-            ),
-          )
-        : null;
+      const previousRow = first(
+        this.ctx.storage.sql.exec<{ record: string }>(
+          'SELECT record FROM paths WHERE store_hash = ?',
+          storeHash,
+        ),
+      );
       const previous = previousRow
         ? (JSON.parse(previousRow.record) as PathRecord)
         : null;
       const next =
         input.mutation.kind === 'upsert' ? input.mutation.record : null;
-      const delta =
-        input.mutation.kind === 'upsert'
-          ? deltaFor(next, previous)
-          : deltaFor(null, previous);
-      if (storeHash) {
-        const lock = first(
-          this.ctx.storage.sql.exec<{ operation_id: string }>(
-            "SELECT operation_id FROM index_operations WHERE store_hash = ? AND status = 'PREPARED'",
-            storeHash,
-          ),
+      const delta = deltaFor(next, previous);
+      const lock = first(
+        this.ctx.storage.sql.exec<{ operation_id: string }>(
+          "SELECT operation_id FROM index_operations WHERE store_hash = ? AND status = 'PREPARED'",
+          storeHash,
+        ),
+      );
+      if (lock && lock.operation_id !== input.operation_id)
+        return failure(
+          'mutation_in_progress',
+          'another mutation is in progress for this path',
+          409,
         );
-        if (lock && lock.operation_id !== input.operation_id)
-          return failure(
-            'mutation_in_progress',
-            'another mutation is in progress for this path',
-            409,
-          );
-      }
       this.ctx.storage.sql.exec(
         "INSERT INTO index_operations (operation_id, store_hash, mutation, previous, next_record, delta, status) VALUES (?, ?, ?, ?, ?, ?, 'PREPARED')",
         input.operation_id,
@@ -229,23 +220,25 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
       this.ctx.storage.sql.exec(
         "UPDATE index_operations SET status = 'ABORTED' WHERE status = 'PREPARED'",
       );
-      const totals = first(
-        this.ctx.storage.sql.exec<{ count: number; bytes: number }>(
+      const totals = this.ctx.storage.sql
+        .exec<{ count: number; bytes: number }>(
           'SELECT COUNT(*) AS count, COALESCE(SUM(file_size), 0) AS bytes FROM paths',
-        ),
-      );
+        )
+        .one();
+      const deleted = Number(totals.count);
+      const bytes = Number(totals.bytes);
       this.ctx.storage.sql.exec('DELETE FROM paths');
       this.ctx.storage.sql.exec(
         "INSERT INTO index_operations (operation_id, mutation, delta, status, clear_deleted, clear_bytes) VALUES (?, ?, ?, 'COMMITTED', ?, ?)",
         operationId,
         JSON.stringify({ kind: 'clear' }),
-        -Number(totals?.bytes ?? 0),
-        Number(totals?.count ?? 0),
-        Number(totals?.bytes ?? 0),
+        -bytes,
+        deleted,
+        bytes,
       );
       return ok({
-        deleted: Number(totals?.count ?? 0),
-        bytes: Number(totals?.bytes ?? 0),
+        deleted,
+        bytes,
         reconcile_operation_ids: this.committedOperationIds(),
       });
     });

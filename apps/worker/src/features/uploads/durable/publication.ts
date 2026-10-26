@@ -148,8 +148,7 @@ export class UploadPublication {
     return ok();
   }
 
-  async fail(message: string, terminal = true): Promise<RpcResult<void>> {
-    if (!terminal) return ok();
+  async fail(message: string): Promise<RpcResult<void>> {
     this.ctx.storage.transactionSync(() => {
       const row = this.storage.row();
       if (!row || ['READY', 'ABORTED'].includes(row.state)) return;

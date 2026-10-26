@@ -88,14 +88,7 @@ export class CoordinatorQuota {
       if (row.status === 'FINALIZED') return ok();
       if (row.status === 'ABORTED')
         return failure('operation_aborted', 'quota operation was aborted', 409);
-      this.ctx.storage.sql.exec(
-        'UPDATE cache SET logical_bytes = logical_bytes + ?',
-        Number(row.delta),
-      );
-      this.ctx.storage.sql.exec(
-        "UPDATE quota_operations SET status = 'FINALIZED' WHERE operation_id = ? AND status = 'RESERVED'",
-        input.operation_id,
-      );
+      this.finalizeRow(input.operation_id, Number(row.delta));
       return ok();
     });
   }
@@ -129,19 +122,23 @@ export class CoordinatorQuota {
             operationId,
           ),
         );
-        if (!row) continue;
-        if (row.status === 'ABORTED' || row.status === 'FINALIZED') continue;
-        this.ctx.storage.sql.exec(
-          'UPDATE cache SET logical_bytes = logical_bytes + ? ',
-          Number(row.delta),
-        );
-        this.ctx.storage.sql.exec(
-          "UPDATE quota_operations SET status = 'FINALIZED' WHERE operation_id = ? AND status = 'RESERVED'",
-          operationId,
-        );
+        if (row?.status === 'RESERVED')
+          this.finalizeRow(operationId, Number(row.delta));
       }
       return ok();
     });
+  }
+
+  /** Applies a RESERVED operation's delta and marks it FINALIZED. */
+  private finalizeRow(operationId: string, delta: number): void {
+    this.ctx.storage.sql.exec(
+      'UPDATE cache SET logical_bytes = logical_bytes + ?',
+      delta,
+    );
+    this.ctx.storage.sql.exec(
+      "UPDATE quota_operations SET status = 'FINALIZED' WHERE operation_id = ? AND status = 'RESERVED'",
+      operationId,
+    );
   }
 
   async clearDelta(input: {

@@ -67,8 +67,8 @@ export class UploadJob extends RpcOnlyDurableObject {
     return this.publication.publish(result);
   }
 
-  fail(message: string, terminal = true): Promise<RpcResult<void>> {
-    return this.publication.fail(message, terminal);
+  fail(message: string): Promise<RpcResult<void>> {
+    return this.publication.fail(message);
   }
 
   abort(): Promise<RpcResult<UploadStateResponse>> {
