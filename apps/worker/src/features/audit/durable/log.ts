@@ -1,7 +1,6 @@
-import { base64url } from 'jose';
 import type { AuditEvent, PageResponse } from '../../../types';
 import type { RpcResult } from '../../../rpc';
-import { decodeCursor } from '../../domain/validation';
+import { decodeCursor, encodeCursor } from '../../domain/validation';
 import {
   failure,
   ok,
@@ -73,12 +72,10 @@ export class AuditLog extends RpcOnlyDurableObject {
     return ok({
       items,
       next_cursor: last
-        ? base64url.encode(
-            JSON.stringify({
-              timestamp: Number(last.timestamp),
-              id: String(last.id),
-            }),
-          )
+        ? encodeCursor({
+            timestamp: Number(last.timestamp),
+            id: String(last.id),
+          })
         : null,
     });
   }

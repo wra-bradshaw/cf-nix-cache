@@ -1,4 +1,4 @@
-import { decodeCursor } from '../../domain/validation';
+import { decodeCursor, encodeCursor } from '../../domain/validation';
 import type { PageResponse, TokenSummary } from '../../../types';
 import type { RpcResult } from '../../../rpc';
 import { toTokenSummary } from './model';
@@ -81,6 +81,8 @@ export class TokenManagement {
     limit: number;
     cursor: string | null;
   }): Promise<RpcResult<PageResponse<TokenSummary>>> {
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100)
+      return failure('invalid_limit', 'limit must be between 1 and 100', 400);
     const cursor = decodeCursor<{ issued_at: number; jti: string }>(
       input.cursor,
     );
@@ -105,12 +107,10 @@ export class TokenManagement {
     return ok({
       items,
       next_cursor: last
-        ? btoa(
-            JSON.stringify({
-              issued_at: Number(last.issued_at),
-              jti: String(last.jti),
-            }),
-          ).replaceAll('=', '')
+        ? encodeCursor({
+            issued_at: Number(last.issued_at),
+            jti: String(last.jti),
+          })
         : null,
     });
   }
