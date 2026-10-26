@@ -1,10 +1,12 @@
 import { renderNarInfo } from '../../nix/narinfo';
 import {
   ChunkManifestSchema,
+  DomainError,
   parseJsonSchema,
   transition,
 } from '../../domain/validation';
 import type {
+  CacheState,
   PathRecord,
   ProcessResult,
   UploadStateResponse,
@@ -12,7 +14,7 @@ import type {
 import { publicationFor } from '../../cache/adapters';
 import { PublicationError } from '../../cache/application';
 import { ensureWorkflow } from '../../workflows/enqueue';
-import type { RpcResult } from '../../../rpc';
+import { ApiCallError, type RpcResult } from '../../../rpc';
 import { getCache } from '../../cache/directory';
 import { processJob, state } from './model';
 import { UploadStorage } from './storage';
@@ -56,7 +58,16 @@ export class UploadPublication {
         'upload is not ready for publication',
         409,
       );
-    const cache = await getCache(this.env, row.cache);
+    let cache: CacheState;
+    try {
+      cache = await getCache(this.env, row.cache);
+    } catch (error) {
+      // A removed or invalid cache is a classified failure, so the workflow
+      // can make it terminal instead of retrying publication forever.
+      if (error instanceof ApiCallError || error instanceof DomainError)
+        return failure(error.code, error.message, error.status);
+      throw error;
+    }
     if (
       cache.reference.id !== row.cache_id ||
       cache.reference.incarnation !== row.incarnation
