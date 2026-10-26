@@ -5,7 +5,7 @@ import {
 } from 'cloudflare:workers';
 import type { CacheWorkflowJob } from '../../types';
 import { idStub } from '../../rpc';
-import { coordinator, system } from '../runtime/http';
+import { coordinator, system } from '../cache/directory';
 
 export class DeleteCacheWorkflow extends WorkflowEntrypoint<
   Env,

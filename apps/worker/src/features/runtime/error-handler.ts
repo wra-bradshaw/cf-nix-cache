@@ -2,7 +2,7 @@ import { AuthError } from '../auth';
 import { PublicationError } from '../cache/application';
 import { DomainError } from '../domain/validation';
 import { RangeRequestError } from '../nix/range';
-import { ApiCallError } from './errors';
+import { ApiCallError } from '../../rpc';
 
 type RequestContext = { get(key: 'requestId'): string };
 

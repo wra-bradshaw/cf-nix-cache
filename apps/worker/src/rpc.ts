@@ -25,3 +25,24 @@ export function idStub<T extends Rpc.DurableObjectBranded>(
     typeof id === 'string' ? namespace.idFromString(id) : id,
   );
 }
+
+/** An RPC failure rethrown in the Worker so `handleError` can render it. */
+export class ApiCallError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export function unwrapRpc<T>(result: RpcResult<T>): T {
+  if (!result.ok)
+    throw new ApiCallError(
+      result.error.status,
+      result.error.code,
+      result.error.message,
+    );
+  return result.value;
+}

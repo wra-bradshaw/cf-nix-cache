@@ -13,7 +13,7 @@ import { publicationFor } from '../../cache';
 import { PublicationError } from '../../cache/application';
 import { ensureWorkflow } from '../../workflows/workflow';
 import type { RpcResult } from '../../../rpc';
-import { getCache } from '../../runtime/http';
+import { getCache } from '../../cache/directory';
 import { now } from '../../../infrastructure/durable/shared';
 import { failure, processJob, state } from './model';
 import { UploadStorage } from './storage';

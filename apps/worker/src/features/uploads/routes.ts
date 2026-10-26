@@ -9,16 +9,9 @@ import {
 } from '../domain/validation';
 import type { InitiateUploadResponse } from '../../types';
 import { MULTIPART_PART_SIZE } from '../../types';
-import type { AppEnv } from '../runtime/http';
-import {
-  authFor,
-  coordinator,
-  getCache,
-  idempotency,
-  parseJson,
-  unwrapRpc,
-} from '../runtime/http';
-import { idStub } from '../../rpc';
+import { idempotency, parseJson, type AppEnv } from '../runtime/http';
+import { authFor, coordinator, getCache } from '../cache/directory';
+import { idStub, unwrapRpc } from '../../rpc';
 import { uploadAccess, stateResponse } from './access';
 
 export const uploadRoutes = new Hono<AppEnv>();

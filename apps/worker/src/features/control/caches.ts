@@ -9,17 +9,15 @@ import {
   parseJsonSchema,
 } from '../domain/validation';
 import { ensureWorkflow } from '../workflows/workflow';
-import type { AppEnv } from '../runtime/http';
+import { idempotency, parseJson, type AppEnv } from '../runtime/http';
 import {
   coordinator,
   effectiveLifecycle,
   getCache,
-  idempotency,
-  parseJson,
   publicCache,
   system,
-  unwrapRpc,
-} from '../runtime/http';
+} from '../cache/directory';
+import { unwrapRpc } from '../../rpc';
 import { ENCODING_ID } from '../../types';
 import { event } from './helpers';
 import { pageLimit } from './helpers';

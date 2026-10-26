@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono';
 import { assertCacheName } from '../domain/validation';
 import type { PathRecord } from '../../types';
 import type { AppEnv } from '../runtime/http';
-import { authFor, getCache, getPath, isNotFound } from '../runtime/http';
+import { authFor, getCache, getPath, isNotFound } from '../cache/directory';
 import { serveNarObject } from './object';
 
 export const nixRoutes = new Hono<AppEnv>();

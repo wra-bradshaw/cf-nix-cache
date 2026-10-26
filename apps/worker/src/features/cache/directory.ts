@@ -7,8 +7,7 @@ import type {
   PathRecord,
   Role,
 } from '../../types';
-import { idStub, namedStub } from '../../rpc';
-import { ApiCallError, unwrapRpc } from './errors';
+import { ApiCallError, idStub, namedStub, unwrapRpc } from '../../rpc';
 
 export function system(env: Env) {
   return namedStub(env.SYSTEM_CONTROL, 'system');
@@ -20,7 +19,7 @@ export function coordinator(env: Env, reference: CacheReference) {
 
 const DIRECTORY_CACHE_TTL = 5;
 
-function effectiveLifecycle(
+export function effectiveLifecycle(
   catalogue: CacheReference['lifecycle'],
   coordinatorLifecycle: CacheConfig['lifecycle'],
 ): CacheConfig['lifecycle'] {
@@ -86,8 +85,6 @@ export async function getCache(env: Env, name: string): Promise<CacheState> {
     reference,
   };
 }
-
-export { effectiveLifecycle };
 
 export function publicCache(cache: CacheState): CacheConfig {
   return {

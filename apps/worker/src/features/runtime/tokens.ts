@@ -1,17 +1,11 @@
 import { canDelegate } from '../auth';
 import {
-  assertIdempotencyKey,
   DomainError,
   parseJsonSchema,
   TokenRequestSchema,
 } from '../domain/validation';
 import type { Grant, TokenClaims } from '../../types';
-import { namedStub } from '../../rpc';
-import { unwrapRpc } from './errors';
-
-export function idempotency(request: Request): string {
-  return assertIdempotencyKey(request.headers.get('Idempotency-Key'));
-}
+import { namedStub, unwrapRpc } from '../../rpc';
 
 export async function issueFromInput(
   env: Env,
