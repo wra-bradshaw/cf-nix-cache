@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import {
+  CompleteUploadSchema,
   parseJsonSchema,
   partsFor,
   requestFingerprint,
@@ -79,11 +80,11 @@ uploadRoutes.put('/api/uploads/:id/parts/:number', async (c) => {
 uploadRoutes.post('/api/uploads/:id/complete', async (c) => {
   const { job } = await uploadAccess(c);
   idempotency(c.req.raw);
-  const input = await parseJson(c.req.raw);
-  const result = unwrapRpc(
-    await job.complete(input as import('../../types').CompleteUploadRequest),
+  const input = parseJsonSchema(
+    CompleteUploadSchema,
+    await parseJson(c.req.raw),
   );
-  return stateResponse(result);
+  return stateResponse(unwrapRpc(await job.complete(input)));
 });
 
 uploadRoutes.get('/api/uploads/:id/state', async (c) => {

@@ -1,8 +1,4 @@
-import {
-  CompleteUploadSchema,
-  parseJsonSchema,
-  partsFor,
-} from '../../domain/validation';
+import { CompleteUploadSchema, partsFor } from '../../domain/validation';
 import type {
   CompleteUploadRequest,
   UploadManifest,
@@ -115,7 +111,14 @@ export class UploadMultipart {
   async complete(
     input: CompleteUploadRequest,
   ): Promise<RpcResult<UploadStateResponse>> {
-    const supplied = parseJsonSchema(CompleteUploadSchema, input);
+    // Validated here as well as in the route: a schema error thrown across
+    // RPC would otherwise surface as an internal error.
+    if (!CompleteUploadSchema.validate(input))
+      return failure(
+        'validation_failed',
+        'complete request does not match the wire contract',
+        422,
+      );
     const row = this.storage.row();
     if (!row?.upload_id)
       return row
@@ -135,8 +138,8 @@ export class UploadMultipart {
     if (row.state !== 'UPLOADING' && row.state !== 'COMPLETING')
       return ok(state(row));
     if (row.state === 'COMPLETING') return this.completeMultipart(row);
-    const values = supplied.parts?.length
-      ? supplied.parts
+    const values = input.parts?.length
+      ? input.parts
       : Object.entries(row.parts).map(([part_number, etag]) => ({
           part_number: Number(part_number),
           etag,
