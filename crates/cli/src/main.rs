@@ -8,8 +8,6 @@ mod config;
 mod handlers;
 mod nix;
 mod upload;
-#[cfg(test)]
-mod wire_proof;
 
 use args::{Args, CommandKind, TokenOutput};
 use client::{bootstrap, Api};

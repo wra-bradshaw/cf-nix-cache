@@ -1,4 +1,4 @@
-use crate::{validate_nar_hash, validate_store_hash, CacheName, Error, ENCODING_ID, MAX_NAR_SIZE};
+use crate::{validate_nar_hash, Error, ENCODING_ID, MAX_NAR_SIZE};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,62 +13,6 @@ pub enum UploadStatus {
     Ready,
     Failed,
     Aborted,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UploadManifest {
-    pub cache: CacheName,
-    pub store_hash: String,
-    pub store_path: String,
-    pub nar_hash: String,
-    pub nar_size: u64,
-    #[serde(default)]
-    pub references: Vec<crate::StorePathName>,
-    #[serde(default)]
-    pub deriver: Option<crate::StorePathName>,
-    #[serde(default)]
-    pub ca: Option<String>,
-}
-
-impl UploadManifest {
-    pub fn validate(&self) -> Result<(), Error> {
-        const MAX_REFERENCES: usize = 1_024;
-        const MAX_METADATA_BYTES: usize = 256 * 1024;
-        if self.nar_size > MAX_NAR_SIZE {
-            return Err(Error::NarTooLarge);
-        }
-        if self.references.len() > MAX_REFERENCES
-            || serde_json::to_vec(self)
-                .map_err(|_| Error::ManifestTooLarge)?
-                .len()
-                > MAX_METADATA_BYTES
-        {
-            return Err(Error::ManifestTooLarge);
-        }
-        validate_store_hash(&self.store_hash)?;
-        validate_nar_hash(&self.nar_hash)?;
-        let basename = self.store_path.rsplit('/').next().unwrap_or_default();
-        if !basename.starts_with(&format!("{}-", self.store_hash))
-            || !self.store_path.starts_with("/nix/store/")
-            || basename.len() <= self.store_hash.len() + 1
-        {
-            return Err(Error::StorePathHashMismatch);
-        }
-        if self.store_path.len() > 512 || self.store_path.chars().any(|c| c.is_control()) {
-            return Err(Error::InvalidStoreMetadata);
-        }
-        // `references` and `deriver` are `StorePathName`s, which are
-        // validated when parsed or deserialized.
-        if self.ca.as_ref().is_some_and(|value| {
-            value.len() > 512 || value.chars().any(|character| character.is_control())
-        }) {
-            return Err(Error::InvalidStoreMetadata);
-        }
-        if self.store_path.matches('/').count() != 3 {
-            return Err(Error::InvalidStorePath);
-        }
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

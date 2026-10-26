@@ -60,8 +60,8 @@ Miniflare R2 under `wrangler dev` and deployed R2 in production.
 Content-addressed writes are conditional.
 
 The CLI has command definitions, capability handlers, and a retrying API
-client. Outbound JSON is re-serialized through the Rust DTOs generated from
-the API schemas before transmission. Each CLI invocation creates a fresh
+client. Outbound JSON bodies are built directly as the Rust DTOs generated
+from the API schemas. Each CLI invocation creates a fresh
 idempotency key that the retry middleware reuses for transient failures, and
 uses the same `/api` routes as the documented API. Request and response
 schemas are generated for both Worker and Rust contract tooling; domain types
