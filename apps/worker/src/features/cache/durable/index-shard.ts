@@ -6,9 +6,9 @@ import {
   first,
   now,
   ok,
-  RpcOnlyDurableObject,
   type SqlRow,
 } from '../../../infrastructure/durable/shared';
+import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
 
 type Mutation = Exclude<CacheMutation, { kind: 'clear' }>;
 type Prepared = {

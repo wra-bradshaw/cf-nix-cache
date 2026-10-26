@@ -2,7 +2,7 @@ import { validateGrant } from '../../domain/validation';
 import type { Grant } from '../../../types';
 import type { RpcResult } from '../../../rpc';
 import { hashSecret } from '../credentials';
-import { TokenAudit } from './audit';
+import { AuditOutbox } from '../../../infrastructure/durable/audit-outbox';
 import { TokenSigner } from './signer';
 import {
   failure,
@@ -16,7 +16,7 @@ export class TokenIssuance {
     private readonly ctx: DurableObjectState,
     private readonly env: Env,
     private readonly signer: TokenSigner,
-    private readonly audit: TokenAudit,
+    private readonly audit: AuditOutbox,
   ) {}
 
   async bootstrap(input: {

@@ -1,10 +1,13 @@
 import type { Grant, PageResponse, TokenSummary } from '../../../types';
 import type { RpcResult } from '../../../rpc';
-import { TokenAudit } from './audit';
+import {
+  AUDIT_OUTBOX_SCHEMA,
+  AuditOutbox,
+} from '../../../infrastructure/durable/audit-outbox';
 import { TokenIssuance } from './issuance';
 import { TokenManagement } from './management';
 import { TokenSigner } from './signer';
-import { RpcOnlyDurableObject } from '../../../infrastructure/durable/shared';
+import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
 
 const schema = `CREATE TABLE IF NOT EXISTS tokens (
   jti TEXT PRIMARY KEY, subject TEXT NOT NULL, expires_at INTEGER NOT NULL,
@@ -13,17 +16,17 @@ const schema = `CREATE TABLE IF NOT EXISTS tokens (
 );
 CREATE TABLE IF NOT EXISTS token_operations (operation_id TEXT PRIMARY KEY, jti TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS bootstrap (key INTEGER PRIMARY KEY CHECK (key = 1), operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS audit_outbox (event_id TEXT PRIMARY KEY, event TEXT NOT NULL, created_at INTEGER NOT NULL);`;
+${AUDIT_OUTBOX_SCHEMA}`;
 
 export class TokenCatalog extends RpcOnlyDurableObject {
   private readonly issuance: TokenIssuance;
   private readonly management: TokenManagement;
-  private readonly audit: TokenAudit;
+  private readonly audit: AuditOutbox;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(schema);
-    this.audit = new TokenAudit(ctx, env);
+    this.audit = new AuditOutbox(ctx, env);
     this.issuance = new TokenIssuance(
       ctx,
       env,

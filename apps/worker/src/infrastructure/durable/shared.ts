@@ -1,4 +1,3 @@
-import { DurableObject } from 'cloudflare:workers';
 import type { RpcResult } from '../../rpc';
 
 export type SqlRow = Record<string, string | number | null>;
@@ -25,11 +24,4 @@ export function ok<T>(value?: T): RpcResult<T | undefined> {
 export function first<T>(cursor: Iterable<T>): T | undefined {
   for (const row of cursor) return row;
   return undefined;
-}
-
-/** Durable Objects in this Worker are reached only through RPC stubs. */
-export class RpcOnlyDurableObject extends DurableObject<Env> {
-  fetch(): Response {
-    return Response.json({ code: 'rpc_only' }, { status: 404 });
-  }
 }

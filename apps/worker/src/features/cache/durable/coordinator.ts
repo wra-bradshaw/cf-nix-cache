@@ -5,11 +5,15 @@ import type {
   QuotaReservation,
 } from '../../../types';
 import type { RpcResult } from '../../../rpc';
-import { CoordinatorAudit } from './audit';
+import {
+  AUDIT_OUTBOX_SCHEMA,
+  AuditOutbox,
+} from '../../../infrastructure/durable/audit-outbox';
+import { failure, ok } from '../../../infrastructure/durable/shared';
 import { CoordinatorQuota } from './quota';
 import { CoordinatorState } from './state';
 import { CoordinatorUploads } from './uploads';
-import { RpcOnlyDurableObject } from '../../../infrastructure/durable/shared';
+import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
 
 const schema = `CREATE TABLE IF NOT EXISTS cache (
   cache_id TEXT PRIMARY KEY, name TEXT NOT NULL, incarnation TEXT NOT NULL,
@@ -25,15 +29,13 @@ CREATE TABLE IF NOT EXISTS upload_allocations (
 CREATE TABLE IF NOT EXISTS clear_operations (
   operation_id TEXT PRIMARY KEY, delta INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS audit_outbox (
-  event_id TEXT PRIMARY KEY, event TEXT NOT NULL, created_at INTEGER NOT NULL
-);`;
+${AUDIT_OUTBOX_SCHEMA}`;
 
 export class CacheCoordinator extends RpcOnlyDurableObject {
   private readonly state: CoordinatorState;
   private readonly uploads: CoordinatorUploads;
   private readonly quota: CoordinatorQuota;
-  private readonly audit: CoordinatorAudit;
+  private readonly audit: AuditOutbox;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -41,7 +43,7 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
     this.state = new CoordinatorState(ctx);
     this.uploads = new CoordinatorUploads(ctx, env);
     this.quota = new CoordinatorQuota(ctx);
-    this.audit = new CoordinatorAudit(ctx, env);
+    this.audit = new AuditOutbox(ctx, env);
   }
 
   initialize(input: {
@@ -109,12 +111,21 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
     return this.quota.clearDelta(input);
   }
 
-  recordAudit(event: AuditEvent): Promise<RpcResult<void>> {
-    return this.audit.record(event);
+  async recordAudit(event: AuditEvent): Promise<RpcResult<void>> {
+    this.audit.enqueue(event);
+    return ok();
   }
 
-  flushAudit(): Promise<RpcResult<void>> {
-    return this.audit.flush();
+  /** Delivers every pending audit event; cache removal waits on this. */
+  async flushAudit(): Promise<RpcResult<void>> {
+    while (this.audit.pending() > 0)
+      if (!(await this.audit.drain()))
+        return failure(
+          'audit_unavailable',
+          'audit log is unavailable; retry before removing the cache',
+          503,
+        );
+    return ok();
   }
 
   alarm(): Promise<void> {

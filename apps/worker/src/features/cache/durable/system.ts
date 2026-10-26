@@ -5,9 +5,9 @@ import {
   first,
   now,
   ok,
-  RpcOnlyDurableObject,
   type SqlRow,
 } from '../../../infrastructure/durable/shared';
+import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
 
 export class SystemControl extends RpcOnlyDurableObject {
   constructor(ctx: DurableObjectState, env: Env) {

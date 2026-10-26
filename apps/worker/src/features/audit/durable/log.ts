@@ -5,9 +5,9 @@ import { decodeCursor } from '../../domain/validation';
 import {
   failure,
   ok,
-  RpcOnlyDurableObject,
   type SqlRow,
 } from '../../../infrastructure/durable/shared';
+import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
 
 export class AuditLog extends RpcOnlyDurableObject {
   constructor(ctx: DurableObjectState, env: Env) {

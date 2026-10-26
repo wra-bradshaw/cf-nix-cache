@@ -2,7 +2,7 @@ import { decodeCursor } from '../../domain/validation';
 import type { PageResponse, TokenSummary } from '../../../types';
 import type { RpcResult } from '../../../rpc';
 import { toTokenSummary } from './model';
-import { TokenAudit } from './audit';
+import { AuditOutbox } from '../../../infrastructure/durable/audit-outbox';
 import {
   failure,
   first,
@@ -14,7 +14,7 @@ import {
 export class TokenManagement {
   constructor(
     private readonly ctx: DurableObjectState,
-    private readonly audit: TokenAudit,
+    private readonly audit: AuditOutbox,
   ) {}
 
   async check(input: {

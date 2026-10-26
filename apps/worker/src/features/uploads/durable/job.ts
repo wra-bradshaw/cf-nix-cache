@@ -9,11 +9,8 @@ import type { RpcResult } from '../../../rpc';
 import { UploadMultipart } from './multipart';
 import { UploadPublication } from './publication';
 import { UploadStorage } from './storage';
-import {
-  failure,
-  ok,
-  RpcOnlyDurableObject,
-} from '../../../infrastructure/durable/shared';
+import { failure, ok } from '../../../infrastructure/durable/shared';
+import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
 
 export class UploadJob extends RpcOnlyDurableObject {
   private readonly storage: UploadStorage;
