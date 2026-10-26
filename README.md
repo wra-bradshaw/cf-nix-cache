@@ -35,7 +35,7 @@ The supported customer distribution is the standalone
 [`cf-nix-cache-template`](cf-nix-cache-template/README.md). It contains only a
 tiny Worker entrypoint, pinned Wrangler/dependency versions, customer-owned
 `wrangler.jsonc`, and setup/upgrade helpers. Cloudflare Workers Builds runs
-`pnpm deploy`; external CI can run the same command. No deployment from that
+`pnpm run deploy`; external CI can run the same command. No deployment from that
 template builds Rust or a Container image.
 
 Releases publish `cf-nix-cache@X.Y.Z` and the matching public

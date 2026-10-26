@@ -6,7 +6,7 @@
 
 This repository is the supported customer deployment surface for cf-nix-cache.
 Cloudflare clones it into your GitHub repository and Workers Builds runs the
-same `pnpm deploy` command that can be used from GitHub Actions, GitLab CI,
+same `pnpm run deploy` command that can be used from GitHub Actions, GitLab CI,
 Jenkins, or another runner. The repository contains no Rust source and never
 builds a processor image.
 
@@ -50,7 +50,7 @@ this repository. Upgrade the pinned dependency with Dependabot or Renovate:
 
 ```console
 pnpm update cf-nix-cache --latest
-pnpm deploy
+pnpm run deploy
 ```
 
 The package's `release-manifest.json` supplies the matching immutable
@@ -61,8 +61,8 @@ configuration remains untouched. You may set
 required. Mutable tags such as `latest` are rejected.
 
 Preview deployments upload a Worker version and do not roll out the
-production Container; use `pnpm preview` for that path. A production
-`pnpm deploy` applies the Container rollout.
+production Container; use `pnpm run preview` for that path. A production
+`pnpm run deploy` applies the Container rollout.
 The same command is suitable for Workers Builds and external CI; it requires
 the normal Wrangler credentials (`CLOUDFLARE_API_TOKEN` and
 `CLOUDFLARE_ACCOUNT_ID`, or an equivalent Wrangler login). R2 lifecycle rules
@@ -72,10 +72,14 @@ as well.
 ## Operations
 
 ```console
-pnpm doctor
+pnpm run doctor
 pnpm run rotate-auth-key
 pnpm run rotate-nix-key
 ```
+
+Always invoke the helpers through `pnpm run`: `pnpm setup`, `pnpm deploy`, and
+`pnpm doctor` are pnpm built-in commands and do not run this repository's
+scripts.
 
 `doctor` checks package/image compatibility, the complete secret set, the R2
 binding and lifecycle configuration, Durable Object and Workflow bindings,
@@ -89,7 +93,7 @@ you create a cache with the admin token.
 Deleting the Worker does not delete a non-empty R2 bucket. To tear down a
 cache, first stop writers, verify the bucket is empty, explicitly delete its
 objects, and then remove the bucket using Wrangler. This is intentionally not
-part of `pnpm deploy` or `pnpm doctor`.
+part of `pnpm run deploy` or `pnpm run doctor`.
 
 ## Required secret names
 
