@@ -1,5 +1,5 @@
 use crate::{
-    client::{upload_part_with_retry, Api},
+    client::Api,
     nix::{basename, make_nar, nix_hash, store_hash},
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -101,7 +101,10 @@ pub(crate) async fn upload_path(api: &Api, cache: &str, path: &str, info: &Value
         let mut bytes = vec![0; len];
         file.seek(SeekFrom::Start(offset))?;
         file.read_exact(&mut bytes)?;
-        let etag = upload_part_with_retry(api, &part.url, bytes, part.part_number).await?;
+        let etag = api
+            .upload_part(&part.url, bytes)
+            .await
+            .with_context(|| format!("upload part {} failed", part.part_number))?;
         completed.push(contract::CompleteUploadPartsItem {
             etag: etag.parse()?,
             part_number: NonZeroU64::new(part.part_number as u64)
