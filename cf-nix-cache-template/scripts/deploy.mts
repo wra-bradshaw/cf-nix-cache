@@ -1,4 +1,5 @@
 import {
+  bucketExists,
   bucketName,
   bootstrapCommand,
   configPath,
@@ -20,7 +21,6 @@ import {
   withRenderedConfig,
   workerUrl,
   wrangler,
-  type TemplateConfig,
 } from "./lib.mts";
 
 const action = process.argv[2] ?? "deploy";
@@ -50,27 +50,24 @@ function secretState(names: Set<string>): "none" | "complete" | "partial" {
       : "partial";
 }
 
-async function deployWorker(
-  config: TemplateConfig,
-  image: string,
-): Promise<string> {
-  return withRenderedConfig(image, async (rendered) => {
-    const output = await wrangler(["deploy"], {}, rendered);
-    return workerUrl(config, `${output.stdout}\n${output.stderr}`) ?? "";
-  });
+async function deployWorker(rendered: string): Promise<string | undefined> {
+  const output = await wrangler(["deploy"], {}, rendered);
+  return workerUrl(`${output.stdout}\n${output.stderr}`);
 }
 
-async function configureSecrets(config: TemplateConfig): Promise<{
+async function configureSecrets(
+  state: "none" | "complete",
+  initialUrl: string | undefined,
+  rendered: string,
+): Promise<{
   publicKey: string;
   url: string;
 }> {
-  const names = await secretNamesFromWrangler(configPath);
-  const state = secretState(names);
-  if (state === "partial") {
-    fail(
-      `partial Wrangler secret set detected (missing: ${missing(names).join(", ")}). Refusing to regenerate keys; restore the missing secrets or run an explicit key rotation.`,
-    );
-  }
+  // Resolve the URL before generating keys so that a missing URL cannot leave
+  // a freshly installed key set whose public key was never printed.
+  const url =
+    initialUrl ??
+    fail("could not determine the workers.dev URL; set CF_NIX_CACHE_URL");
 
   let publicKey = "";
   if (state === "none") {
@@ -88,7 +85,7 @@ async function configureSecrets(config: TemplateConfig): Promise<{
         NIX_PUBLIC_KEYS: publicKey,
         BOOTSTRAP_SECRET_HASH: hashSecret(bootstrapSecret),
       },
-      configPath,
+      rendered,
     );
     console.log(
       "Installed the initial Worker secret set. Private key material was kept in memory only.",
@@ -97,9 +94,6 @@ async function configureSecrets(config: TemplateConfig): Promise<{
 
   // Secret values cannot be read back from Wrangler. The public key is printed
   // on first setup and remains available at /api/public-key thereafter.
-  const url =
-    workerUrl(config) ??
-    fail("could not determine the workers.dev URL; set CF_NIX_CACHE_URL");
   if (!publicKey) {
     try {
       const response = await fetch(`${url.replace(/\/$/, "")}/api/public-key`);
@@ -114,31 +108,37 @@ async function configureSecrets(config: TemplateConfig): Promise<{
 async function setup(): Promise<void> {
   const config = await readConfig();
   const { image } = await releaseImage();
-  // This is the only point where a missing Worker may be read as "no
-  // secrets": the Worker has not been deployed yet. After deployWorker, and in
-  // every other command, any Wrangler failure aborts instead.
-  const existingSecrets = await secretNamesFromWrangler(configPath, {
-    allowMissingWorker: true,
-  });
-  if (secretState(existingSecrets) === "partial") {
-    fail(
-      `partial Wrangler secret set detected (missing: ${missing(existingSecrets).join(", ")}). Refusing to deploy until the missing secrets are restored or an explicit key rotation is performed.`,
-    );
-  }
-  const bucket = bucketName(config);
-  await ensureBucket(bucket, configPath);
-  await ensureLifecycle(bucket);
+  const { url, publicKey: installedPublicKey } = await withRenderedConfig(
+    image,
+    async (rendered) => {
+      // This is the only point where a missing Worker may be read as "no
+      // secrets": the Worker has not been deployed yet. Every other Wrangler
+      // failure aborts instead of regenerating keys.
+      const existingSecrets = await secretNamesFromWrangler(rendered, {
+        allowMissingWorker: true,
+      });
+      const state = secretState(existingSecrets);
+      if (state === "partial") {
+        fail(
+          `partial Wrangler secret set detected (missing: ${missing(existingSecrets).join(", ")}). Refusing to deploy until the missing secrets are restored or an explicit key rotation is performed.`,
+        );
+      }
+      const bucket = bucketName(config);
+      await ensureBucket(bucket, rendered);
+      await ensureLifecycle(bucket, rendered);
 
-  // A first deploy creates the Worker, Durable Objects, Workflows, and
-  // Container binding before the bulk secret operation targets the Worker.
-  const initialUrl = await deployWorker(config, image);
-  const configured = await configureSecrets(config);
-  const url = configured.url || initialUrl;
-  await deployWorker(config, image);
+      // A first deploy creates the Worker, Durable Objects, Workflows, and
+      // Container binding before the bulk secret operation targets the Worker.
+      const initialUrl = await deployWorker(rendered);
+      const configured = await configureSecrets(state, initialUrl, rendered);
+      await deployWorker(rendered);
+      return configured;
+    },
+  );
   await healthCheck(url);
 
   const publicKey =
-    configured.publicKey || "(fetch /api/public-key after propagation)";
+    installedPublicKey || "(fetch /api/public-key after propagation)";
   console.log(`\ncf-nix-cache is ready at ${url}`);
   console.log(`Nix public key: ${publicKey}`);
   console.log(
@@ -158,7 +158,6 @@ async function deploy(): Promise<void> {
 }
 
 async function preview(): Promise<void> {
-  const config = await readConfig();
   const { image } = await releaseImage();
   await withRenderedConfig(image, async (rendered) => {
     await wrangler(["versions", "upload"], {}, rendered);
@@ -195,16 +194,11 @@ async function doctor(): Promise<void> {
 
   try {
     const bucket = bucketName(config);
-    const listed = await wrangler(
-      ["r2", "bucket", "list"],
-      { allowFailure: true, quiet: true },
-      configPath,
-    );
-    if (listed.status !== 0 || !listed.stdout.includes(bucket))
+    if (!(await bucketExists(bucket, configPath)))
       findings.push(
-        `R2 bucket ${bucket} was not found (or Wrangler returned non-JSON output)`,
+        `R2 bucket ${bucket} is not listed by \`wrangler r2 bucket list\` for this account`,
       );
-    const lifecycle = await lifecycleIsConfigured(bucket);
+    const lifecycle = await lifecycleIsConfigured(bucket, configPath);
     if (lifecycle === false)
       findings.push("R2 staging/multipart lifecycle rules are missing");
     if (lifecycle === undefined)
@@ -271,5 +265,5 @@ switch (action) {
     await preview();
     break;
   default:
-    fail(`unknown action ${action}; use setup, deploy, or doctor`);
+    fail(`unknown action ${action}; use setup, deploy, preview, or doctor`);
 }
