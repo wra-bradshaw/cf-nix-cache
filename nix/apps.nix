@@ -40,6 +40,8 @@ forEachSupportedSystem (
       name = "cf-nix-cache-deploy";
       runtimeInputs = [
         pkgs.coreutils
+        pkgs.gawk
+        pkgs.gnugrep
         pkgs.nodejs
         pkgs.pnpm
         prepareImage
@@ -51,6 +53,7 @@ forEachSupportedSystem (
 
         # wrangler.jsonc is the source of truth. The production R2 bucket name
         # is read from it so it cannot drift from the Worker binding.
+        # shellcheck disable=SC2016 # the single-quoted program is JavaScript.
         prod_bucket="$(node -e '
           const fs = require("node:fs");
           let source = fs.readFileSync("wrangler.jsonc", "utf8");
@@ -68,19 +71,25 @@ forEachSupportedSystem (
         }
 
         ensure_bucket_and_lifecycle() {
-          if ! w r2 bucket list --format json 2>/dev/null | grep -q "\"name\": *\"$prod_bucket\""; then
+          # `wrangler r2 bucket list` has no JSON output; each bucket is a
+          # labelled block with a `name:  <bucket>` line. Match that line
+          # exactly, and let a failed listing abort instead of masking it.
+          buckets="$(w r2 bucket list)"
+          if ! printf '%s\n' "$buckets" | awk -v bucket="$prod_bucket" '
+            { gsub(/\033\[[0-9;]*m/, "") }
+            $1 == "name:" && $2 == bucket && NF == 2 { found = 1 }
+            END { exit found ? 0 : 1 }
+          '; then
             w r2 bucket create "$prod_bucket"
           fi
-          lifecycle="$(w r2 bucket lifecycle list "$prod_bucket" 2>/dev/null || true)"
+          lifecycle="$(w r2 bucket lifecycle list "$prod_bucket")"
           if ! printf '%s' "$lifecycle" | grep -q "abandoned-staging"; then
-            pnpm --dir apps/worker exec wrangler r2 bucket lifecycle add "$prod_bucket" \
-              abandoned-staging "staging/" --expire-days 1 --force \
-              --config "$PWD/wrangler.jsonc"
+            w r2 bucket lifecycle add "$prod_bucket" \
+              abandoned-staging "staging/" --expire-days 1 --force
           fi
           if ! printf '%s' "$lifecycle" | grep -q "abort-multipart"; then
-            pnpm --dir apps/worker exec wrangler r2 bucket lifecycle add "$prod_bucket" \
-              abort-multipart "" --abort-multipart-days 1 --force \
-              --config "$PWD/wrangler.jsonc"
+            w r2 bucket lifecycle add "$prod_bucket" \
+              abort-multipart "" --abort-multipart-days 1 --force
           fi
         }
 
