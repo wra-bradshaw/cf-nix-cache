@@ -7,3 +7,6 @@ node_modules/
 apps/worker/src/generated/
 .wrangler/
 .wrangler.production.json
+.dev.vars
+.dev.vars.*
+!.dev.vars.example

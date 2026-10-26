@@ -94,6 +94,11 @@ Rust. Start local development with:
 nix run .#dev
 ```
 
+Local development uses the top-level configuration in `wrangler.jsonc` (with
+the `cf-nix-cache-dev` bucket); the required secrets, including `NIX_PUBLIC_KEYS`, are read
+from a gitignored `.dev.vars` (copy `.dev.vars.example`). Deployments use
+`env.production`.
+
 For production, the deploy app builds the same cached Nix image, pushes an
 immutable tag to Cloudflare Registry, ensures the production R2 bucket and
 lifecycle rules, and deploys a generated Wrangler config that references that

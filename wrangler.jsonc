@@ -1,5 +1,9 @@
 {
   "$schema": "./apps/worker/node_modules/wrangler/config-schema.json",
+  // The top level is local development (`nix run .#dev`, e2e) and the
+  // package build; deploys use env.production via `nix run .#deploy -- apply`.
+  // Keep this name: the Vite plugin derives its output directory from it
+  // (apps/worker/dist/cf_nix_cache), which the package build and e2e read.
   "name": "cf-nix-cache",
   "main": "apps/worker/src/index.ts",
   "compatibility_date": "2026-08-10",
@@ -58,52 +62,12 @@
     "TOKEN_ISSUER": "cf-nix-cache",
     "TOKEN_AUDIENCE": "cf-nix-cache",
     "NIX_SIGNING_KEY_NAME": "cache.nix-signing",
-    "NIX_PUBLIC_KEYS": "cache.nix-signing:PUBLIC_KEY_MUST_BE_SET",
   },
+  // NIX_PUBLIC_KEYS is a required Worker secret, not a var: a var of the same
+  // name collides with the secret. Local development reads it from .dev.vars
+  // (see .dev.vars.example).
   "observability": { "enabled": true },
   "env": {
-    "development": {
-      "name": "cf-nix-cache-dev",
-      "r2_buckets": [
-        { "binding": "CACHE_BUCKET", "bucket_name": "cf-nix-cache-dev" },
-      ],
-      "durable_objects": {
-        "bindings": [
-          { "name": "SYSTEM_CONTROL", "class_name": "SystemControl" },
-          { "name": "TOKEN_CATALOG", "class_name": "TokenCatalog" },
-          { "name": "AUDIT_LOG", "class_name": "AuditLog" },
-          { "name": "CACHE_COORDINATOR", "class_name": "CacheCoordinator" },
-          { "name": "CACHE_INDEX", "class_name": "CacheIndexShard" },
-          { "name": "UPLOAD_JOB", "class_name": "UploadJob" },
-          { "name": "PROCESSOR", "class_name": "ProcessorContainer" },
-        ],
-      },
-      "vars": {
-        "TOKEN_ISSUER": "cf-nix-cache",
-        "TOKEN_AUDIENCE": "cf-nix-cache",
-        "NIX_SIGNING_KEY_NAME": "cache.nix-signing",
-        "NIX_PUBLIC_KEYS": "cache.nix-signing:PUBLIC_KEY_MUST_BE_SET",
-      },
-      "containers": [
-        {
-          "class_name": "ProcessorContainer",
-          "image": "./Dockerfile",
-          "max_instances": 10,
-        },
-      ],
-      "workflows": [
-        {
-          "name": "process-upload",
-          "binding": "PROCESS_UPLOAD",
-          "class_name": "ProcessUploadWorkflow",
-        },
-        {
-          "name": "delete-cache",
-          "binding": "DELETE_CACHE",
-          "class_name": "DeleteCacheWorkflow",
-        },
-      ],
-    },
     "production": {
       "name": "cf-nix-cache",
       "r2_buckets": [
@@ -124,7 +88,6 @@
         "TOKEN_ISSUER": "cf-nix-cache",
         "TOKEN_AUDIENCE": "cf-nix-cache",
         "NIX_SIGNING_KEY_NAME": "cache.nix-signing",
-        "NIX_PUBLIC_KEYS": "cache.nix-signing:PUBLIC_KEY_MUST_BE_SET",
       },
       "containers": [
         {

@@ -1,0 +1,15 @@
+# Local development secrets for `nix run .#dev`. Copy this file to .dev.vars
+# (gitignored) beside wrangler.jsonc and fill in development-only values.
+# Deployed Workers receive these as Wrangler secrets instead; never commit real
+# key material. The e2e harness generates its own values and ignores this file.
+
+# Space-separated `<name>:<base64 Ed25519 public key>` entries.
+NIX_PUBLIC_KEYS=cache.nix-signing:PUBLIC_KEY_MUST_BE_SET
+
+# Ed25519 private JWK used to sign narinfo files.
+NIX_PRIVATE_JWK=
+# Ed25519 private JWK and public JWKS array for capability tokens.
+AUTH_PRIVATE_JWK=
+AUTH_PUBLIC_JWKS=
+# base64url SHA-256 of the one-time bootstrap secret.
+BOOTSTRAP_SECRET_HASH=
