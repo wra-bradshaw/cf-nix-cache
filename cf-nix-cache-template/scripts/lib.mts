@@ -312,8 +312,14 @@ export function nixPublicKey(
   return `${name}:${Buffer.from(jwk.x, "base64url").toString("base64")}`;
 }
 
+// Wrangler reports a missing script as `Worker "<name>" not found.`; older
+// releases surface the raw API error code 10007 instead.
+const workerNotFound =
+  /Worker "[^"]+"(?: \(env: [^)]+\))? not found\.|\[code: 10007\]/;
+
 export async function secretNamesFromWrangler(
   config: string,
+  options: { allowMissingWorker?: boolean } = {},
 ): Promise<Set<string>> {
   const result = await wrangler(
     ["secret", "list", "--format", "json"],
@@ -323,7 +329,18 @@ export async function secretNamesFromWrangler(
     },
     config,
   );
-  if (result.status !== 0) return new Set();
+  if (result.status !== 0) {
+    const output = `${result.stdout}\n${result.stderr}`;
+    // Only an explicit "Worker not found" before the first deployment means
+    // that no secrets exist. Any other failure (authentication, network, API)
+    // must never be mistaken for an empty set, which would regenerate keys.
+    if (options.allowMissingWorker && workerNotFound.test(output))
+      return new Set();
+    process.stderr.write(output);
+    fail(
+      `wrangler secret list failed with exit code ${result.status}; refusing to continue without a reliable secret inventory`,
+    );
+  }
   try {
     const parsed = JSON.parse(result.stdout) as
       Array<{ name?: string }> | { secrets?: Array<{ name?: string }> };

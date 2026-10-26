@@ -114,7 +114,12 @@ async function configureSecrets(config: TemplateConfig): Promise<{
 async function setup(): Promise<void> {
   const config = await readConfig();
   const { image } = await releaseImage();
-  const existingSecrets = await secretNamesFromWrangler(configPath);
+  // This is the only point where a missing Worker may be read as "no
+  // secrets": the Worker has not been deployed yet. After deployWorker, and in
+  // every other command, any Wrangler failure aborts instead.
+  const existingSecrets = await secretNamesFromWrangler(configPath, {
+    allowMissingWorker: true,
+  });
   if (secretState(existingSecrets) === "partial") {
     fail(
       `partial Wrangler secret set detected (missing: ${missing(existingSecrets).join(", ")}). Refusing to deploy until the missing secrets are restored or an explicit key rotation is performed.`,
