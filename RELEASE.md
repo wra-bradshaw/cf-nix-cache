@@ -3,7 +3,7 @@
 1. Run Rust formatting/tests/Clippy, Worker typecheck/tests, and `nix flake check`.
 2. Build the CLI and Nix-built processor image. Run deployed smoke tests for health,
    bootstrap, token revocation, public/private Nix downloads, range resumes,
-   duplicate uploads, forced Workflow retries, quota eviction, and GC.
+   duplicate uploads, quota enforcement, and forced Workflow retries.
 3. Install Wrangler secrets and run `nix run .#deploy -- apply`. This builds the
    cached `linux/amd64` Nix image, ensures the production R2 bucket and lifecycle
    rules, pushes its immutable tag to Cloudflare Registry, and deploys the
@@ -31,20 +31,20 @@ monorepo layout:
    dependency PR is the only normal customer upgrade input.
 
 The package build fails if its release manifest does not match the package
-version, the image is not an immutable digest, or the platform is not
-`linux/amd64`.
+version or the image is not an immutable `docker.io` digest. `pnpm
+release:check` additionally rejects a platform other than `linux/amd64`.
 
 ### Automated release flow
-
-The version PR and the digest-pinning PR are opened with `GITHUB_TOKEN`,
-which does not trigger `pull_request` workflows. Both workflows therefore
-dispatch `ci.yml` on their branch (`gh workflow run ci.yml --ref <branch>`,
-requiring `actions: write`), so the PR head commit still receives CI checks.
 
 Runtime changes should include a Changeset (`pnpm changeset`). The `Release
 PR` workflow accumulates those files into a version PR and synchronizes the
 new version into the release manifest and deployment template. Merging the
 version PR does not publish an incomplete npm package.
+
+The version PR and the digest-pinning PR are opened with `GITHUB_TOKEN`,
+which does not trigger `pull_request` workflows. Both workflows therefore
+dispatch `ci.yml` on their branch (`gh workflow run ci.yml --ref <branch>`,
+requiring `actions: write`), so the PR head commit still receives CI checks.
 
 After the version PR is merged, run the protected `Prepare release artifacts`
 workflow with the public Docker Hub repository, such as

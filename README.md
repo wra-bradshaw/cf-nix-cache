@@ -52,10 +52,8 @@ integration tests; it is not the customer upgrade path.
 cargo fmt --check
 cargo test --workspace
 pnpm --dir apps/worker install
-pnpm --dir apps/worker check
+pnpm --dir apps/worker check  # includes contracts:check and boundaries:check
 pnpm --dir apps/worker test
-pnpm --dir apps/worker contracts:check
-pnpm --dir apps/worker boundaries:check
 ```
 
 The deployment app has explicit `plan`, `apply`, and `destroy` modes. Only
@@ -141,6 +139,3 @@ The `/api` control plane uses Ed25519 capability JWTs. Tokens contain exact
 cache grants and are accepted as Bearer tokens or Basic-auth passwords for
 stock Nix. Token revocation is recorded in the TokenCatalog and checked before
 private access. Bootstrap is a one-time, idempotent secret exchange.
-
-This project targets a greenfield deployment. Existing AWS resources remain
-outside its ownership and must be handled separately.
