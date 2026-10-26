@@ -1,5 +1,8 @@
 packages:
   - packages/*
+allowBuilds:
+  esbuild: true
+  workerd: true
 
 # apps/worker intentionally retains its existing isolated lockfile. The public
 # deployment template is also installed independently, exactly as Cloudflare
