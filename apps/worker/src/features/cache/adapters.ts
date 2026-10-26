@@ -6,7 +6,7 @@ import type {
   PreparedMutation,
   QuotaReservation,
 } from '../../types';
-import { idStub, type RpcResult } from '../../rpc';
+import { idStub, indexShard, type RpcResult } from '../../rpc';
 
 function unwrapPublication<T>(result: RpcResult<T>, cache: string): T {
   if (!result.ok)
@@ -19,7 +19,7 @@ function unwrapPublication<T>(result: RpcResult<T>, cache: string): T {
 
 class DurableCacheIndexAdapter implements CacheIndex {
   constructor(
-    private readonly stub: ReturnType<NonNullable<Env['CACHE_INDEX']>['get']>,
+    private readonly stub: ReturnType<typeof indexShard>,
     private readonly cache: string,
   ) {}
 
@@ -91,12 +91,7 @@ export function publicationFor(
   cache: CacheState,
   storeHash: string,
 ): PublicationApplication {
-  const index = idStub(
-    env.CACHE_INDEX,
-    env.CACHE_INDEX!.idFromName(
-      `${cache.reference.incarnation}:${storeHash.slice(0, 2)}`,
-    ),
-  );
+  const index = indexShard(env, cache.reference.incarnation, storeHash);
   const quota = idStub(env.CACHE_COORDINATOR, cache.reference.coordinator_id);
   return new PublicationApplication(
     new DurableCacheIndexAdapter(index, cache.name),

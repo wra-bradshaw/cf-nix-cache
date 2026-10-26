@@ -45,23 +45,6 @@ export class CoordinatorAudit {
     }
   }
 
-  async shardId(prefix: string): Promise<RpcResult<string>> {
-    if (!/^[0-9a-f]{2}$/u.test(prefix))
-      return failure('invalid_shard', 'invalid cache index shard', 422);
-    const row = first(
-      this.ctx.storage.sql.exec<{ incarnation: string }>(
-        'SELECT incarnation FROM cache LIMIT 1',
-      ),
-    );
-    return row
-      ? ok(
-          this.env
-            .CACHE_INDEX!.idFromName(`${row.incarnation}:${prefix}`)
-            .toString(),
-        )
-      : failure('not_found', 'cache not found', 404);
-  }
-
   async alarm(): Promise<void> {
     await this.drain();
   }

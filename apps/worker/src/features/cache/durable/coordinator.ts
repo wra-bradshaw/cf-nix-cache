@@ -117,10 +117,6 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
     return this.audit.flush();
   }
 
-  shardId(prefix: string): Promise<RpcResult<string>> {
-    return this.audit.shardId(prefix);
-  }
-
   alarm(): Promise<void> {
     return this.audit.alarm();
   }

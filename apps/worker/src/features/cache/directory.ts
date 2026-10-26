@@ -8,7 +8,13 @@ import type {
   PathRecord,
   Role,
 } from '../../types';
-import { ApiCallError, idStub, namedStub, unwrapRpc } from '../../rpc';
+import {
+  ApiCallError,
+  idStub,
+  indexShard,
+  namedStub,
+  unwrapRpc,
+} from '../../rpc';
 
 export function system(env: Env) {
   return namedStub(env.SYSTEM_CONTROL, 'system');
@@ -106,12 +112,7 @@ export async function getPath(
   storeHash: string,
 ): Promise<PathRecord> {
   assertStoreHash(storeHash);
-  const shard = idStub(
-    env.CACHE_INDEX,
-    env.CACHE_INDEX!.idFromName(
-      `${cache.reference.incarnation}:${storeHash.slice(0, 2)}`,
-    ),
-  );
+  const shard = indexShard(env, cache.reference.incarnation, storeHash);
   return unwrapRpc(await shard.lookup(storeHash));
 }
 

@@ -1,4 +1,4 @@
-import { idStub } from '../../rpc';
+import { namedStub } from '../../rpc';
 
 const AUDIT_SHARD_COUNT = 16;
 
@@ -26,8 +26,5 @@ export function auditShardNames(): string[] {
 }
 
 export function auditStub(env: Env, eventId: string) {
-  return idStub(
-    env.AUDIT_LOG,
-    env.AUDIT_LOG!.idFromName(auditShardName(eventId)),
-  );
+  return namedStub(env.AUDIT_LOG, auditShardName(eventId));
 }

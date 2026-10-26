@@ -3,7 +3,7 @@ import type { AppEnv } from '../runtime/http';
 import type { CacheState, PathRecord } from '../../types';
 import { ChunkManifestSchema, parseJsonSchema } from '../domain/validation';
 import { planRange, parseRange } from './range';
-import { idStub } from '../../rpc';
+import { indexShard } from '../../rpc';
 
 export async function serveNarObject(
   c: Context<AppEnv>,
@@ -63,12 +63,7 @@ export async function serveNarObject(
       `bytes ${range.start}-${range.end}/${manifest.file_size}`,
     );
   c.executionCtx.waitUntil(
-    idStub(
-      c.env.CACHE_INDEX,
-      c.env.CACHE_INDEX!.idFromName(
-        `${cache.reference.incarnation}:${storeHash.slice(0, 2)}`,
-      ),
-    )
+    indexShard(c.env, cache.reference.incarnation, storeHash)
       .touch(storeHash)
       .catch((error) => console.error('cache touch failed', error)),
   );

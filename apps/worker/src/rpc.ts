@@ -16,6 +16,18 @@ export function namedStub<T extends Rpc.DurableObjectBranded>(
   return namespace.getByName(name);
 }
 
+/** The cache index shard owning a store hash (or a two-character prefix). */
+export function indexShard(
+  env: Env,
+  incarnation: string,
+  hashOrPrefix: string,
+) {
+  return namedStub(
+    env.CACHE_INDEX,
+    `${incarnation}:${hashOrPrefix.slice(0, 2)}`,
+  );
+}
+
 export function idStub<T extends Rpc.DurableObjectBranded>(
   namespace: DurableObjectNamespace<T> | undefined,
   id: DurableObjectId | string,
