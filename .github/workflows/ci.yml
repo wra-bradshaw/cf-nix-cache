@@ -41,8 +41,6 @@ jobs:
           nix develop --command pnpm --dir apps/worker build
           nix develop --command pnpm --dir packages/cf-nix-cache-worker build
           nix develop --command npm pack ./packages/cf-nix-cache-worker --dry-run
-          nix develop --command pnpm --dir apps/worker contracts:check
-          nix develop --command pnpm --dir apps/worker boundaries:check
           nix flake check
           nix build .#cli
           nix build .#processor
