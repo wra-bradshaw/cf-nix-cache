@@ -9,9 +9,9 @@ import type {
   ProcessResult,
   UploadStateResponse,
 } from '../../../types';
-import { publicationFor } from '../../cache';
+import { publicationFor } from '../../cache/adapters';
 import { PublicationError } from '../../cache/application';
-import { ensureWorkflow } from '../../workflows/workflow';
+import { ensureWorkflow } from '../../workflows/enqueue';
 import type { RpcResult } from '../../../rpc';
 import { getCache } from '../../cache/directory';
 import { now } from '../../../infrastructure/durable/shared';

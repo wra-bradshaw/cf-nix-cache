@@ -107,6 +107,3 @@ export async function authenticateGlobal(
   await assertActive(env, claims);
   return claims;
 }
-
-export { AuthError } from './errors';
-export { hashSecret } from './credentials';

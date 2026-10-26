@@ -11,7 +11,7 @@ import type {
 } from '../../../types';
 import { ENCODING_ID, MULTIPART_PART_SIZE } from '../../../types';
 import type { RpcResult } from '../../../rpc';
-import { ensureWorkflow } from '../../workflows/workflow';
+import { ensureWorkflow } from '../../workflows/enqueue';
 import { failure, processJob, state, type UploadRow } from './model';
 import { UploadStorage } from './storage';
 

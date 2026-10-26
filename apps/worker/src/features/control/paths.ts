@@ -14,7 +14,7 @@ import {
   isNotFound,
 } from '../cache/directory';
 import { unwrapRpc } from '../../rpc';
-import { publicationFor } from '../cache';
+import { publicationFor } from '../cache/adapters';
 import { authenticate } from '../auth/authentication';
 import { event } from './helpers';
 

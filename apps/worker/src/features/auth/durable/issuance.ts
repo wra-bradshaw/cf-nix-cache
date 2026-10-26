@@ -1,7 +1,7 @@
 import { validateGrant } from '../../domain/validation';
 import type { Grant } from '../../../types';
 import type { RpcResult } from '../../../rpc';
-import { hashSecret } from '..';
+import { hashSecret } from '../credentials';
 import { type SqlRow } from '../../../infrastructure/durable/shared';
 import { failure } from './model';
 import { TokenAudit } from './audit';

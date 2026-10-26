@@ -8,7 +8,7 @@ import {
   encodeCursor,
   parseJsonSchema,
 } from '../domain/validation';
-import { ensureWorkflow } from '../workflows/workflow';
+import { ensureWorkflow } from '../workflows/enqueue';
 import { idempotency, parseJson, type AppEnv } from '../runtime/http';
 import {
   coordinator,

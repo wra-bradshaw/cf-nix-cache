@@ -1,4 +1,5 @@
-import { authenticate, AuthError } from '../auth/authentication';
+import { authenticate } from '../auth/authentication';
+import { AuthError } from '../auth/errors';
 import { assertCacheName, assertStoreHash } from '../domain/validation';
 import type {
   CacheConfig,

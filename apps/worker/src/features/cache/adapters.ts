@@ -6,8 +6,16 @@ import type {
   PreparedMutation,
   QuotaReservation,
 } from '../../types';
-import { idStub } from '../../rpc';
-import { unwrapPublication } from './adapters-rpc';
+import { idStub, type RpcResult } from '../../rpc';
+
+function unwrapPublication<T>(result: RpcResult<T>, cache: string): T {
+  if (!result.ok)
+    throw new PublicationError(
+      `${cache}: ${result.error.message}`,
+      result.error.status >= 500,
+    );
+  return result.value;
+}
 
 class DurableCacheIndexAdapter implements CacheIndex {
   constructor(

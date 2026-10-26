@@ -1,4 +1,4 @@
-import { AuthError } from '../auth';
+import { AuthError } from '../auth/errors';
 import { PublicationError } from '../cache/application';
 import { DomainError } from '../domain/validation';
 import { RangeRequestError } from '../nix/range';
