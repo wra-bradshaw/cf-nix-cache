@@ -18,14 +18,33 @@ await cp(
 await cp(
   resolve(workerOutput, "index.js.map"),
   resolve(outputDirectory, "index.js.map"),
-).catch(() => undefined);
+);
 
-// The declaration is intentionally small: Wrangler only needs the module's
-// runtime exports, while package consumers get useful type checking in a
-// template without publishing the development monorepo's generated types.
+// Wrangler only needs the runtime exports. The declaration names them without
+// depending on the monorepo's generated Worker types, so a consumer's
+// `export * from "cf-nix-cache"` type-checks against the real export list.
+const exportedClasses = [
+  "AuditLog",
+  "CacheCoordinator",
+  "CacheIndexShard",
+  "ContainerProxy",
+  "DeleteCacheWorkflow",
+  "ProcessorContainer",
+  "ProcessUploadWorkflow",
+  "SystemControl",
+  "TokenCatalog",
+  "UploadJob",
+];
 await writeFile(
   resolve(outputDirectory, "index.d.ts"),
-  `export { default } from './index.js';\nexport * from './index.js';\n`,
+  [
+    "declare const worker: {",
+    "  fetch(request: Request, env: unknown, ctx: unknown): Promise<Response>;",
+    "};",
+    "export default worker;",
+    ...exportedClasses.map((name) => `export declare class ${name} {}`),
+    "",
+  ].join("\n"),
 );
 
 const packageJson = JSON.parse(
