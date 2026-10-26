@@ -108,8 +108,8 @@ export interface CacheReference {
   name: string;
   incarnation: string;
   coordinator_id: string;
-  /** Catalogue lifecycle, when the reference came from SystemControl. */
-  lifecycle?: CacheConfig['lifecycle'];
+  /** Catalogue lifecycle; SystemControl may lead the coordinator by a step. */
+  lifecycle: CacheConfig['lifecycle'];
 }
 
 export type CacheState = CacheConfig & { reference: CacheReference };

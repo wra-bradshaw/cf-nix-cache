@@ -3,7 +3,7 @@ import {
   type WorkflowEvent,
   type WorkflowStep,
 } from 'cloudflare:workers';
-import type { CacheWorkflowJob } from '../../types';
+import type { CacheReference, CacheWorkflowJob } from '../../types';
 import { indexShard } from '../../rpc';
 import { coordinator, system } from '../cache/directory';
 
@@ -16,12 +16,14 @@ export class DeleteCacheWorkflow extends WorkflowEntrypoint<
     step: WorkflowStep,
   ): Promise<{ deleted: number }> {
     const job = event.payload;
-    const cache = coordinator(this.env, {
+    const reference: CacheReference = {
       id: job.cache_id,
       name: job.cache,
       incarnation: job.incarnation,
       coordinator_id: job.coordinator_id,
-    });
+      lifecycle: 'DELETING',
+    };
+    const cache = coordinator(this.env, reference);
     let deleted = 0;
     for (let prefix = 0; prefix < 256; prefix += 1) {
       const value = prefix.toString(16).padStart(2, '0');
@@ -67,12 +69,7 @@ export class DeleteCacheWorkflow extends WorkflowEntrypoint<
         throw new Error(
           `unable to remove cache coordinator: ${removed.error.message}`,
         );
-      const catalog = await system(this.env).removeCache({
-        id: job.cache_id,
-        name: job.cache,
-        incarnation: job.incarnation,
-        coordinator_id: job.coordinator_id,
-      });
+      const catalog = await system(this.env).removeCache(reference);
       if (!catalog.ok)
         throw new Error(
           `unable to remove cache catalog: ${catalog.error.message}`,

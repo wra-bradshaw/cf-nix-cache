@@ -74,11 +74,6 @@ async function directoryReference(
 export async function getCache(env: Env, name: string): Promise<CacheState> {
   assertCacheName(name);
   let reference = await directoryReference(env, name);
-  // Cache API entries written before lifecycle was included are not trusted
-  // for routing. Refresh them once from the catalogue so a CREATING cache
-  // cannot be served while its coordinator is already ACTIVE.
-  if (!reference.lifecycle)
-    reference = unwrapRpc(await system(env).getCache(name));
   let configResult = await coordinator(env, reference).getCache();
   // A short-lived directory entry can point at a completed deletion. Refresh
   // once so a cache recreated with the same name is routed to its incarnation.

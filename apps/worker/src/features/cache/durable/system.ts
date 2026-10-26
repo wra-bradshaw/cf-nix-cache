@@ -55,7 +55,7 @@ export class SystemControl extends RpcOnlyDurableObject {
           );
         const row = first(
           this.ctx.storage.sql.exec<SqlRow>(
-            'SELECT cache_id, name, incarnation, coordinator_id FROM caches WHERE cache_id = ?',
+            'SELECT cache_id, name, incarnation, coordinator_id, lifecycle FROM caches WHERE cache_id = ?',
             oldOperation.cache_id,
           ),
         );
@@ -105,6 +105,7 @@ export class SystemControl extends RpcOnlyDurableObject {
         name: input.name,
         incarnation: crypto.randomUUID(),
         coordinator_id: this.env.CACHE_COORDINATOR!.newUniqueId().toString(),
+        lifecycle: 'CREATING',
       };
       this.ctx.storage.sql.exec(
         "INSERT INTO caches (cache_id, name, incarnation, coordinator_id, created_at, lifecycle) VALUES (?, ?, ?, ?, ?, 'CREATING')",
@@ -291,8 +292,6 @@ function reference(row: SqlRow): CacheReference {
     name: String(row.name),
     incarnation: String(row.incarnation),
     coordinator_id: String(row.coordinator_id),
-    lifecycle: row.lifecycle
-      ? (String(row.lifecycle) as CacheReference['lifecycle'])
-      : undefined,
+    lifecycle: String(row.lifecycle) as CacheReference['lifecycle'],
   };
 }
