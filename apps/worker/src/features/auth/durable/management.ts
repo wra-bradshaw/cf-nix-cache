@@ -1,9 +1,15 @@
 import { decodeCursor } from '../../domain/validation';
 import type { PageResponse, TokenSummary } from '../../../types';
 import type { RpcResult } from '../../../rpc';
-import { now, type SqlRow } from '../../../infrastructure/durable/shared';
-import { failure, toTokenSummary } from './model';
+import { toTokenSummary } from './model';
 import { TokenAudit } from './audit';
+import {
+  failure,
+  first,
+  now,
+  ok,
+  type SqlRow,
+} from '../../../infrastructure/durable/shared';
 
 export class TokenManagement {
   constructor(
@@ -15,23 +21,20 @@ export class TokenManagement {
     jti: string;
     exp: number;
   }): Promise<RpcResult<{ active: boolean }>> {
-    const row = [
-      ...this.ctx.storage.sql.exec<{ revoked: number; expires_at: number }>(
+    const row = first(
+      this.ctx.storage.sql.exec<{ revoked: number; expires_at: number }>(
         'SELECT revoked, expires_at FROM tokens WHERE jti = ?',
         input.jti,
       ),
-    ][0];
-    return {
-      ok: true,
-      value: {
-        active: Boolean(
-          row &&
-          Number(row.revoked) === 0 &&
-          Number(row.expires_at) >= now() &&
-          Number(row.expires_at) === input.exp,
-        ),
-      },
-    };
+    );
+    return ok({
+      active: Boolean(
+        row &&
+        Number(row.revoked) === 0 &&
+        Number(row.expires_at) >= now() &&
+        Number(row.expires_at) === input.exp,
+      ),
+    });
   }
 
   async revoke(input: {
@@ -40,12 +43,12 @@ export class TokenManagement {
     actor: string;
   }): Promise<RpcResult<void>> {
     return this.ctx.storage.transactionSync(() => {
-      const old = [
-        ...this.ctx.storage.sql.exec<{ jti: string }>(
+      const old = first(
+        this.ctx.storage.sql.exec<{ jti: string }>(
           'SELECT jti FROM token_operations WHERE operation_id = ?',
           input.operation_id,
         ),
-      ][0];
+      );
       if (old && old.jti !== input.jti)
         return failure(
           'idempotency_conflict',
@@ -70,7 +73,7 @@ export class TokenManagement {
         outcome: 'success',
         metadata: {},
       });
-      return { ok: true, value: undefined };
+      return ok();
     });
   }
 
@@ -99,19 +102,16 @@ export class TokenManagement {
         ];
     const items = rows.slice(0, input.limit).map(toTokenSummary);
     const last = rows.length > input.limit ? rows[input.limit - 1] : null;
-    return {
-      ok: true,
-      value: {
-        items,
-        next_cursor: last
-          ? btoa(
-              JSON.stringify({
-                issued_at: Number(last.issued_at),
-                jti: String(last.jti),
-              }),
-            ).replaceAll('=', '')
-          : null,
-      },
-    };
+    return ok({
+      items,
+      next_cursor: last
+        ? btoa(
+            JSON.stringify({
+              issued_at: Number(last.issued_at),
+              jti: String(last.jti),
+            }),
+          ).replaceAll('=', '')
+        : null,
+    });
   }
 }

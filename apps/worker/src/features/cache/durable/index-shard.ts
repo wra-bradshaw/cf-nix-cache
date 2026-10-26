@@ -1,18 +1,15 @@
-import { DurableObject } from 'cloudflare:workers';
 import { deltaFor } from '../../domain/uploads';
 import type { CacheMutation, PathRecord } from '../../../types';
 import type { RpcResult } from '../../../rpc';
 import {
-  initialize,
+  failure,
+  first,
   now,
+  ok,
+  RpcOnlyDurableObject,
   type SqlRow,
 } from '../../../infrastructure/durable/shared';
 
-const failure = (
-  code: string,
-  message: string,
-  status: number,
-): RpcResult<never> => ({ ok: false, error: { code, message, status } });
 type Mutation = Exclude<CacheMutation, { kind: 'clear' }>;
 type Prepared = {
   operation_id: string;
@@ -22,12 +19,10 @@ type Prepared = {
   status: 'PREPARED' | 'COMMITTED' | 'ABORTED';
 };
 
-export class CacheIndexShard extends DurableObject<Env> {
+export class CacheIndexShard extends RpcOnlyDurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    initialize(
-      ctx,
-      `CREATE TABLE IF NOT EXISTS paths (
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS paths (
       store_hash TEXT PRIMARY KEY, record TEXT NOT NULL, file_size INTEGER NOT NULL,
       last_accessed INTEGER NOT NULL, created_at INTEGER NOT NULL
     );
@@ -40,19 +35,18 @@ export class CacheIndexShard extends DurableObject<Env> {
     CREATE UNIQUE INDEX IF NOT EXISTS index_store_lock ON index_operations(store_hash) WHERE status = 'PREPARED';
     CREATE TABLE IF NOT EXISTS deletion_fence (
       key INTEGER PRIMARY KEY CHECK (key = 1), operation_id TEXT NOT NULL
-    );`,
-    );
+    );`);
   }
 
   async lookup(storeHash: string): Promise<RpcResult<PathRecord>> {
-    const row = [
-      ...this.ctx.storage.sql.exec<{ record: string }>(
+    const row = first(
+      this.ctx.storage.sql.exec<{ record: string }>(
         'SELECT record FROM paths WHERE store_hash = ?',
         storeHash,
       ),
-    ][0];
+    );
     return row
-      ? { ok: true, value: JSON.parse(row.record) as PathRecord }
+      ? ok(JSON.parse(row.record) as PathRecord)
       : failure('not_found', 'path not found', 404);
   }
 
@@ -62,12 +56,12 @@ export class CacheIndexShard extends DurableObject<Env> {
   }): Promise<RpcResult<Prepared>> {
     return this.ctx.storage.transactionSync(() => {
       const mutationJson = JSON.stringify(input.mutation);
-      const existing = [
-        ...this.ctx.storage.sql.exec<SqlRow>(
+      const existing = first(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT operation_id, mutation, previous, next_record, delta, status FROM index_operations WHERE operation_id = ?',
           input.operation_id,
         ),
-      ][0];
+      );
       if (existing) {
         if (String(existing.mutation) !== mutationJson)
           return failure(
@@ -75,13 +69,13 @@ export class CacheIndexShard extends DurableObject<Env> {
             'index mutation changed during retry',
             409,
           );
-        return { ok: true, value: toPrepared(existing) };
+        return ok(toPrepared(existing));
       }
-      const fenced = [
-        ...this.ctx.storage.sql.exec<{ operation_id: string }>(
+      const fenced = first(
+        this.ctx.storage.sql.exec<{ operation_id: string }>(
           'SELECT operation_id FROM deletion_fence WHERE key = 1',
         ),
-      ][0];
+      );
       if (fenced)
         return failure(
           'cache_deleting',
@@ -93,12 +87,12 @@ export class CacheIndexShard extends DurableObject<Env> {
           ? input.mutation.record.store_hash
           : input.mutation.store_hash;
       const previousRow = storeHash
-        ? [
-            ...this.ctx.storage.sql.exec<{ record: string }>(
+        ? first(
+            this.ctx.storage.sql.exec<{ record: string }>(
               'SELECT record FROM paths WHERE store_hash = ?',
               storeHash,
             ),
-          ][0]
+          )
         : null;
       const previous = previousRow
         ? (JSON.parse(previousRow.record) as PathRecord)
@@ -110,12 +104,12 @@ export class CacheIndexShard extends DurableObject<Env> {
           ? deltaFor(next, previous)
           : deltaFor(null, previous);
       if (storeHash) {
-        const lock = [
-          ...this.ctx.storage.sql.exec<{ operation_id: string }>(
+        const lock = first(
+          this.ctx.storage.sql.exec<{ operation_id: string }>(
             "SELECT operation_id FROM index_operations WHERE store_hash = ? AND status = 'PREPARED'",
             storeHash,
           ),
-        ][0];
+        );
         if (lock && lock.operation_id !== input.operation_id)
           return failure(
             'mutation_in_progress',
@@ -132,38 +126,34 @@ export class CacheIndexShard extends DurableObject<Env> {
         next ? JSON.stringify(next) : null,
         delta,
       );
-      return {
-        ok: true,
-        value: {
-          operation_id: input.operation_id,
-          delta,
-          previous,
-          record: next,
-          status: 'PREPARED',
-        },
-      };
+      return ok({
+        operation_id: input.operation_id,
+        delta,
+        previous,
+        record: next,
+        status: 'PREPARED',
+      });
     });
   }
 
   async commit(operationId: string): Promise<RpcResult<Prepared>> {
     return this.ctx.storage.transactionSync(() => {
-      const row = [
-        ...this.ctx.storage.sql.exec<SqlRow>(
+      const row = first(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT * FROM index_operations WHERE operation_id = ?',
           operationId,
         ),
-      ][0];
+      );
       if (!row)
         return failure('operation_not_found', 'index operation not found', 404);
-      if (row.status === 'COMMITTED')
-        return { ok: true, value: toPrepared(row) };
+      if (row.status === 'COMMITTED') return ok(toPrepared(row));
       if (row.status === 'ABORTED')
         return failure('operation_aborted', 'index operation was aborted', 409);
-      const fenced = [
-        ...this.ctx.storage.sql.exec<{ operation_id: string }>(
+      const fenced = first(
+        this.ctx.storage.sql.exec<{ operation_id: string }>(
           'SELECT operation_id FROM deletion_fence WHERE key = 1',
         ),
-      ][0];
+      );
       if (fenced) {
         this.ctx.storage.sql.exec(
           "UPDATE index_operations SET status = 'ABORTED' WHERE operation_id = ? AND status = 'PREPARED'",
@@ -194,7 +184,7 @@ export class CacheIndexShard extends DurableObject<Env> {
         "UPDATE index_operations SET status = 'COMMITTED' WHERE operation_id = ? AND status = 'PREPARED'",
         operationId,
       );
-      return { ok: true, value: toPrepared({ ...row, status: 'COMMITTED' }) };
+      return ok(toPrepared({ ...row, status: 'COMMITTED' }));
     });
   }
 
@@ -205,7 +195,7 @@ export class CacheIndexShard extends DurableObject<Env> {
         operationId,
       ),
     );
-    return { ok: true, value: undefined };
+    return ok();
   }
 
   async clear(operationId: string): Promise<
@@ -216,8 +206,8 @@ export class CacheIndexShard extends DurableObject<Env> {
     }>
   > {
     return this.ctx.storage.transactionSync(() => {
-      const old = [
-        ...this.ctx.storage.sql.exec<{
+      const old = first(
+        this.ctx.storage.sql.exec<{
           clear_deleted: number;
           clear_bytes: number;
           status: string;
@@ -225,16 +215,13 @@ export class CacheIndexShard extends DurableObject<Env> {
           'SELECT clear_deleted, clear_bytes, status FROM index_operations WHERE operation_id = ?',
           operationId,
         ),
-      ][0];
+      );
       if (old)
-        return {
-          ok: true,
-          value: {
-            deleted: Number(old.clear_deleted),
-            bytes: Number(old.clear_bytes),
-            reconcile_operation_ids: this.committedOperationIds(),
-          },
-        };
+        return ok({
+          deleted: Number(old.clear_deleted),
+          bytes: Number(old.clear_bytes),
+          reconcile_operation_ids: this.committedOperationIds(),
+        });
       this.ctx.storage.sql.exec(
         'INSERT OR IGNORE INTO deletion_fence (key, operation_id) VALUES (1, ?)',
         operationId,
@@ -242,11 +229,11 @@ export class CacheIndexShard extends DurableObject<Env> {
       this.ctx.storage.sql.exec(
         "UPDATE index_operations SET status = 'ABORTED' WHERE status = 'PREPARED'",
       );
-      const totals = [
-        ...this.ctx.storage.sql.exec<{ count: number; bytes: number }>(
+      const totals = first(
+        this.ctx.storage.sql.exec<{ count: number; bytes: number }>(
           'SELECT COUNT(*) AS count, COALESCE(SUM(file_size), 0) AS bytes FROM paths',
         ),
-      ][0];
+      );
       this.ctx.storage.sql.exec('DELETE FROM paths');
       this.ctx.storage.sql.exec(
         "INSERT INTO index_operations (operation_id, mutation, delta, status, clear_deleted, clear_bytes) VALUES (?, ?, ?, 'COMMITTED', ?, ?)",
@@ -256,14 +243,11 @@ export class CacheIndexShard extends DurableObject<Env> {
         Number(totals?.count ?? 0),
         Number(totals?.bytes ?? 0),
       );
-      return {
-        ok: true,
-        value: {
-          deleted: Number(totals?.count ?? 0),
-          bytes: Number(totals?.bytes ?? 0),
-          reconcile_operation_ids: this.committedOperationIds(),
-        },
-      };
+      return ok({
+        deleted: Number(totals?.count ?? 0),
+        bytes: Number(totals?.bytes ?? 0),
+        reconcile_operation_ids: this.committedOperationIds(),
+      });
     });
   }
 
@@ -288,11 +272,7 @@ export class CacheIndexShard extends DurableObject<Env> {
         storeHash,
       ),
     );
-    return { ok: true, value: undefined };
-  }
-
-  fetch(): Response {
-    return Response.json({ code: 'rpc_only' }, { status: 404 });
+    return ok();
   }
 }
 

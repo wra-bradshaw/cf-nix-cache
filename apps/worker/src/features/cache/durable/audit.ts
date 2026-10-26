@@ -1,8 +1,13 @@
 import type { AuditEvent } from '../../../types';
 import type { RpcResult } from '../../../rpc';
 import { auditStub } from '../../audit/shard';
-import { now, type SqlRow } from '../../../infrastructure/durable/shared';
-import { failure } from './helpers';
+import {
+  failure,
+  first,
+  now,
+  ok,
+  type SqlRow,
+} from '../../../infrastructure/durable/shared';
 
 export class CoordinatorAudit {
   constructor(
@@ -20,7 +25,7 @@ export class CoordinatorAudit {
       );
     });
     this.ctx.waitUntil(this.drain());
-    return { ok: true, value: undefined };
+    return ok();
   }
 
   async flush(): Promise<RpcResult<void>> {
@@ -31,31 +36,29 @@ export class CoordinatorAudit {
           'audit log is unavailable; retry before removing the cache',
           503,
         );
-      const pending = [
-        ...this.ctx.storage.sql.exec<{ count: number }>(
+      const pending = first(
+        this.ctx.storage.sql.exec<{ count: number }>(
           'SELECT COUNT(*) AS count FROM audit_outbox',
         ),
-      ][0];
-      if (!pending || Number(pending.count) === 0)
-        return { ok: true, value: undefined };
+      );
+      if (!pending || Number(pending.count) === 0) return ok();
     }
   }
 
   async shardId(prefix: string): Promise<RpcResult<string>> {
     if (!/^[0-9a-f]{2}$/u.test(prefix))
       return failure('invalid_shard', 'invalid cache index shard', 422);
-    const row = [
-      ...this.ctx.storage.sql.exec<{ incarnation: string }>(
+    const row = first(
+      this.ctx.storage.sql.exec<{ incarnation: string }>(
         'SELECT incarnation FROM cache LIMIT 1',
       ),
-    ][0];
+    );
     return row
-      ? {
-          ok: true,
-          value: this.env
+      ? ok(
+          this.env
             .CACHE_INDEX!.idFromName(`${row.incarnation}:${prefix}`)
             .toString(),
-        }
+        )
       : failure('not_found', 'cache not found', 404);
   }
 
@@ -84,11 +87,11 @@ export class CoordinatorAudit {
         ),
       );
     }
-    const pending = [
-      ...this.ctx.storage.sql.exec<{ count: number }>(
+    const pending = first(
+      this.ctx.storage.sql.exec<{ count: number }>(
         'SELECT COUNT(*) AS count FROM audit_outbox',
       ),
-    ][0];
+    );
     if (pending && Number(pending.count) > 0)
       await this.ctx.storage.setAlarm(Date.now() + 1_000);
     return true;

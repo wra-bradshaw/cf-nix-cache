@@ -1,30 +1,22 @@
-import { DurableObject } from 'cloudflare:workers';
 import { base64url } from 'jose';
 import type { AuditEvent, PageResponse } from '../../../types';
 import type { RpcResult } from '../../../rpc';
 import { decodeCursor } from '../../domain/validation';
 import {
-  initialize,
+  failure,
+  ok,
+  RpcOnlyDurableObject,
   type SqlRow,
 } from '../../../infrastructure/durable/shared';
 
-const failure = (
-  code: string,
-  message: string,
-  status: number,
-): RpcResult<never> => ({ ok: false, error: { code, message, status } });
-
-export class AuditLog extends DurableObject<Env> {
+export class AuditLog extends RpcOnlyDurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    initialize(
-      ctx,
-      `CREATE TABLE IF NOT EXISTS audit (
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS audit (
       id TEXT PRIMARY KEY, timestamp INTEGER NOT NULL, actor TEXT NOT NULL,
       action TEXT NOT NULL, resource TEXT NOT NULL, outcome TEXT NOT NULL, metadata TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS audit_order ON audit(timestamp DESC, id DESC);`,
-    );
+    CREATE INDEX IF NOT EXISTS audit_order ON audit(timestamp DESC, id DESC);`);
   }
 
   async append(event: AuditEvent): Promise<RpcResult<void>> {
@@ -40,7 +32,7 @@ export class AuditLog extends DurableObject<Env> {
         JSON.stringify(event.metadata),
       ),
     );
-    return { ok: true, value: undefined };
+    return ok();
   }
 
   async list(input: {
@@ -78,23 +70,16 @@ export class AuditLog extends DurableObject<Env> {
       metadata: JSON.parse(String(row.metadata)) as Record<string, string>,
     }));
     const last = rows.length > input.limit ? rows[input.limit - 1] : null;
-    return {
-      ok: true,
-      value: {
-        items,
-        next_cursor: last
-          ? base64url.encode(
-              JSON.stringify({
-                timestamp: Number(last.timestamp),
-                id: String(last.id),
-              }),
-            )
-          : null,
-      },
-    };
-  }
-
-  fetch(): Response {
-    return Response.json({ code: 'rpc_only' }, { status: 404 });
+    return ok({
+      items,
+      next_cursor: last
+        ? base64url.encode(
+            JSON.stringify({
+              timestamp: Number(last.timestamp),
+              id: String(last.id),
+            }),
+          )
+        : null,
+    });
   }
 }

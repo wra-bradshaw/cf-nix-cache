@@ -1,9 +1,6 @@
 import type { UploadManifest, UploadState } from '../../../types';
-import {
-  initialize,
-  type SqlRow,
-} from '../../../infrastructure/durable/shared';
 import type { ProcessReceipt, UploadRow } from './model';
+import { first, type SqlRow } from '../../../infrastructure/durable/shared';
 
 const schema = `CREATE TABLE IF NOT EXISTS job (
   job_id TEXT PRIMARY KEY, cache TEXT NOT NULL, cache_id TEXT NOT NULL, incarnation TEXT NOT NULL,
@@ -14,15 +11,15 @@ const schema = `CREATE TABLE IF NOT EXISTS job (
 
 export class UploadStorage {
   constructor(private readonly ctx: DurableObjectState) {
-    initialize(ctx, schema);
+    ctx.storage.sql.exec(schema);
   }
 
   row(): UploadRow | null {
-    const row = [
-      ...this.ctx.storage.sql.exec<SqlRow>(
+    const row = first(
+      this.ctx.storage.sql.exec<SqlRow>(
         'SELECT job_id, cache, cache_id, incarnation, staging_key, upload_id, state, manifest, compressed_size, idempotency_key, fingerprint, parts, error, result FROM job LIMIT 1',
       ),
-    ][0];
+    );
     if (!row) return null;
     return {
       job_id: String(row.job_id),

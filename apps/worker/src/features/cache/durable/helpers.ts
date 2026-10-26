@@ -1,12 +1,5 @@
 import type { CacheConfig } from '../../../types';
-import type { RpcResult } from '../../../rpc';
-import type { SqlRow } from '../../../infrastructure/durable/shared';
-
-export const failure = (
-  code: string,
-  message: string,
-  status: number,
-): RpcResult<never> => ({ ok: false, error: { code, message, status } });
+import { type SqlRow } from '../../../infrastructure/durable/shared';
 
 export function toCache(row: SqlRow): CacheConfig {
   return {

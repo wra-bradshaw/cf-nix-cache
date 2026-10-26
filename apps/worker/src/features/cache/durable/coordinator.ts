@@ -1,4 +1,3 @@
-import { DurableObject } from 'cloudflare:workers';
 import type {
   AuditEvent,
   CacheConfig,
@@ -6,11 +5,11 @@ import type {
   QuotaReservation,
 } from '../../../types';
 import type { RpcResult } from '../../../rpc';
-import { initialize } from '../../../infrastructure/durable/shared';
 import { CoordinatorAudit } from './audit';
 import { CoordinatorQuota } from './quota';
 import { CoordinatorState } from './state';
 import { CoordinatorUploads } from './uploads';
+import { RpcOnlyDurableObject } from '../../../infrastructure/durable/shared';
 
 const schema = `CREATE TABLE IF NOT EXISTS cache (
   cache_id TEXT PRIMARY KEY, name TEXT NOT NULL, incarnation TEXT NOT NULL,
@@ -30,7 +29,7 @@ CREATE TABLE IF NOT EXISTS audit_outbox (
   event_id TEXT PRIMARY KEY, event TEXT NOT NULL, created_at INTEGER NOT NULL
 );`;
 
-export class CacheCoordinator extends DurableObject<Env> {
+export class CacheCoordinator extends RpcOnlyDurableObject {
   private readonly state: CoordinatorState;
   private readonly uploads: CoordinatorUploads;
   private readonly quota: CoordinatorQuota;
@@ -38,7 +37,7 @@ export class CacheCoordinator extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    initialize(ctx, schema);
+    ctx.storage.sql.exec(schema);
     this.state = new CoordinatorState(ctx);
     this.uploads = new CoordinatorUploads(ctx, env);
     this.quota = new CoordinatorQuota(ctx);
@@ -124,9 +123,5 @@ export class CacheCoordinator extends DurableObject<Env> {
 
   alarm(): Promise<void> {
     return this.audit.alarm();
-  }
-
-  fetch(): Response {
-    return Response.json({ code: 'rpc_only' }, { status: 404 });
   }
 }

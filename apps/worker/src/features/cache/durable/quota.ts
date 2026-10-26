@@ -1,6 +1,6 @@
 import type { QuotaReservation } from '../../../types';
 import type { RpcResult } from '../../../rpc';
-import { failure } from './helpers';
+import { failure, first, ok } from '../../../infrastructure/durable/shared';
 
 export class CoordinatorQuota {
   constructor(private readonly ctx: DurableObjectState) {}
@@ -14,15 +14,15 @@ export class CoordinatorQuota {
       // have committed its index mutation immediately before deletion fenced
       // the cache, and must still be allowed to finalize its already-created
       // reservation so the deletion workflow can make progress.
-      const old = [
-        ...this.ctx.storage.sql.exec<{
+      const old = first(
+        this.ctx.storage.sql.exec<{
           delta: number;
           status: QuotaReservation['status'];
         }>(
           'SELECT delta, status FROM quota_operations WHERE operation_id = ?',
           input.operation_id,
         ),
-      ][0];
+      );
       if (old) {
         if (Number(old.delta) !== input.delta)
           return failure(
@@ -30,22 +30,19 @@ export class CoordinatorQuota {
             'operation delta changed during retry',
             409,
           );
-        return {
-          ok: true,
-          value: {
-            operation_id: input.operation_id,
-            delta: input.delta,
-            status: old.status,
-          },
-        };
+        return ok({
+          operation_id: input.operation_id,
+          delta: input.delta,
+          status: old.status,
+        });
       }
-      const cache = [
-        ...this.ctx.storage.sql.exec<{
+      const cache = first(
+        this.ctx.storage.sql.exec<{
           lifecycle: string;
           logical_bytes: number;
           quota_bytes: number;
         }>('SELECT lifecycle, logical_bytes, quota_bytes FROM cache LIMIT 1'),
-      ][0];
+      );
       if (!cache) return failure('not_found', 'cache not found', 404);
       if (cache.lifecycle !== 'ACTIVE')
         return failure(
@@ -56,11 +53,11 @@ export class CoordinatorQuota {
           cache.lifecycle === 'DELETING' ? 410 : 503,
         );
       const pending =
-        [
-          ...this.ctx.storage.sql.exec<{ value: number }>(
+        first(
+          this.ctx.storage.sql.exec<{ value: number }>(
             "SELECT COALESCE(SUM(CASE WHEN status = 'RESERVED' AND delta > 0 THEN delta ELSE 0 END), 0) AS value FROM quota_operations",
           ),
-        ][0]?.value ?? 0;
+        )?.value ?? 0;
       if (
         !Number.isSafeInteger(input.delta) ||
         Number(cache.logical_bytes) + Number(pending) + input.delta >
@@ -74,28 +71,25 @@ export class CoordinatorQuota {
         input.operation_id,
         input.delta,
       );
-      return {
-        ok: true,
-        value: {
-          operation_id: input.operation_id,
-          delta: input.delta,
-          status: 'RESERVED',
-        },
-      };
+      return ok({
+        operation_id: input.operation_id,
+        delta: input.delta,
+        status: 'RESERVED',
+      });
     });
   }
 
   async finalize(input: { operation_id: string }): Promise<RpcResult<void>> {
     return this.ctx.storage.transactionSync(() => {
-      const row = [
-        ...this.ctx.storage.sql.exec<{ delta: number; status: string }>(
+      const row = first(
+        this.ctx.storage.sql.exec<{ delta: number; status: string }>(
           'SELECT delta, status FROM quota_operations WHERE operation_id = ?',
           input.operation_id,
         ),
-      ][0];
+      );
       if (!row)
         return failure('operation_not_found', 'quota operation not found', 404);
-      if (row.status === 'FINALIZED') return { ok: true, value: undefined };
+      if (row.status === 'FINALIZED') return ok();
       if (row.status === 'ABORTED')
         return failure('operation_aborted', 'quota operation was aborted', 409);
       this.ctx.storage.sql.exec(
@@ -106,7 +100,7 @@ export class CoordinatorQuota {
         "UPDATE quota_operations SET status = 'FINALIZED' WHERE operation_id = ? AND status = 'RESERVED'",
         input.operation_id,
       );
-      return { ok: true, value: undefined };
+      return ok();
     });
   }
 
@@ -116,7 +110,7 @@ export class CoordinatorQuota {
         "UPDATE quota_operations SET status = 'ABORTED' WHERE operation_id = ? AND status = 'RESERVED'",
         input.operation_id,
       );
-      return { ok: true, value: undefined };
+      return ok();
     });
   }
 
@@ -130,15 +124,15 @@ export class CoordinatorQuota {
   }): Promise<RpcResult<void>> {
     return this.ctx.storage.transactionSync(() => {
       for (const operationId of input.operation_ids) {
-        const row = [
-          ...this.ctx.storage.sql.exec<{
+        const row = first(
+          this.ctx.storage.sql.exec<{
             delta: number;
             status: QuotaReservation['status'];
           }>(
             'SELECT delta, status FROM quota_operations WHERE operation_id = ?',
             operationId,
           ),
-        ][0];
+        );
         if (!row) continue;
         if (row.status === 'ABORTED' || row.status === 'FINALIZED') continue;
         this.ctx.storage.sql.exec(
@@ -150,7 +144,7 @@ export class CoordinatorQuota {
           operationId,
         );
       }
-      return { ok: true, value: undefined };
+      return ok();
     });
   }
 
@@ -165,25 +159,25 @@ export class CoordinatorQuota {
           'cache clear delta must be a negative safe integer',
           409,
         );
-      const old = [
-        ...this.ctx.storage.sql.exec<{ delta: number }>(
+      const old = first(
+        this.ctx.storage.sql.exec<{ delta: number }>(
           'SELECT delta FROM clear_operations WHERE operation_id = ?',
           input.operation_id,
         ),
-      ][0];
+      );
       if (old)
         return Number(old.delta) === input.delta
-          ? { ok: true, value: undefined }
+          ? ok()
           : failure(
               'operation_conflict',
               'clear operation delta changed during retry',
               409,
             );
-      const cache = [
-        ...this.ctx.storage.sql.exec<{ logical_bytes: number }>(
+      const cache = first(
+        this.ctx.storage.sql.exec<{ logical_bytes: number }>(
           'SELECT logical_bytes FROM cache LIMIT 1',
         ),
-      ][0];
+      );
       if (!cache || Number(cache.logical_bytes) + input.delta < 0)
         return failure(
           'quota_invariant',
@@ -199,7 +193,7 @@ export class CoordinatorQuota {
         input.operation_id,
         input.delta,
       );
-      return { ok: true, value: undefined };
+      return ok();
     });
   }
 }

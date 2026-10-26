@@ -12,8 +12,9 @@ import type {
 import { ENCODING_ID, MULTIPART_PART_SIZE } from '../../../types';
 import type { RpcResult } from '../../../rpc';
 import { ensureWorkflow } from '../../workflows/enqueue';
-import { failure, processJob, state, type UploadRow } from './model';
+import { processJob, state, type UploadRow } from './model';
 import { UploadStorage } from './storage';
+import { failure, ok } from '../../../infrastructure/durable/shared';
 
 export class UploadMultipart {
   constructor(
@@ -44,10 +45,7 @@ export class UploadMultipart {
           'upload metadata changed during retry',
           409,
         );
-      return {
-        ok: true,
-        value: { job_id: existing.job_id, state: existing.state },
-      };
+      return ok({ job_id: existing.job_id, state: existing.state });
     }
     const upload = await this.env.CACHE_BUCKET.createMultipartUpload(
       input.staging_key,
@@ -66,10 +64,10 @@ export class UploadMultipart {
         .catch(() => undefined);
       const row = this.storage.row();
       return row
-        ? { ok: true, value: { job_id: row.job_id, state: row.state } }
+        ? ok({ job_id: row.job_id, state: row.state })
         : failure('operation_not_found', 'upload allocation disappeared', 503);
     }
-    return { ok: true, value: { job_id: input.job_id, state: 'UPLOADING' } };
+    return ok({ job_id: input.job_id, state: 'UPLOADING' });
   }
 
   async putPart(input: {
@@ -87,10 +85,7 @@ export class UploadMultipart {
     )
       return failure('invalid_part', 'invalid multipart part number', 400);
     if (row.parts[input.number])
-      return {
-        ok: true,
-        value: { part_number: input.number, etag: row.parts[input.number] },
-      };
+      return ok({ part_number: input.number, etag: row.parts[input.number] });
     const upload = this.env.CACHE_BUCKET.resumeMultipartUpload(
       row.staging_key,
       row.upload_id,
@@ -114,7 +109,7 @@ export class UploadMultipart {
         ...current.parts,
         [input.number]: part.etag,
       });
-    return { ok: true, value: { part_number: input.number, etag: part.etag } };
+    return ok({ part_number: input.number, etag: part.etag });
   }
 
   async complete(
@@ -134,11 +129,11 @@ export class UploadMultipart {
         row.job_id,
         processJob(row),
       );
-      return { ok: true, value: state(this.storage.row()!) };
+      return ok(state(this.storage.row()!));
     }
-    if (row.state === 'READY') return { ok: true, value: state(row) };
+    if (row.state === 'READY') return ok(state(row));
     if (row.state !== 'UPLOADING' && row.state !== 'COMPLETING')
-      return { ok: true, value: state(row) };
+      return ok(state(row));
     if (row.state === 'COMPLETING') return this.completeMultipart(row);
     const values = supplied.parts?.length
       ? supplied.parts
@@ -196,7 +191,7 @@ export class UploadMultipart {
       nar_size: row.manifest.nar_size,
       encoding_id: ENCODING_ID,
     });
-    return { ok: true, value: state(this.storage.row()!) };
+    return ok(state(this.storage.row()!));
   }
 
   private async failSize(
@@ -208,6 +203,6 @@ export class UploadMultipart {
       `completed object size ${size} does not match declared size ${row.compressed_size}`,
     );
     await this.env.CACHE_BUCKET.delete(row.staging_key);
-    return { ok: true, value: state(this.storage.row()!) };
+    return ok(state(this.storage.row()!));
   }
 }

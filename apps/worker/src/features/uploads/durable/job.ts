@@ -1,4 +1,3 @@
-import { DurableObject } from 'cloudflare:workers';
 import type {
   CompleteUploadRequest,
   ProcessResult,
@@ -7,12 +6,16 @@ import type {
   UploadStateResponse,
 } from '../../../types';
 import type { RpcResult } from '../../../rpc';
-import { failure } from './model';
 import { UploadMultipart } from './multipart';
 import { UploadPublication } from './publication';
 import { UploadStorage } from './storage';
+import {
+  failure,
+  ok,
+  RpcOnlyDurableObject,
+} from '../../../infrastructure/durable/shared';
 
-export class UploadJob extends DurableObject<Env> {
+export class UploadJob extends RpcOnlyDurableObject {
   private readonly storage: UploadStorage;
   private readonly multipart: UploadMultipart;
   private readonly publication: UploadPublication;
@@ -27,7 +30,7 @@ export class UploadJob extends DurableObject<Env> {
   async access(): Promise<RpcResult<{ cache: string; state: UploadState }>> {
     const row = this.storage.row();
     return row
-      ? { ok: true, value: { cache: row.cache, state: row.state } }
+      ? ok({ cache: row.cache, state: row.state })
       : failure('not_found', 'upload not found', 404);
   }
 
@@ -77,9 +80,5 @@ export class UploadJob extends DurableObject<Env> {
 
   state(): Promise<RpcResult<UploadStateResponse>> {
     return this.publication.state();
-  }
-
-  fetch(): Response {
-    return Response.json({ code: 'rpc_only' }, { status: 404 });
   }
 }

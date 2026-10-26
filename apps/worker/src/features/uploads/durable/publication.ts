@@ -14,9 +14,9 @@ import { PublicationError } from '../../cache/application';
 import { ensureWorkflow } from '../../workflows/enqueue';
 import type { RpcResult } from '../../../rpc';
 import { getCache } from '../../cache/directory';
-import { now } from '../../../infrastructure/durable/shared';
-import { failure, processJob, state } from './model';
+import { processJob, state } from './model';
 import { UploadStorage } from './storage';
+import { failure, now, ok } from '../../../infrastructure/durable/shared';
 
 export class UploadPublication {
   constructor(
@@ -30,7 +30,7 @@ export class UploadPublication {
       const row = this.storage.row();
       if (!row) return failure('not_found', 'upload not found', 404);
       if (['READY', 'PROCESSING', 'PUBLISHING'].includes(row.state))
-        return { ok: true, value: undefined };
+        return ok();
       if (row.state !== 'QUEUED')
         return failure(
           'invalid_transition',
@@ -42,14 +42,14 @@ export class UploadPublication {
         "UPDATE job SET state = 'PROCESSING' WHERE job_id = ?",
         row.job_id,
       );
-      return { ok: true, value: undefined };
+      return ok();
     });
   }
 
   async publish(result: ProcessResult): Promise<RpcResult<void>> {
     const row = this.storage.row();
     if (!row) return failure('not_found', 'upload not found', 404);
-    if (row.state === 'READY') return { ok: true, value: undefined };
+    if (row.state === 'READY') return ok();
     if (!['PROCESSING', 'PUBLISHING'].includes(row.state))
       return failure(
         'invalid_transition',
@@ -136,11 +136,11 @@ export class UploadPublication {
     }
     this.storage.setState(row.job_id, ['PUBLISHING'], 'READY');
     await this.env.CACHE_BUCKET.delete(row.staging_key);
-    return { ok: true, value: undefined };
+    return ok();
   }
 
   async fail(message: string, terminal = true): Promise<RpcResult<void>> {
-    if (!terminal) return { ok: true, value: undefined };
+    if (!terminal) return ok();
     this.ctx.storage.transactionSync(() => {
       const row = this.storage.row();
       if (!row || ['READY', 'ABORTED'].includes(row.state)) return;
@@ -150,7 +150,7 @@ export class UploadPublication {
         row.job_id,
       );
     });
-    return { ok: true, value: undefined };
+    return ok();
   }
 
   async abort(): Promise<RpcResult<UploadStateResponse>> {
@@ -187,7 +187,7 @@ export class UploadPublication {
       )
         .abort()
         .catch(() => undefined);
-    return { ok: true, value: state(this.storage.row()!) };
+    return ok(state(this.storage.row()!));
   }
 
   async state(): Promise<RpcResult<UploadStateResponse>> {
@@ -199,6 +199,6 @@ export class UploadPublication {
         row.job_id,
         processJob(row),
       );
-    return { ok: true, value: state(this.storage.row()!) };
+    return ok(state(this.storage.row()!));
   }
 }

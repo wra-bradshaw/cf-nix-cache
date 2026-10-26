@@ -2,10 +2,14 @@ import { validateGrant } from '../../domain/validation';
 import type { Grant } from '../../../types';
 import type { RpcResult } from '../../../rpc';
 import { hashSecret } from '../credentials';
-import { type SqlRow } from '../../../infrastructure/durable/shared';
-import { failure } from './model';
 import { TokenAudit } from './audit';
 import { TokenSigner } from './signer';
+import {
+  failure,
+  first,
+  ok,
+  type SqlRow,
+} from '../../../infrastructure/durable/shared';
 
 export class TokenIssuance {
   constructor(
@@ -43,15 +47,12 @@ export class TokenIssuance {
           'idempotency key was reused with different token metadata',
           409,
         );
-      return {
-        ok: true,
-        value: {
-          id: String(existing.jti),
-          token: String(existing.token),
-          expires_at: Number(existing.expires_at),
-          repeated: true,
-        },
-      };
+      return ok({
+        id: String(existing.jti),
+        token: String(existing.token),
+        expires_at: Number(existing.expires_at),
+        repeated: true,
+      });
     }
     const signed = await this.signer.sign(
       input.subject,
@@ -59,12 +60,12 @@ export class TokenIssuance {
       input.expires_at,
     );
     return this.ctx.storage.transactionSync(() => {
-      const operation = [
-        ...this.ctx.storage.sql.exec<SqlRow>(
+      const operation = first(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT jti, token, expires_at, fingerprint FROM tokens WHERE operation_id = ?',
           operationId,
         ),
-      ][0];
+      );
       if (operation) {
         if (String(operation.fingerprint) !== input.fingerprint)
           return failure(
@@ -72,19 +73,16 @@ export class TokenIssuance {
             'idempotency key was reused with different token metadata',
             409,
           );
-        return {
-          ok: true,
-          value: {
-            id: String(operation.jti),
-            token: String(operation.token),
-            expires_at: Number(operation.expires_at),
-            repeated: true,
-          },
-        };
+        return ok({
+          id: String(operation.jti),
+          token: String(operation.token),
+          expires_at: Number(operation.expires_at),
+          repeated: true,
+        });
       }
-      const consumed = [
-        ...this.ctx.storage.sql.exec('SELECT 1 FROM bootstrap WHERE key = 1'),
-      ][0];
+      const consumed = first(
+        this.ctx.storage.sql.exec('SELECT 1 FROM bootstrap WHERE key = 1'),
+      );
       if (consumed)
         return failure(
           'bootstrap_consumed',
@@ -116,15 +114,12 @@ export class TokenIssuance {
         outcome: 'success',
         metadata: {},
       });
-      return {
-        ok: true,
-        value: {
-          id: signed.jti,
-          token: signed.token,
-          expires_at: input.expires_at,
-          repeated: false,
-        },
-      };
+      return ok({
+        id: signed.jti,
+        token: signed.token,
+        expires_at: input.expires_at,
+        repeated: false,
+      });
     });
   }
 
@@ -153,15 +148,12 @@ export class TokenIssuance {
           'idempotency key was reused with different token metadata',
           409,
         );
-      return {
-        ok: true,
-        value: {
-          id: String(existing.jti),
-          token: String(existing.token),
-          expires_at: Number(existing.expires_at),
-          repeated: true,
-        },
-      };
+      return ok({
+        id: String(existing.jti),
+        token: String(existing.token),
+        expires_at: Number(existing.expires_at),
+        repeated: true,
+      });
     }
     const signed = await this.signer.sign(
       input.subject,
@@ -169,12 +161,12 @@ export class TokenIssuance {
       input.expires_at,
     );
     return this.ctx.storage.transactionSync(() => {
-      const old = [
-        ...this.ctx.storage.sql.exec<SqlRow>(
+      const old = first(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT jti, token, expires_at, fingerprint FROM tokens WHERE operation_id = ?',
           input.operation_id,
         ),
-      ][0];
+      );
       if (old) {
         if (String(old.fingerprint) !== input.fingerprint)
           return failure(
@@ -182,15 +174,12 @@ export class TokenIssuance {
             'idempotency key was reused with different token metadata',
             409,
           );
-        return {
-          ok: true,
-          value: {
-            id: String(old.jti),
-            token: String(old.token),
-            expires_at: Number(old.expires_at),
-            repeated: true,
-          },
-        };
+        return ok({
+          id: String(old.jti),
+          token: String(old.token),
+          expires_at: Number(old.expires_at),
+          repeated: true,
+        });
       }
       this.ctx.storage.sql.exec(
         'INSERT INTO tokens (jti, subject, expires_at, issued_at, grants, revoked, token, operation_id, fingerprint) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)',
@@ -212,26 +201,23 @@ export class TokenIssuance {
         outcome: 'success',
         metadata: {},
       });
-      return {
-        ok: true,
-        value: {
-          id: signed.jti,
-          token: signed.token,
-          expires_at: input.expires_at,
-          repeated: false,
-        },
-      };
+      return ok({
+        id: signed.jti,
+        token: signed.token,
+        expires_at: input.expires_at,
+        repeated: false,
+      });
     });
   }
 
   private findOperation(operationId: string): SqlRow | null {
     return (
-      [
-        ...this.ctx.storage.sql.exec<SqlRow>(
+      first(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT jti, token, expires_at, fingerprint FROM tokens WHERE operation_id = ?',
           operationId,
         ),
-      ][0] ?? null
+      ) ?? null
     );
   }
 }

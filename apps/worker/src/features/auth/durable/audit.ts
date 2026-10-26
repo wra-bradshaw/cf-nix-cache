@@ -1,6 +1,10 @@
 import type { AuditEvent } from '../../../types';
 import { auditStub } from '../../audit/shard';
-import { now, type SqlRow } from '../../../infrastructure/durable/shared';
+import {
+  first,
+  now,
+  type SqlRow,
+} from '../../../infrastructure/durable/shared';
 
 export class TokenAudit {
   constructor(
@@ -46,11 +50,11 @@ export class TokenAudit {
 
     // A recovery alarm processes one bounded batch. Keep scheduling while
     // backlog remains so a quiet catalog eventually drains after an outage.
-    const pending = [
-      ...this.ctx.storage.sql.exec<{ count: number }>(
+    const pending = first(
+      this.ctx.storage.sql.exec<{ count: number }>(
         'SELECT COUNT(*) AS count FROM audit_outbox',
       ),
-    ][0];
+    );
     if (pending && Number(pending.count) > 0)
       await this.ctx.storage.setAlarm(Date.now() + 1_000);
   }

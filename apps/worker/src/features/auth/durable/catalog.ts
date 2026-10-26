@@ -1,11 +1,10 @@
-import { DurableObject } from 'cloudflare:workers';
 import type { Grant, PageResponse, TokenSummary } from '../../../types';
 import type { RpcResult } from '../../../rpc';
-import { initialize } from '../../../infrastructure/durable/shared';
 import { TokenAudit } from './audit';
 import { TokenIssuance } from './issuance';
 import { TokenManagement } from './management';
 import { TokenSigner } from './signer';
+import { RpcOnlyDurableObject } from '../../../infrastructure/durable/shared';
 
 const schema = `CREATE TABLE IF NOT EXISTS tokens (
   jti TEXT PRIMARY KEY, subject TEXT NOT NULL, expires_at INTEGER NOT NULL,
@@ -16,14 +15,14 @@ CREATE TABLE IF NOT EXISTS token_operations (operation_id TEXT PRIMARY KEY, jti 
 CREATE TABLE IF NOT EXISTS bootstrap (key INTEGER PRIMARY KEY CHECK (key = 1), operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS audit_outbox (event_id TEXT PRIMARY KEY, event TEXT NOT NULL, created_at INTEGER NOT NULL);`;
 
-export class TokenCatalog extends DurableObject<Env> {
+export class TokenCatalog extends RpcOnlyDurableObject {
   private readonly issuance: TokenIssuance;
   private readonly management: TokenManagement;
   private readonly audit: TokenAudit;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    initialize(ctx, schema);
+    ctx.storage.sql.exec(schema);
     this.audit = new TokenAudit(ctx, env);
     this.issuance = new TokenIssuance(
       ctx,
@@ -94,9 +93,5 @@ export class TokenCatalog extends DurableObject<Env> {
 
   alarm(): Promise<void> {
     return this.audit.alarm();
-  }
-
-  fetch(): Response {
-    return Response.json({ code: 'rpc_only' }, { status: 404 });
   }
 }

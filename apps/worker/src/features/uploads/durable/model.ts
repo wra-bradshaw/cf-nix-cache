@@ -5,7 +5,6 @@ import type {
   UploadStateResponse,
 } from '../../../types';
 import { ENCODING_ID } from '../../../types';
-import type { RpcResult } from '../../../rpc';
 
 export interface ProcessReceipt {
   manifest_key: string;
@@ -28,12 +27,6 @@ export interface UploadRow {
   error: string | null;
   result: ProcessReceipt | null;
 }
-
-export const failure = (
-  code: string,
-  message: string,
-  status: number,
-): RpcResult<never> => ({ ok: false, error: { code, message, status } });
 
 export const state = (row: UploadRow): UploadStateResponse => ({
   id: row.job_id,
