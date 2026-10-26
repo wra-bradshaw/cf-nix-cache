@@ -1,5 +1,5 @@
 use anyhow::Result;
-use cf_nix_cache_core::contracts::api as contract;
+use cf_nix_cache_core::{contracts::api as contract, CacheName};
 use clap::{Parser, Subcommand, ValueEnum};
 use reqwest::Url;
 use std::num::NonZeroU64;
@@ -39,7 +39,7 @@ pub(crate) enum CommandKind {
         command: CacheCommand,
     },
     Push {
-        cache: String,
+        cache: CacheName,
         #[arg(required = true)]
         installables: Vec<String>,
     },
@@ -56,7 +56,7 @@ pub(crate) enum CommandKind {
         command: UploadCommand,
     },
     ConfigureNix {
-        cache: String,
+        cache: CacheName,
     },
 }
 
@@ -64,22 +64,22 @@ pub(crate) enum CommandKind {
 pub(crate) enum CacheCommand {
     List(PageArgs),
     Create {
-        name: String,
+        name: CacheName,
         #[arg(long)]
         public: bool,
         #[arg(long)]
         quota_bytes: u64,
     },
     Info {
-        name: String,
+        name: CacheName,
     },
     Configure {
-        name: String,
+        name: CacheName,
         #[arg(long)]
         public: bool,
     },
     Delete {
-        name: String,
+        name: CacheName,
     },
 }
 

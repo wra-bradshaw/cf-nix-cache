@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use cf_nix_cache_core::{
-    contracts::api as contract, AuditEvent, CacheConfig, CreateTokenResponse, MissingPathsResponse,
-    PageResponse, TokenSummary, ENCODING_ID,
+    contracts::api as contract, AuditEvent, CacheConfig, CacheName, CreateTokenResponse,
+    MissingPathsResponse, PageResponse, TokenSummary, ENCODING_ID,
 };
 use reqwest::Method;
 use serde::Serialize;
@@ -12,7 +12,7 @@ use crate::{
         page_path, valid_for_seconds, Args, AuditCommand, CacheCommand, CommandKind, TokenCommand,
         TokenOutput, UploadCommand,
     },
-    client::Api,
+    client::{api_path, Api},
     config::{config_path, save_config, Config},
     nix::{command_json, store_hash},
     upload::upload_path,
@@ -82,7 +82,7 @@ async fn cache(api: Api, command: CacheCommand) -> Result<()> {
         } => {
             let body = contract::CreateCache {
                 encoding_id: Some(ENCODING_ID.into()),
-                name: name.parse()?,
+                name: name.to_string().parse()?,
                 public,
                 quota_bytes: NonZeroU64::new(quota_bytes)
                     .context("--quota-bytes must be positive")?,
@@ -135,7 +135,7 @@ async fn token(api: Api, command: TokenCommand) -> Result<()> {
             )
         }
         TokenCommand::Revoke { jti } => {
-            api.empty(Method::DELETE, &format!("/api/tokens/{jti}"))
+            api.empty(Method::DELETE, &api_path(&["tokens", &jti]))
                 .await
         }
     }
@@ -153,13 +153,13 @@ async fn audit(api: Api, command: AuditCommand) -> Result<()> {
 async fn upload(api: Api, command: UploadCommand) -> Result<()> {
     match command {
         UploadCommand::Cancel { id } => {
-            api.empty(Method::DELETE, &format!("/api/uploads/{id}"))
+            api.empty(Method::DELETE, &api_path(&["uploads", &id]))
                 .await
         }
     }
 }
 
-async fn push(api: Api, cache: String, installables: Vec<String>) -> Result<()> {
+async fn push(api: Api, cache: CacheName, installables: Vec<String>) -> Result<()> {
     let mut command = Command::new("nix");
     command
         .args(["path-info", "--json", "--recursive"])
@@ -199,7 +199,7 @@ async fn push(api: Api, cache: String, installables: Vec<String>) -> Result<()> 
     Ok(())
 }
 
-async fn configure_nix(api: Api, cache: String) -> Result<()> {
+async fn configure_nix(api: Api, cache: CacheName) -> Result<()> {
     let public_key = api.text("/api/public-key").await?;
     let trusted_keys = public_key.split_whitespace().collect::<Vec<_>>().join(" ");
     println!("substituters = {}/cache/{cache}\ntrusted-public-keys = {trusted_keys}\nnetrc-file = ~/.config/nix/netrc\n\nnetrc entry:\nmachine {} login token password <token>", api.endpoint, api.endpoint.trim_start_matches("https://").split('/').next().unwrap_or(""));

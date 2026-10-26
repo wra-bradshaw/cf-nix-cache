@@ -1,11 +1,11 @@
 use crate::{
-    client::Api,
+    client::{api_path, Api},
     nix::{basename, make_nar, nix_hash, store_hash},
 };
 use anyhow::{anyhow, bail, Context, Result};
 use cf_nix_cache_core::{
-    contracts::api as contract, InitiateUploadResponse, StorePathName, UploadStateResponse,
-    UploadStatus,
+    contracts::api as contract, CacheName, InitiateUploadResponse, StorePathName,
+    UploadStateResponse, UploadStatus,
 };
 use reqwest::Method;
 use serde_json::Value;
@@ -28,11 +28,11 @@ where
 }
 
 /// Builds the upload manifest for `path` from its `nix path-info` entry.
-pub(crate) fn manifest(cache: &str, path: &str, info: &Value) -> Result<contract::Manifest> {
+pub(crate) fn manifest(cache: &CacheName, path: &str, info: &Value) -> Result<contract::Manifest> {
     let field = |name: &str| info.get(name).and_then(Value::as_str);
     Ok(contract::Manifest {
         ca: field("ca").map(str::parse).transpose()?,
-        cache: cache.parse()?,
+        cache: cache.to_string().parse()?,
         deriver: field("deriver").map(store_path_name).transpose()?,
         nar_hash: nix_hash(field("narHash").context("missing narHash")?)?.parse()?,
         nar_size: info
@@ -53,7 +53,12 @@ pub(crate) fn manifest(cache: &str, path: &str, info: &Value) -> Result<contract
     })
 }
 
-pub(crate) async fn upload_path(api: &Api, cache: &str, path: &str, info: &Value) -> Result<()> {
+pub(crate) async fn upload_path(
+    api: &Api,
+    cache: &CacheName,
+    path: &str,
+    info: &Value,
+) -> Result<()> {
     let mut file = make_nar(path)?;
     let size = file.as_file().metadata()?.len();
     let part_size = cf_nix_cache_core::MULTIPART_PART_SIZE;
@@ -76,7 +81,7 @@ pub(crate) async fn upload_path(api: &Api, cache: &str, path: &str, info: &Value
         let _: UploadStateResponse = api
             .request(
                 Method::POST,
-                &format!("/api/uploads/{}/complete", init.id),
+                &api_path(&["uploads", &init.id, "complete"]),
                 Some(&contract::CompleteUpload { parts: vec![] }),
             )
             .await?;
@@ -114,7 +119,7 @@ pub(crate) async fn upload_path(api: &Api, cache: &str, path: &str, info: &Value
     let _: UploadStateResponse = api
         .request(
             Method::POST,
-            &format!("/api/uploads/{}/complete", init.id),
+            &api_path(&["uploads", &init.id, "complete"]),
             Some(&contract::CompleteUpload { parts: completed }),
         )
         .await?;
@@ -129,7 +134,7 @@ async fn wait_for_upload(api: &Api, id: &str, path: &str) -> Result<()> {
             bail!("verification timed out for {path}");
         }
         tokio::time::sleep(delay).await;
-        let state: UploadStateResponse = api.get(&format!("/api/uploads/{id}")).await?;
+        let state: UploadStateResponse = api.get(&api_path(&["uploads", id])).await?;
         match state.status {
             UploadStatus::Ready => break,
             UploadStatus::Failed | UploadStatus::Aborted => {

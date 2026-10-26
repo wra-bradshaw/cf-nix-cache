@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use cf_nix_cache_core::{contracts::api as contract, CreateTokenResponse};
-use reqwest::{Client, Method, Response};
+use reqwest::{Client, Method, Response, Url};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware, RequestBuilder};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use serde::{de::DeserializeOwned, Serialize};
@@ -136,6 +136,16 @@ async fn send_checked(request: RequestBuilder) -> Result<Response> {
     bail!("API returned {status}: {body}")
 }
 
+/// `/api/{segments}`, percent-encoding each segment (for server- or
+/// user-supplied ids such as token jtis and upload ids).
+pub(crate) fn api_path(segments: &[&str]) -> String {
+    let mut url = Url::parse("https://invalid.example/api").expect("static URL");
+    url.path_segments_mut()
+        .expect("static URL has a path")
+        .extend(segments);
+    url.path().to_owned()
+}
+
 fn retry_safe(method: &Method, path: &str) -> bool {
     method == Method::GET
         || method == Method::HEAD
@@ -168,6 +178,19 @@ mod tests {
         assert!(retry_safe(&Method::POST, "/api/bootstrap"));
         assert!(!retry_safe(&Method::POST, "/api/caches"));
         assert!(!retry_safe(&Method::POST, "/api/tokens"));
+    }
+
+    #[test]
+    fn api_paths_percent_encode_segments() {
+        assert_eq!(api_path(&["uploads", "u1"]), "/api/uploads/u1");
+        assert_eq!(
+            api_path(&["tokens", "a/b c?#"]),
+            "/api/tokens/a%2Fb%20c%3F%23"
+        );
+        assert_eq!(
+            api_path(&["uploads", "../x", "complete"]),
+            "/api/uploads/..%2Fx/complete"
+        );
     }
 
     #[test]
