@@ -1,16 +1,15 @@
 use anyhow::{Context, Result};
 use cf_nix_cache_core::{
-    AuditEvent, CacheConfig, ConfigureCacheRequest, CreateCacheRequest, CreateTokenRequest,
-    CreateTokenResponse, MissingPathsRequest, MissingPathsResponse, PageResponse, TokenGrant,
-    TokenSummary,
+    contracts::api as contract, AuditEvent, CacheConfig, CreateTokenResponse, MissingPathsResponse,
+    PageResponse, TokenSummary, ENCODING_ID,
 };
 use reqwest::Method;
-use std::process::Command;
+use std::{num::NonZeroU64, process::Command};
 
 use crate::{
     args::{
-        page_path, AuditCommand, CacheCommand, CommandKind, TokenCommand, TokenOutput,
-        UploadCommand,
+        page_path, valid_for_seconds, AuditCommand, CacheCommand, CommandKind, TokenCommand,
+        TokenOutput, UploadCommand,
     },
     client::Api,
     nix::{command_json, store_hash},
@@ -39,12 +38,8 @@ async fn cache(api: Api, command: CacheCommand) -> Result<()> {
         CacheCommand::List(page) => println!(
             "{}",
             serde_json::to_string_pretty(
-                &api.request::<PageResponse<CacheConfig>>(
-                    Method::GET,
-                    &page_path("/api/caches", &page)?,
-                    None
-                )
-                .await?
+                &api.get::<PageResponse<CacheConfig>>(&page_path("/api/caches", &page)?)
+                    .await?
             )?
         ),
         CacheCommand::Create {
@@ -54,15 +49,16 @@ async fn cache(api: Api, command: CacheCommand) -> Result<()> {
         } => println!(
             "{}",
             serde_json::to_string_pretty(
-                &api.request::<CacheConfig>(
+                &api.request::<CacheConfig, _>(
                     Method::POST,
                     "/api/caches",
-                    Some(serde_json::to_value(CreateCacheRequest {
+                    Some(&contract::CreateCache {
+                        encoding_id: Some(ENCODING_ID.into()),
                         name: name.parse()?,
                         public,
-                        quota_bytes,
-                        encoding_id: cf_nix_cache_core::ENCODING_ID.into()
-                    })?)
+                        quota_bytes: NonZeroU64::new(quota_bytes)
+                            .context("--quota-bytes must be positive")?,
+                    })
                 )
                 .await?
             )?
@@ -70,17 +66,17 @@ async fn cache(api: Api, command: CacheCommand) -> Result<()> {
         CacheCommand::Info { name } => println!(
             "{}",
             serde_json::to_string_pretty(
-                &api.request::<CacheConfig>(Method::GET, &format!("/api/caches/{name}"), None)
+                &api.get::<CacheConfig>(&format!("/api/caches/{name}"))
                     .await?
             )?
         ),
         CacheCommand::Configure { name, public } => println!(
             "{}",
             serde_json::to_string_pretty(
-                &api.request::<CacheConfig>(
+                &api.request::<CacheConfig, _>(
                     Method::PATCH,
                     &format!("/api/caches/{name}/config"),
-                    Some(serde_json::to_value(ConfigureCacheRequest { public })?)
+                    Some(&contract::ConfigureCache { public })
                 )
                 .await?
             )?
@@ -98,12 +94,8 @@ async fn token(api: Api, command: TokenCommand) -> Result<()> {
         TokenCommand::List(page) => println!(
             "{}",
             serde_json::to_string_pretty(
-                &api.request::<PageResponse<TokenSummary>>(
-                    Method::GET,
-                    &page_path("/api/tokens", &page)?,
-                    None
-                )
-                .await?
+                &api.get::<PageResponse<TokenSummary>>(&page_path("/api/tokens", &page)?)
+                    .await?
             )?
         ),
         TokenCommand::Create {
@@ -112,22 +104,15 @@ async fn token(api: Api, command: TokenCommand) -> Result<()> {
             valid_for,
             output,
         } => {
-            let grants = grants
-                .into_iter()
-                .map(|(cache, role)| TokenGrant {
-                    cache,
-                    role: role.into(),
-                })
-                .collect();
             let value: CreateTokenResponse = api
                 .request(
                     Method::POST,
                     "/api/tokens",
-                    Some(serde_json::to_value(CreateTokenRequest {
-                        subject,
-                        valid_for_seconds: valid_for.as_secs(),
+                    Some(&contract::TokenRequest {
                         grants,
-                    })?),
+                        subject: subject.parse()?,
+                        valid_for_seconds: valid_for_seconds(valid_for)?,
+                    }),
                 )
                 .await?;
             match output {
@@ -148,12 +133,8 @@ async fn audit(api: Api, command: AuditCommand) -> Result<()> {
         AuditCommand::List(page) => println!(
             "{}",
             serde_json::to_string_pretty(
-                &api.request::<PageResponse<AuditEvent>>(
-                    Method::GET,
-                    &page_path("/api/audit", &page)?,
-                    None
-                )
-                .await?
+                &api.get::<PageResponse<AuditEvent>>(&page_path("/api/audit", &page)?)
+                    .await?
             )?
         ),
     }
@@ -189,9 +170,12 @@ async fn push(api: Api, cache: String, installables: Vec<String>) -> Result<()> 
             .request(
                 Method::POST,
                 &format!("/api/caches/{cache}/missing"),
-                Some(serde_json::to_value(MissingPathsRequest {
-                    store_hashes: batch.to_vec(),
-                })?),
+                Some(&contract::MissingPaths {
+                    store_hashes: batch
+                        .iter()
+                        .map(|hash| hash.parse())
+                        .collect::<Result<_, _>>()?,
+                }),
             )
             .await?;
         missing.extend(result.missing);

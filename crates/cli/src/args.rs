@@ -1,6 +1,8 @@
 use anyhow::Result;
+use cf_nix_cache_core::contracts::api as contract;
 use clap::{Parser, Subcommand, ValueEnum};
 use reqwest::Url;
+use std::num::NonZeroU64;
 
 #[derive(Parser)]
 #[command(
@@ -22,7 +24,7 @@ pub(crate) enum CommandKind {
         #[arg(long)]
         subject: String,
         #[arg(long = "grant", value_parser = parse_grant, required = true)]
-        grants: Vec<(String, CliRole)>,
+        grants: Vec<contract::Grant>,
         #[arg(long)]
         valid_for: humantime::Duration,
         #[arg(long, value_enum, default_value = "token")]
@@ -81,22 +83,6 @@ pub(crate) enum CacheCommand {
     },
 }
 
-#[derive(Clone, ValueEnum)]
-pub(crate) enum CliRole {
-    Pull,
-    Push,
-    Admin,
-}
-impl From<CliRole> for cf_nix_cache_core::Role {
-    fn from(value: CliRole) -> Self {
-        match value {
-            CliRole::Pull => Self::Pull,
-            CliRole::Push => Self::Push,
-            CliRole::Admin => Self::Admin,
-        }
-    }
-}
-
 #[derive(Subcommand)]
 pub(crate) enum TokenCommand {
     List(PageArgs),
@@ -104,7 +90,7 @@ pub(crate) enum TokenCommand {
         #[arg(long)]
         subject: String,
         #[arg(long = "grant", value_parser = parse_grant, required = true)]
-        grants: Vec<(String, CliRole)>,
+        grants: Vec<contract::Grant>,
         #[arg(long)]
         valid_for: humantime::Duration,
         #[arg(long, value_enum, default_value = "token")]
@@ -139,15 +125,22 @@ pub(crate) enum UploadCommand {
     Cancel { id: String },
 }
 
-pub(crate) fn parse_grant(value: &str) -> std::result::Result<(String, CliRole), String> {
+pub(crate) fn parse_grant(value: &str) -> std::result::Result<contract::Grant, String> {
     let (cache, role) = value.split_once('=').ok_or("grant must be CACHE=ROLE")?;
-    let role = match role {
-        "pull" => CliRole::Pull,
-        "push" => CliRole::Push,
-        "admin" => CliRole::Admin,
-        _ => return Err("role must be pull, push, or admin".into()),
-    };
-    Ok((cache.into(), role))
+    Ok(contract::Grant {
+        cache: cache
+            .parse()
+            .map_err(|_| "grant cache must be '*' or a cache name")?,
+        role: role
+            .parse()
+            .map_err(|_| "role must be pull, push, or admin")?,
+    })
+}
+
+/// Converts a `--valid-for` duration to the contract's whole seconds.
+pub(crate) fn valid_for_seconds(valid_for: humantime::Duration) -> Result<NonZeroU64> {
+    NonZeroU64::new(valid_for.as_secs())
+        .ok_or_else(|| anyhow::anyhow!("--valid-for must be at least one second"))
 }
 
 pub(crate) fn page_path(base: &str, page: &PageArgs) -> Result<String> {

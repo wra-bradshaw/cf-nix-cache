@@ -1,10 +1,9 @@
 use anyhow::{bail, Context, Result};
-use cf_nix_cache_core::canonical_api_request;
-use cf_nix_cache_core::CreateTokenResponse;
+use cf_nix_cache_core::{contracts::api as contract, CreateTokenResponse};
 use reqwest::{Client, Method};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
-use serde_json::Value;
+use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -26,17 +25,18 @@ pub(crate) struct Api {
     token: String,
 }
 
-pub(crate) async fn bootstrap(endpoint: String, body: Value) -> Result<CreateTokenResponse> {
+pub(crate) async fn bootstrap(
+    endpoint: String,
+    body: &contract::BootstrapRequest,
+) -> Result<CreateTokenResponse> {
     let endpoint = endpoint.trim_end_matches('/');
     let url = format!("{endpoint}/api/bootstrap");
     let client = retrying_client();
     let key = new_idempotency_key();
-    let body = canonical_api_request("/api/bootstrap", body)
-        .context("bootstrap request does not match the API contract")?;
     let response = client
         .post(&url)
         .header("Idempotency-Key", key)
-        .json(&body)
+        .json(body)
         .send()
         .await?;
     let status = response.status();
@@ -68,16 +68,17 @@ impl Api {
         })
     }
 
-    pub(crate) async fn request<T: serde::de::DeserializeOwned>(
+    pub(crate) async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        self.request(Method::GET, path, None::<&()>).await
+    }
+
+    /// Sends `body`, a generated contract DTO, as JSON.
+    pub(crate) async fn request<T: DeserializeOwned, B: Serialize>(
         &self,
         method: Method,
         path: &str,
-        body: Option<Value>,
+        body: Option<&B>,
     ) -> Result<T> {
-        let body = body
-            .map(|value| canonical_api_request(path, value))
-            .transpose()
-            .context("request does not match the API contract")?;
         let retry_safe = retry_safe(&method, path);
         let mut request = if retry_safe {
             self.retry_client
@@ -93,8 +94,8 @@ impl Api {
         ) {
             request = request.header("Idempotency-Key", new_idempotency_key());
         }
-        if let Some(value) = body {
-            request = request.json(&value);
+        if let Some(body) = body {
+            request = request.json(body);
         }
         let response = request.send().await?;
         let status = response.status();

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use cf_nix_cache_core::{CreateTokenRequest, TokenGrant};
+use cf_nix_cache_core::contracts::api as contract;
 use clap::Parser;
 
 mod args;
@@ -8,6 +8,8 @@ mod config;
 mod handlers;
 mod nix;
 mod upload;
+#[cfg(test)]
+mod wire_proof;
 
 use args::{Args, CommandKind, TokenOutput};
 use client::{bootstrap, Api};
@@ -39,21 +41,13 @@ async fn main() -> Result<()> {
             .clone()
             .or_else(|| config.endpoint.clone())
             .context("--endpoint is required")?;
-        let grants = grants
-            .iter()
-            .cloned()
-            .map(|(cache, role)| TokenGrant {
-                cache,
-                role: role.into(),
-            })
-            .collect();
-        let mut body = serde_json::to_value(CreateTokenRequest {
-            subject: subject.clone(),
-            valid_for_seconds: valid_for.as_secs(),
-            grants,
-        })?;
-        body["secret"] = serde_json::Value::String(secret.clone());
-        let response = bootstrap(endpoint, body).await?;
+        let body = contract::BootstrapRequest {
+            grants: grants.clone(),
+            secret: secret.parse()?,
+            subject: subject.parse()?,
+            valid_for_seconds: args::valid_for_seconds(*valid_for)?,
+        };
+        let response = bootstrap(endpoint, &body).await?;
         match output {
             TokenOutput::Token => println!("{}", response.token),
             TokenOutput::Json => println!("{}", serde_json::to_string_pretty(&response)?),

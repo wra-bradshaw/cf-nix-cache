@@ -2,68 +2,70 @@ use crate::{
     client::{upload_part_with_retry, Api},
     nix::{basename, make_nar, nix_hash, store_hash},
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use cf_nix_cache_core::{
-    CompleteUploadRequest, CompletedPart, InitiateUploadRequest, InitiateUploadResponse,
-    StorePathName, UploadManifest, UploadStateResponse, UploadStatus,
+    contracts::api as contract, InitiateUploadResponse, StorePathName, UploadStateResponse,
+    UploadStatus,
 };
 use reqwest::Method;
 use serde_json::Value;
 use std::{
+    fmt::Display,
     io::{Read, Seek, SeekFrom},
+    num::NonZeroU64,
     time::{Duration, Instant},
 };
+
+/// Validates the basename of `path` as a store path name and converts it to
+/// the contract type `T`.
+fn store_path_name<T>(path: &str) -> Result<T>
+where
+    T: TryFrom<String>,
+    T::Error: Display,
+{
+    let name: StorePathName = basename(path)?.parse()?;
+    T::try_from(name.to_string()).map_err(|error| anyhow!("{error}"))
+}
+
+/// Builds the upload manifest for `path` from its `nix path-info` entry.
+pub(crate) fn manifest(cache: &str, path: &str, info: &Value) -> Result<contract::Manifest> {
+    let field = |name: &str| info.get(name).and_then(Value::as_str);
+    Ok(contract::Manifest {
+        ca: field("ca").map(str::parse).transpose()?,
+        cache: cache.parse()?,
+        deriver: field("deriver").map(store_path_name).transpose()?,
+        nar_hash: nix_hash(field("narHash").context("missing narHash")?)?.parse()?,
+        nar_size: info
+            .get("narSize")
+            .and_then(Value::as_u64)
+            .and_then(NonZeroU64::new)
+            .context("missing narSize")?,
+        references: info
+            .get("references")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(store_path_name)
+            .collect::<Result<_>>()?,
+        store_hash: store_hash(path)?.parse()?,
+        store_path: path.parse()?,
+    })
+}
 
 pub(crate) async fn upload_path(api: &Api, cache: &str, path: &str, info: &Value) -> Result<()> {
     let mut file = make_nar(path)?;
     let size = file.as_file().metadata()?.len();
     let part_size = cf_nix_cache_core::MULTIPART_PART_SIZE;
-    let store_hash = store_hash(path)?;
-    let refs = info
-        .get("references")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(|value| {
-            basename(value)?
-                .parse::<StorePathName>()
-                .map_err(|error| anyhow::anyhow!(error))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let manifest = UploadManifest {
-        cache: cache.parse()?,
-        store_hash,
-        store_path: path.into(),
-        nar_hash: nix_hash(
-            info.get("narHash")
-                .and_then(Value::as_str)
-                .context("missing narHash")?,
-        )?,
-        nar_size: info
-            .get("narSize")
-            .and_then(Value::as_u64)
-            .context("missing narSize")?,
-        references: refs,
-        deriver: info
-            .get("deriver")
-            .and_then(Value::as_str)
-            .map(|value| {
-                basename(value)?
-                    .parse::<StorePathName>()
-                    .map_err(|error| anyhow::anyhow!(error))
-            })
-            .transpose()?,
-        ca: info.get("ca").and_then(Value::as_str).map(str::to_owned),
-    };
+    let manifest = manifest(cache, path, info)?;
     let init: InitiateUploadResponse = api
         .request(
             Method::POST,
             "/api/uploads",
-            Some(serde_json::to_value(InitiateUploadRequest {
+            Some(&contract::UploadRequest {
+                compressed_size: NonZeroU64::new(size).context("compressed NAR is empty")?,
                 manifest,
-                compressed_size: size,
-            })?),
+            }),
         )
         .await?;
     if matches!(init.status, UploadStatus::Ready) {
@@ -75,9 +77,7 @@ pub(crate) async fn upload_path(api: &Api, cache: &str, path: &str, info: &Value
             .request(
                 Method::POST,
                 &format!("/api/uploads/{}/complete", init.id),
-                Some(serde_json::to_value(CompleteUploadRequest {
-                    parts: vec![],
-                })?),
+                Some(&contract::CompleteUpload { parts: vec![] }),
             )
             .await?;
         return wait_for_upload(api, &init.id, path).await;
@@ -102,18 +102,17 @@ pub(crate) async fn upload_path(api: &Api, cache: &str, path: &str, info: &Value
         file.seek(SeekFrom::Start(offset))?;
         file.read_exact(&mut bytes)?;
         let etag = upload_part_with_retry(api, &part.url, bytes, part.part_number).await?;
-        completed.push(CompletedPart {
-            part_number: part.part_number,
-            etag,
+        completed.push(contract::CompleteUploadPartsItem {
+            etag: etag.parse()?,
+            part_number: NonZeroU64::new(part.part_number as u64)
+                .context("part numbers start at 1")?,
         });
     }
     let _: UploadStateResponse = api
         .request(
             Method::POST,
             &format!("/api/uploads/{}/complete", init.id),
-            Some(serde_json::to_value(CompleteUploadRequest {
-                parts: completed,
-            })?),
+            Some(&contract::CompleteUpload { parts: completed }),
         )
         .await?;
     wait_for_upload(api, &init.id, path).await
@@ -127,9 +126,7 @@ async fn wait_for_upload(api: &Api, id: &str, path: &str) -> Result<()> {
             bail!("verification timed out for {path}");
         }
         tokio::time::sleep(delay).await;
-        let state: UploadStateResponse = api
-            .request(Method::GET, &format!("/api/uploads/{id}"), None)
-            .await?;
+        let state: UploadStateResponse = api.get(&format!("/api/uploads/{id}")).await?;
         match state.status {
             UploadStatus::Ready => break,
             UploadStatus::Failed | UploadStatus::Aborted => {
