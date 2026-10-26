@@ -1,18 +1,57 @@
 version: 2
 updates:
+  # pnpm projects use the npm ecosystem. Each directory has its own lockfile.
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
+    groups:
+      root-minor-and-patch:
+        update-types: [minor, patch]
+
   - package-ecosystem: npm
     directory: /apps/worker
     schedule:
       interval: weekly
+    groups:
+      worker-minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Keep Node typings at or below the Node 22 runtime used by CI and
+      # Workers Builds; never propose a newer major.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: npm
     directory: /cf-nix-cache-template
     schedule:
       interval: weekly
+    groups:
+      template-minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # The release workflows pin the runtime package in the template.
+      - dependency-name: "cf-nix-cache"
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: nix
+    directory: /
+    schedule:
+      interval: weekly
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
