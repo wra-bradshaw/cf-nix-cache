@@ -31,7 +31,7 @@ jobs:
           nix develop --command cargo fmt --check
           nix develop --command cargo test --workspace
           nix develop --command cargo clippy --workspace --all-targets -- -D warnings
-          nix develop --command pnpm --dir apps/worker install --frozen-lockfile=false
+          nix develop --command pnpm --dir apps/worker install --frozen-lockfile
           nix develop --command pnpm --dir apps/worker check
           nix develop --command pnpm --dir apps/worker test
           nix develop --command pnpm --dir apps/worker build
