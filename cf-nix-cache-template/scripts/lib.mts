@@ -10,6 +10,9 @@ export const templateDirectory = path.resolve(
   "..",
 );
 export const configPath = path.join(templateDirectory, "wrangler.jsonc");
+// Rendered configs are written beside wrangler.jsonc; keep in sync with
+// .gitignore.
+const renderedConfigPrefix = ".wrangler-rendered-";
 
 export const secretNames = [
   "AUTH_PRIVATE_JWK",
@@ -263,10 +266,12 @@ export async function renderedConfig(image: string): Promise<string> {
   validateConfig(config, image);
   const containers = processorContainers(config);
   for (const container of containers) container.image = image;
+  // The rendered file sits beside wrangler.jsonc so that every relative path
+  // in the customer config (main, $schema, assets, rules, tsconfig) resolves
+  // exactly as it does for the source config.
   const output = path.join(
     templateDirectory,
-    ".wrangler",
-    `cf-nix-cache-${process.pid}-${randomUUID()}.json`,
+    `${renderedConfigPrefix}${process.pid}-${randomUUID()}.json`,
   );
   await writeFile(output, `${JSON.stringify(config, null, 2)}\n`, {
     mode: 0o600,

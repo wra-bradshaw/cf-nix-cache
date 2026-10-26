@@ -32,5 +32,8 @@ jobs:
           else
             pnpm install --no-frozen-lockfile
           fi
-      - if: steps.runtime.outputs.published == 'true'
-        run: pnpm check
+      # `check` type-checks, dry-runs wrangler.jsonc, and dry-runs the rendered
+      # config that `pnpm run deploy` actually deploys.
+      - name: Type-check and dry-run the source and rendered configs
+        if: steps.runtime.outputs.published == 'true'
+        run: pnpm run check

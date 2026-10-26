@@ -6,7 +6,7 @@
   "packageManager": "pnpm@11.15.0",
   "repository": "https://github.com/wra-bradshaw/cf-nix-cache-template",
   "scripts": {
-    "check": "tsc --noEmit && wrangler deploy --dry-run",
+    "check": "tsc --noEmit && wrangler deploy --dry-run && tsx scripts/check-rendered-config.mts",
     "setup": "tsx scripts/deploy.mts setup",
     "deploy": "tsx scripts/deploy.mts deploy",
     "preview": "tsx scripts/deploy.mts preview",
