@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use cf_nix_cache_core::validate_store_hash;
+use cf_nix_cache_core::{validate_store_hash, ZSTD_LEVEL};
 use serde_json::Value;
 use std::{
     path::Path,
@@ -68,7 +68,7 @@ pub(crate) fn make_nar(path: &str) -> Result<NamedTempFile> {
         .args(["--dump", path])
         .stdout(Stdio::piped())
         .spawn()?;
-    let mut encoder = zstd::Encoder::new(NamedTempFile::new()?, 3)?;
+    let mut encoder = zstd::Encoder::new(NamedTempFile::new()?, ZSTD_LEVEL)?;
     std::io::copy(
         child
             .stdout

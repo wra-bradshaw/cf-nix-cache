@@ -16,7 +16,14 @@ pub use wire::*;
 pub const MAX_NAR_SIZE: u64 = 10 * 1024 * 1024 * 1024;
 pub const MAX_COMPRESSED_SIZE: u64 = 12 * 1024 * 1024 * 1024;
 pub const MULTIPART_PART_SIZE: u64 = 64 * 1024 * 1024;
+/// Encoding profile id; it names the chunking and compression parameters
+/// below, and appears in R2 keys, so the two must never drift apart.
 pub const ENCODING_ID: &str = "fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1";
+pub const CHUNK_MIN_SIZE: usize = 1024 * 1024;
+pub const CHUNK_AVG_SIZE: usize = 4 * 1024 * 1024;
+pub const CHUNK_MAX_SIZE: usize = 16 * 1024 * 1024;
+/// zstd level of each encoded chunk frame (also used for staging uploads).
+pub const ZSTD_LEVEL: i32 = 3;
 pub(crate) fn default_encoding_id() -> String {
     ENCODING_ID.into()
 }

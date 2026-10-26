@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use async_compression::tokio::bufread::ZstdDecoder;
 use cf_nix_cache_core::{
-    nix_base32, ChunkManifest, ChunkRef, ProcessJob, ProcessResult, MAX_COMPRESSED_SIZE,
-    MAX_NAR_SIZE,
+    nix_base32, ChunkManifest, ChunkRef, ProcessJob, ProcessResult, CHUNK_AVG_SIZE, CHUNK_MAX_SIZE,
+    CHUNK_MIN_SIZE, MAX_COMPRESSED_SIZE, MAX_NAR_SIZE, ZSTD_LEVEL,
 };
 use fastcdc::v2020::AsyncStreamCDC;
 use futures::StreamExt;
@@ -15,10 +15,6 @@ use crate::{
     nar::{LimitedReader, NarValidator},
     object_store::ObjectStore,
 };
-
-const MIN_CHUNK: usize = 1024 * 1024;
-const AVG_CHUNK: usize = 4 * 1024 * 1024;
-const MAX_CHUNK: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub(crate) enum ProcessFailure {
@@ -59,7 +55,8 @@ async fn process_job_inner<S: ObjectStore>(store: &S, job: &ProcessJob) -> Resul
 
     let source = LimitedReader::new(store.get(&job.staging_key).await?, MAX_COMPRESSED_SIZE);
     let mut decoder = ZstdDecoder::new(BufReader::new(source));
-    let mut chunker = AsyncStreamCDC::new(&mut decoder, MIN_CHUNK, AVG_CHUNK, MAX_CHUNK);
+    let mut chunker =
+        AsyncStreamCDC::new(&mut decoder, CHUNK_MIN_SIZE, CHUNK_AVG_SIZE, CHUNK_MAX_SIZE);
     let mut chunks = Box::pin(chunker.as_stream());
     let mut file_hash = Sha256::new();
     let mut file_size = 0u64;
@@ -77,7 +74,7 @@ async fn process_job_inner<S: ObjectStore>(store: &S, job: &ProcessJob) -> Resul
         chunked_raw_size += bytes.len() as u64;
         let compressed = tokio::task::spawn_blocking({
             let input = bytes.clone();
-            move || zstd::encode_all(Cursor::new(input), 3)
+            move || zstd::encode_all(Cursor::new(input), ZSTD_LEVEL)
         })
         .await
         .context("waiting for zstd compression")?

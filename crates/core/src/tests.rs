@@ -138,6 +138,21 @@ fn canonicalizes_cli_requests_through_generated_contracts() {
 }
 
 #[test]
+fn encoding_id_names_its_parameters() {
+    const MIB: usize = 1024 * 1024;
+    assert_eq!(
+        ENCODING_ID,
+        format!(
+            "fastcdc-v2020-min{}m-avg{}m-max{}m-zstd{}-v1",
+            CHUNK_MIN_SIZE / MIB,
+            CHUNK_AVG_SIZE / MIB,
+            CHUNK_MAX_SIZE / MIB,
+            ZSTD_LEVEL
+        )
+    );
+}
+
+#[test]
 fn encodes_nix_base32() {
     assert_eq!(nix_base32(&[0; 32]), "0".repeat(52));
     let mut one = [0; 32];
