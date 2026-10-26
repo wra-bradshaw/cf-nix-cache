@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::Context;
 use async_compression::tokio::bufread::ZstdDecoder;
 use cf_nix_cache_core::{
     nix_base32, ChunkManifest, ChunkRef, ProcessJob, ProcessResult, CHUNK_AVG_SIZE, CHUNK_MAX_SIZE,
@@ -7,7 +7,6 @@ use cf_nix_cache_core::{
 use fastcdc::v2020::AsyncStreamCDC;
 use futures::StreamExt;
 use sha2::{Digest, Sha256};
-use std::io::Cursor;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
@@ -18,39 +17,34 @@ use crate::{
 
 #[derive(Debug, Error)]
 pub(crate) enum ProcessFailure {
+    /// Invalid input; retrying the same job cannot succeed.
     #[error("{0}")]
     Permanent(String),
+    /// Infrastructure failure; the Worker may retry the job.
     #[error(transparent)]
     Retryable(#[from] anyhow::Error),
 }
 
-#[derive(Debug, Error)]
-#[error("{0}")]
-struct PermanentInput(String);
+impl ProcessFailure {
+    fn permanent(message: impl Into<String>) -> Self {
+        Self::Permanent(message.into())
+    }
+}
+
+type Result<T, E = ProcessFailure> = std::result::Result<T, E>;
 
 pub(crate) async fn process_job<S: ObjectStore>(
     store: &S,
     job: &ProcessJob,
-) -> std::result::Result<ProcessResult, ProcessFailure> {
-    process_job_inner(store, job).await.map_err(|error| {
-        if let Some(permanent) = error.downcast_ref::<PermanentInput>() {
-            ProcessFailure::Permanent(permanent.0.clone())
-        } else {
-            ProcessFailure::Retryable(error)
-        }
-    })
-}
-
-async fn process_job_inner<S: ObjectStore>(store: &S, job: &ProcessJob) -> Result<ProcessResult> {
-    // Validate the complete archive before creating any permanent objects.
-    // The previous single-pass implementation could leave content-addressed
-    // chunks behind for malformed input whose hash or NAR structure was only
-    // discovered at the end of the stream.
+) -> Result<ProcessResult> {
+    // Validate the complete archive before creating any permanent objects,
+    // so malformed input whose hash or NAR structure is only discovered at
+    // the end of the stream cannot leave content-addressed chunks behind.
     let (nar_hash, raw_size) = validate_nar(store, job).await?;
     if nar_hash != job.nar_hash || raw_size != job.nar_size {
-        return Err(anyhow!(PermanentInput(
-            "validated NAR does not match declared hash or size".into()
-        )));
+        return Err(ProcessFailure::permanent(
+            "validated NAR does not match declared hash or size",
+        ));
     }
 
     let source = LimitedReader::new(store.get(&job.staging_key).await?, MAX_COMPRESSED_SIZE);
@@ -66,50 +60,44 @@ async fn process_job_inner<S: ObjectStore>(store: &S, job: &ProcessJob) -> Resul
     while let Some(chunk) = chunks.next().await {
         let bytes = chunk
             .map_err(|error| {
-                anyhow!(PermanentInput(format!(
-                    "invalid compressed NAR stream: {error}"
-                )))
+                ProcessFailure::permanent(format!("invalid compressed NAR stream: {error}"))
             })?
             .data;
-        chunked_raw_size += bytes.len() as u64;
-        let compressed = tokio::task::spawn_blocking({
-            let input = bytes.clone();
-            move || zstd::encode_all(Cursor::new(input), ZSTD_LEVEL)
-        })
-        .await
-        .context("waiting for zstd compression")?
-        .map_err(|error| {
-            anyhow!(PermanentInput(format!(
-                "unable to compress NAR chunk: {error}"
-            )))
-        })?;
-        let raw_digest = sha256_nix(&bytes);
-        let compressed_digest = sha256_nix(&compressed);
+        let raw_size = bytes.len() as u64;
+        let raw_hash = sha256_nix(&bytes);
+        chunked_raw_size += raw_size;
+        let compressed =
+            tokio::task::spawn_blocking(move || zstd::encode_all(bytes.as_slice(), ZSTD_LEVEL))
+                .await
+                .context("waiting for zstd compression")?
+                .context("unable to compress NAR chunk")?;
+        let compressed_hash = sha256_nix(&compressed);
+        let compressed_size = compressed.len() as u64;
         file_hash.update(&compressed);
-        file_size += compressed.len() as u64;
-        let key = format!("chunks/{}/{raw_digest}.zst", job.encoding_id);
+        file_size += compressed_size;
+        let key = format!("chunks/{}/{raw_hash}.zst", job.encoding_id);
         store
-            .put_if_absent(&key, compressed.clone(), "application/zstd")
+            .put_if_absent(&key, compressed, "application/zstd")
             .await?;
         refs.push(ChunkRef {
-            raw_hash: raw_digest,
-            raw_size: bytes.len() as u64,
-            compressed_hash: compressed_digest,
-            compressed_size: compressed.len() as u64,
+            raw_hash,
+            raw_size,
+            compressed_hash,
+            compressed_size,
             key,
         });
     }
     drop(chunks);
     drop(chunker);
     if chunked_raw_size != raw_size {
-        return Err(anyhow!(PermanentInput(
-            "staging object changed during processing".into()
-        )));
+        return Err(ProcessFailure::permanent(
+            "staging object changed during processing",
+        ));
     }
     if refs.is_empty() {
-        return Err(anyhow!(PermanentInput(
-            "validated NAR produced no chunks".into()
-        )));
+        return Err(ProcessFailure::permanent(
+            "validated NAR produced no chunks",
+        ));
     }
     let manifest = ChunkManifest {
         encoding_id: job.encoding_id.clone(),
@@ -123,12 +111,14 @@ async fn process_job_inner<S: ObjectStore>(store: &S, job: &ProcessJob) -> Resul
     };
     manifest
         .validate()
-        .map_err(|error| anyhow!(PermanentInput(error.to_string())))?;
+        .map_err(|error| ProcessFailure::permanent(error.to_string()))?;
     let manifest_key = format!("manifests/{}/{nar_hash}.json", job.encoding_id);
     let created = store
         .put_if_absent(
             &manifest_key,
-            manifest.canonical_json()?,
+            manifest
+                .canonical_json()
+                .context("serializing chunk manifest")?,
             "application/json",
         )
         .await?;
@@ -141,13 +131,11 @@ async fn process_job_inner<S: ObjectStore>(store: &S, job: &ProcessJob) -> Resul
             .await
             .context("reading deduplicated manifest")?;
         let existing: ChunkManifest = serde_json::from_slice(&bytes).map_err(|error| {
-            anyhow!(PermanentInput(format!(
-                "stored manifest is invalid: {error}"
-            )))
+            ProcessFailure::permanent(format!("stored manifest is invalid: {error}"))
         })?;
         existing
             .validate()
-            .map_err(|error| anyhow!(PermanentInput(error.to_string())))?;
+            .map_err(|error| ProcessFailure::permanent(error.to_string()))?;
         existing
     };
     Ok(ProcessResult {
@@ -164,33 +152,34 @@ async fn validate_nar<S: ObjectStore>(store: &S, job: &ProcessJob) -> Result<(St
     let mut raw_hash = Sha256::new();
     let mut raw_size = 0u64;
     let mut buffer = vec![0u8; 1024 * 1024];
+    let invalid_nar = |error: &dyn std::fmt::Display| {
+        ProcessFailure::permanent(format!("invalid NAR archive: {error}"))
+    };
 
     loop {
         let read = decoder.read(&mut buffer).await.map_err(|error| {
-            anyhow!(PermanentInput(format!(
-                "invalid compressed NAR stream: {error}"
-            )))
+            ProcessFailure::permanent(format!("invalid compressed NAR stream: {error}"))
         })?;
         if read == 0 {
             break;
         }
         raw_size += read as u64;
         if raw_size > MAX_NAR_SIZE {
-            return Err(anyhow!(PermanentInput(
-                "decoded NAR exceeds the configured limit".into()
-            )));
+            return Err(ProcessFailure::permanent(
+                "decoded NAR exceeds the configured limit",
+            ));
         }
         raw_hash.update(&buffer[..read]);
         validator
             .writer
             .write_all(&buffer[..read])
             .await
-            .map_err(|error| anyhow!(PermanentInput(format!("invalid NAR archive: {error}"))))?;
+            .map_err(|error| invalid_nar(&error))?;
     }
     validator
         .finish()
         .await
-        .map_err(|error| anyhow!(PermanentInput(format!("invalid NAR archive: {error}"))))?;
+        .map_err(|error| invalid_nar(&error))?;
     Ok((
         format!("sha256:{}", nix_base32(&raw_hash.finalize())),
         raw_size,
@@ -211,6 +200,7 @@ fn now_seconds() -> u64 {
 mod tests {
     use super::*;
     use crate::object_store::ObjectBody;
+    use anyhow::Result;
     use async_trait::async_trait;
     use cf_nix_cache_core::ENCODING_ID;
     use std::{
