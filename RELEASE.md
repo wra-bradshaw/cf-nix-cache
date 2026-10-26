@@ -36,6 +36,11 @@ version, the image is not an immutable digest, or the platform is not
 
 ### Automated release flow
 
+The version PR and the digest-pinning PR are opened with `GITHUB_TOKEN`,
+which does not trigger `pull_request` workflows. Both workflows therefore
+dispatch `ci.yml` on their branch (`gh workflow run ci.yml --ref <branch>`,
+requiring `actions: write`), so the PR head commit still receives CI checks.
+
 Runtime changes should include a Changeset (`pnpm changeset`). The `Release
 PR` workflow accumulates those files into a version PR and synchronizes the
 new version into the release manifest and deployment template. Merging the

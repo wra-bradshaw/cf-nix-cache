@@ -4,6 +4,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Pull requests opened with GITHUB_TOKEN (Release PR, Prepare release
+  # artifacts) do not trigger pull_request runs; those workflows dispatch CI
+  # on their branch so the PR head commit still gets checks.
+  workflow_dispatch:
 
 permissions:
   contents: read

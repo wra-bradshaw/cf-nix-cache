@@ -13,6 +13,8 @@ concurrency:
   group: prepare-release-artifacts
 
 permissions:
+  # actions: write lets the job dispatch CI for the digest-pinning branch.
+  actions: write
   contents: write
   pull-requests: write
 
@@ -126,3 +128,6 @@ jobs:
             --head "$branch" \
             --title "Release: pin processor for v$VERSION" \
             --body "Pins the public processor image for npm release v$VERSION to \`$PROCESSOR_IMAGE\`. Merging this PR makes the npm publish workflow eligible to publish the matching Worker package."
+          # A PR opened with GITHUB_TOKEN does not trigger pull_request
+          # workflows, so run CI explicitly on its branch.
+          gh workflow run ci.yml --ref "$branch"

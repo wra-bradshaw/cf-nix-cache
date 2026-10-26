@@ -12,6 +12,8 @@ concurrency:
   group: changesets-release-pr
 
 permissions:
+  # actions: write lets the job dispatch CI for the version PR branch.
+  actions: write
   contents: write
   pull-requests: write
 
@@ -29,8 +31,16 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Create or update the version PR
+        id: changesets
         uses: changesets/action@v1
         with:
           version: pnpm version-packages
           title: "Release: version packages"
           commit: "Release: version packages"
+      # Pushes made with GITHUB_TOKEN do not trigger pull_request workflows,
+      # so run CI explicitly on the version PR branch.
+      - name: Run CI on the version PR
+        if: steps.changesets.outputs.pullRequestNumber != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --ref "changeset-release/$GITHUB_REF_NAME"
