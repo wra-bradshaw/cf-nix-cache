@@ -12,8 +12,6 @@ pub enum Error {
     StorePathHashMismatch,
     #[error("invalid store path")]
     InvalidStorePath,
-    #[error("invalid reference path")]
-    InvalidReference,
     #[error("store path names must contain a 32-character Nix hash, '-', and a non-empty name")]
     InvalidStorePathName,
     #[error("store path metadata contains invalid characters or is too large")]
@@ -22,4 +20,6 @@ pub enum Error {
     ManifestTooLarge,
     #[error("unsupported encoding profile")]
     InvalidEncoding,
+    #[error("chunk manifest is inconsistent with its chunks")]
+    InvalidChunkManifest,
 }

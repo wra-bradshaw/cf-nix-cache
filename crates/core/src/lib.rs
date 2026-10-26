@@ -25,23 +25,25 @@ pub fn nix_base32(bytes: &[u8]) -> String {
     nix_base32::to_nix_base32(bytes)
 }
 
+/// The Nix base32 alphabet (no `e`, `o`, `u`, or `t`).
+const NIX32_ALPHABET: &[u8] = b"0123456789abcdfghijklmnpqrsvwxyz";
+
+fn is_nix32(value: &str, len: usize) -> bool {
+    value.len() == len && value.bytes().all(|b| NIX32_ALPHABET.contains(&b))
+}
+
 pub fn validate_store_hash(value: &str) -> Result<(), Error> {
-    const NIX32: &[u8] = b"0123456789abcdfghijklmnpqrsvwxyz";
-    (value.len() == 32 && value.bytes().all(|b| NIX32.contains(&b)))
+    is_nix32(value, 32)
         .then_some(())
         .ok_or(Error::InvalidStoreHash)
 }
 
 pub fn validate_nar_hash(value: &str) -> Result<(), Error> {
-    let Some(hash) = value.strip_prefix("sha256:") else {
-        return Err(Error::InvalidNarHash);
-    };
-    (hash.len() == 52
-        && hash
-            .bytes()
-            .all(|b| b"0123456789abcdfghijklmnpqrsvwxyz".contains(&b)))
-    .then_some(())
-    .ok_or(Error::InvalidNarHash)
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(|hash| is_nix32(hash, 52))
+        .then_some(())
+        .ok_or(Error::InvalidNarHash)
 }
 
 #[cfg(test)]

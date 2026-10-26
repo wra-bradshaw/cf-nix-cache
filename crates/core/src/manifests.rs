@@ -57,20 +57,11 @@ impl UploadManifest {
         if self.store_path.len() > 512 || self.store_path.chars().any(|c| c.is_control()) {
             return Err(Error::InvalidStoreMetadata);
         }
-        for reference in &self.references {
-            reference
-                .to_string()
-                .parse::<crate::StorePathName>()
-                .map_err(|_| Error::InvalidReference)?;
-        }
-        if self
-            .deriver
-            .as_ref()
-            .is_some_and(|value| value.to_string().chars().any(|c| c.is_control()))
-            || self.ca.as_ref().is_some_and(|value| {
-                value.len() > 512 || value.chars().any(|character| character.is_control())
-            })
-        {
+        // `references` and `deriver` are `StorePathName`s, which are
+        // validated when parsed or deserialized.
+        if self.ca.as_ref().is_some_and(|value| {
+            value.len() > 512 || value.chars().any(|character| character.is_control())
+        }) {
             return Err(Error::InvalidStoreMetadata);
         }
         if self.store_path.matches('/').count() != 3 {
@@ -110,8 +101,11 @@ impl ChunkManifest {
         }
         validate_nar_hash(&self.nar_hash)?;
         validate_nar_hash(&self.file_hash)?;
-        if self.nar_size > MAX_NAR_SIZE || self.chunks.is_empty() {
+        if self.nar_size > MAX_NAR_SIZE {
             return Err(Error::ManifestTooLarge);
+        }
+        if self.chunks.is_empty() {
+            return Err(Error::InvalidChunkManifest);
         }
         for chunk in &self.chunks {
             validate_nar_hash(&chunk.raw_hash)?;
@@ -120,7 +114,7 @@ impl ChunkManifest {
                 || chunk.compressed_size == 0
                 || chunk.key != format!("chunks/{}/{}.zst", self.encoding_id, chunk.raw_hash)
             {
-                return Err(Error::ManifestTooLarge);
+                return Err(Error::InvalidChunkManifest);
             }
         }
         let raw_size = self.chunks.iter().map(|chunk| chunk.raw_size).sum::<u64>();
@@ -130,7 +124,7 @@ impl ChunkManifest {
             .map(|chunk| chunk.compressed_size)
             .sum::<u64>();
         if raw_size != self.nar_size || compressed_size != self.file_size {
-            return Err(Error::ManifestTooLarge);
+            return Err(Error::InvalidChunkManifest);
         }
         Ok(())
     }

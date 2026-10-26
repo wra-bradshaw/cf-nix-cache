@@ -26,7 +26,10 @@ fn validates_chunk_manifest_totals_and_encoding() {
     assert!(manifest.validate().is_ok());
     let mut invalid = manifest.clone();
     invalid.file_size = 5;
-    assert!(invalid.validate().is_err());
+    assert_eq!(invalid.validate(), Err(Error::InvalidChunkManifest));
+    let mut empty = manifest.clone();
+    empty.chunks.clear();
+    assert_eq!(empty.validate(), Err(Error::InvalidChunkManifest));
     let mut invalid_hash = manifest;
     invalid_hash.file_hash = format!("sha256:{}", "o".repeat(52));
     assert!(invalid_hash.validate().is_err());
