@@ -72,6 +72,36 @@ fn validates_nar_hashes() {
 }
 
 #[test]
+fn converts_contract_process_jobs() {
+    let contract = |encoding_id: &str| {
+        serde_json::from_value::<contracts::process_job::CfNixCacheProcessorJob>(
+            serde_json::json!({
+                "job_id": "job",
+                "staging_key": "staging/job.nar.zst",
+                "nar_hash": format!("sha256:{}", "0".repeat(52)),
+                "nar_size": 9,
+                "encoding_id": encoding_id,
+            }),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        ProcessJob::try_from(contract(ENCODING_ID)),
+        Ok(ProcessJob {
+            job_id: "job".into(),
+            staging_key: "staging/job.nar.zst".into(),
+            nar_hash: format!("sha256:{}", "0".repeat(52)),
+            nar_size: 9,
+            encoding_id: ENCODING_ID.into(),
+        })
+    );
+    assert_eq!(
+        ProcessJob::try_from(contract("other-v1")),
+        Err(Error::InvalidEncoding)
+    );
+}
+
+#[test]
 fn encodes_nix_base32() {
     assert_eq!(nix_base32(&[0; 32]), "0".repeat(52));
     let mut one = [0; 32];

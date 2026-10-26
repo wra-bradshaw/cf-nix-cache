@@ -10,7 +10,7 @@ use axum::{
     Json, Router,
 };
 use cf_nix_cache_core::contracts::process_job::CfNixCacheProcessorJob;
-use cf_nix_cache_core::{ProcessJob, ProcessResult, ENCODING_ID};
+use cf_nix_cache_core::{ProcessJob, ProcessResult};
 use object_store::HttpObjectStore;
 use serde::Serialize;
 use tokio::net::TcpListener;
@@ -54,20 +54,10 @@ async fn process(
     State(state): State<AppState>,
     Json(contract): Json<CfNixCacheProcessorJob>,
 ) -> Result<Json<ProcessResult>, ProcessorRejection> {
-    // Deserialize through the generated schema DTO first, then convert to
-    // the semantic domain type used by the processor. This keeps the HTTP
-    // boundary tied to schemas/process-job.json while preserving domain
-    // validation and processing policy internally.
-    let job: ProcessJob = serde_json::from_value(
-        serde_json::to_value(contract)
-            .map_err(|error| ProcessorRejection::permanent(error.to_string()))?,
-    )
-    .map_err(|error| ProcessorRejection::permanent(error.to_string()))?;
-    if job.encoding_id != ENCODING_ID {
-        return Err(ProcessorRejection::permanent(
-            "unsupported processing contract",
-        ));
-    }
+    // The HTTP boundary is the schemas/process-job.json DTO; convert it to
+    // the domain job, which only accepts this build's encoding.
+    let job = ProcessJob::try_from(contract)
+        .map_err(|_| ProcessorRejection::permanent("unsupported processing contract"))?;
     service::process_job(&state.store, &job)
         .await
         .map(Json)

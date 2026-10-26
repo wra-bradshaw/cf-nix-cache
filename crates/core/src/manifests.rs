@@ -1,4 +1,7 @@
-use crate::{validate_nar_hash, Error, ENCODING_ID, MAX_NAR_SIZE};
+use crate::{
+    contracts::process_job::CfNixCacheProcessorJob, validate_nar_hash, Error, ENCODING_ID,
+    MAX_NAR_SIZE,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,13 +81,32 @@ impl ChunkManifest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessJob {
     pub job_id: String,
     pub staging_key: String,
     pub nar_hash: String,
     pub nar_size: u64,
     pub encoding_id: String,
+}
+
+/// The schema-generated job is the processor's HTTP boundary; this keeps
+/// only the encoding this build implements.
+impl TryFrom<CfNixCacheProcessorJob> for ProcessJob {
+    type Error = Error;
+
+    fn try_from(job: CfNixCacheProcessorJob) -> Result<Self, Error> {
+        if job.encoding_id != ENCODING_ID {
+            return Err(Error::InvalidEncoding);
+        }
+        Ok(Self {
+            job_id: job.job_id.into(),
+            staging_key: job.staging_key.into(),
+            nar_hash: job.nar_hash.into(),
+            nar_size: job.nar_size.get(),
+            encoding_id: ENCODING_ID.into(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
