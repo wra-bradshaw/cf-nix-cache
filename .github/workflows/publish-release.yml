@@ -150,17 +150,29 @@ jobs:
             exit 0
           fi
           branch="release/v$VERSION"
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-            echo "Template update branch $branch already exists."
-            exit 0
-          fi
+          export GH_TOKEN="$TEMPLATE_REPO_TOKEN"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$branch"
+          git switch -C "$branch"
           git add --all
           git commit -m "Update cf-nix-cache to v$VERSION"
-          git push origin "$branch"
-          GH_TOKEN="$TEMPLATE_REPO_TOKEN" gh pr create \
+          # The branch is generated entirely by this job, so a leftover branch
+          # from an earlier (possibly failed) run is safely replaced. This also
+          # refreshes an already-open PR.
+          git push --force origin "$branch"
+          open_pr="$(gh pr list \
+            --repo "$TEMPLATE_REPOSITORY" \
+            --head "$branch" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [ -n "$open_pr" ]; then
+            echo "Updated the existing template PR #$open_pr."
+            exit 0
+          fi
+          # Any failure here fails the job (bash -e), so a release cannot end
+          # with a pushed branch and no PR.
+          gh pr create \
             --repo "$TEMPLATE_REPOSITORY" \
             --base main \
             --head "$branch" \

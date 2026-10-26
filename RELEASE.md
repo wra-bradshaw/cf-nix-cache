@@ -63,10 +63,15 @@ The version workflow sets `releaseReady` to false and only the digest-pinning
 workflow sets it to true, preventing a version PR from publishing the previous
 processor image accidentally.
 
-If `TEMPLATE_REPOSITORY` is set to
-`wra-bradshaw/cf-nix-cache-template` and `TEMPLATE_REPO_TOKEN` can write to it,
-the publish workflow also opens a PR in the standalone template repository and
-generates its `pnpm-lock.yaml` against the newly published package. The first
+If the `TEMPLATE_REPOSITORY` variable is set to
+`wra-bradshaw/cf-nix-cache-template`, the publish workflow also opens a PR in
+the standalone template repository and generates its `pnpm-lock.yaml` against
+the newly published package. Store `TEMPLATE_REPO_TOKEN` in the `release`
+environment as a fine-grained token scoped to the template repository with
+**Contents: read and write**, **Pull requests: read and write**, and
+**Workflows: read and write** (the sync also updates the template's
+`.github/workflows`). The job force-pushes `release/vX.Y.Z`, reuses an open PR
+for that branch, or creates one, and fails if the PR cannot be created. The first
 npm release may need to be bootstrapped with a short-lived npm token before its
 trusted-publisher settings are available.
 
