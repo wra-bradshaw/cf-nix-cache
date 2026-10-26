@@ -17,8 +17,6 @@ export default async function globalSetup(): Promise<void> {
       'build',
       '--config',
       resolve(workerDirectory, 'vite.config.ts'),
-      '--mode',
-      'e2e',
     ],
     {
       cwd: workerDirectory,
