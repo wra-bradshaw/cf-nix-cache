@@ -52,9 +52,14 @@ jobs:
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+      # Run the remaining checks even when the advisory audit fails, so a new
+      # RustSec advisory does not hide license, ban, or unused-dependency results.
       - uses: taiki-e/install-action@cargo-deny
+        if: ${{ !cancelled() }}
       - run: cargo deny check
+        if: ${{ !cancelled() }}
       - name: Unused dependency report
+        if: ${{ !cancelled() }}
         run: |
           cargo install cargo-machete --locked
           cargo machete
