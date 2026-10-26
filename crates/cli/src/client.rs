@@ -22,7 +22,7 @@ pub(crate) struct Api {
     client: ClientWithMiddleware,
     retry_client: ClientWithMiddleware,
     pub(crate) endpoint: String,
-    token: String,
+    token: Option<String>,
 }
 
 pub(crate) async fn bootstrap(
@@ -60,12 +60,18 @@ impl Api {
                 .context("--endpoint is required")?
                 .trim_end_matches('/')
                 .into(),
-            token: config
-                .token
-                .clone()
-                .or_else(|| std::env::var("CF_NIX_CACHE_TOKEN").ok())
-                .context("not logged in; set CF_NIX_CACHE_TOKEN or run login")?,
+            token: std::env::var("CF_NIX_CACHE_TOKEN")
+                .ok()
+                .filter(|token| !token.is_empty())
+                .or_else(|| config.token.clone()),
         })
+    }
+
+    /// The bearer token; only commands that call authenticated routes need it.
+    fn token(&self) -> Result<&str> {
+        self.token
+            .as_deref()
+            .context("not logged in; set CF_NIX_CACHE_TOKEN or run login")
     }
 
     pub(crate) async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
@@ -87,7 +93,7 @@ impl Api {
             self.client
                 .request(method.clone(), format!("{}{}", self.endpoint, path))
         }
-        .bearer_auth(&self.token);
+        .bearer_auth(self.token()?);
         if matches!(
             method,
             Method::POST | Method::PUT | Method::PATCH | Method::DELETE
@@ -128,7 +134,7 @@ impl Api {
                 .request(method.clone(), format!("{}{}", self.endpoint, path))
         };
         let response = request
-            .bearer_auth(&self.token)
+            .bearer_auth(self.token()?)
             .header("Idempotency-Key", key)
             .send()
             .await?;
@@ -170,7 +176,7 @@ pub(crate) async fn upload_part_with_retry(
     let response = api
         .retry_client
         .put(url)
-        .bearer_auth(&api.token)
+        .bearer_auth(api.token()?)
         .header("Idempotency-Key", new_idempotency_key())
         .body(bytes)
         .send()
