@@ -26,16 +26,16 @@ jobs:
       package_name: ${{ steps.release.outputs.package_name }}
       version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - run: pnpm install --frozen-lockfile
 
       - name: Determine whether a pinned release is ready
@@ -119,19 +119,19 @@ jobs:
     environment: release
     steps:
       - name: Check out the release source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: source
       - name: Check out the public template
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ vars.TEMPLATE_REPOSITORY }}
           token: ${{ secrets.TEMPLATE_REPO_TOKEN }}
           path: template
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.15.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Refresh the standalone template and lockfile
