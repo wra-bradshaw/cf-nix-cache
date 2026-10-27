@@ -3,6 +3,9 @@ packages:
 allowBuilds:
   esbuild: true
   workerd: true
+# Matches pnpm's CI default so a local user-level override cannot produce a
+# lockfile that CI rejects.
+minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - '@cloudflare/vite-plugin@1.51.2'
   - miniflare@5.20260804.0-alpha
