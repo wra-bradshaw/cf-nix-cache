@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "releaseReady": true,
-  "version": "0.1.3",
+  "version": "0.2.0",
   "processorImage": "docker.io/willlol/cf-nix-cache@sha256:27aa6bf4fe57206abd3230ec602904f0db67db56a8890d940c7dbce408d0861b",
   "platform": "linux/amd64"
 }
