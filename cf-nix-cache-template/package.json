@@ -22,7 +22,7 @@
     }
   },
   "dependencies": {
-    "cf-nix-cache": "0.1.1"
+    "cf-nix-cache": "0.1.2"
   },
   "devDependencies": {
     "@types/node": "24.13.3",

@@ -1,5 +1,11 @@
 # cf-nix-cache
 
+## 0.1.2
+
+### Patch Changes
+
+- 2f985f4: Bundle hono 4.13.14, which fixes the hono security advisories affecting the Worker runtime.
+
 ## 0.1.1
 
 ### Patch Changes
