@@ -202,6 +202,37 @@ mod tests {
     use crate::object_store::memory::MemoryStore;
     use cf_nix_cache_core::ENCODING_ID;
 
+    /// Chunk objects are keyed by the raw hash and written with put_if_absent,
+    /// while manifests record the size and hash of freshly compressed bytes.
+    /// Compressed output must therefore be byte-identical for the lifetime of
+    /// ENCODING_ID; a libzstd change that alters it needs a new encoding id.
+    #[test]
+    fn compression_output_is_stable_for_the_encoding_profile() {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let input: Vec<u8> = (0..1 << 20)
+            .map(|index: u32| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                // Mix runs of text-like bytes with noise so both literal and
+                // match encoding paths are exercised.
+                if index % 4096 < 3072 {
+                    b"/nix/store/cf-nix-cache-golden-input "[index as usize % 37]
+                } else {
+                    (state >> 56) as u8
+                }
+            })
+            .collect();
+        let compressed = zstd::encode_all(input.as_slice(), ZSTD_LEVEL).unwrap();
+        assert_eq!(
+            (compressed.len(), sha256_nix(&compressed)),
+            (
+                264_109,
+                "sha256:1r75kjlcavpmzdp0kshxs921h98115mrjlr37hflkgk38zffmq1s".to_owned(),
+            ),
+        );
+    }
+
     #[tokio::test]
     async fn malformed_nar_does_not_write_permanent_chunks() {
         let compressed = zstd::encode_all(&b"not a NAR"[..], 3).unwrap();
