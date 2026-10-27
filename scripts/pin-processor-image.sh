@@ -11,7 +11,7 @@ case "$PROCESSOR_REPOSITORY" in
   *) echo "PROCESSOR_REPOSITORY must be docker.io/<namespace>/<repository>" >&2; exit 1 ;;
 esac
 
-version="$(node -p "require('./packages/cf-nix-cache-worker/package.json').version")"
+version="$(node -p "require('./packages/worker/package.json').version")"
 revision="$(git rev-parse --short=12 HEAD)"
 tag="$PROCESSOR_REPOSITORY:v$version-$revision"
 

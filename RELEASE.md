@@ -20,13 +20,13 @@ private keys, bootstrap secrets, or R2 credentials in the repository.
 The customer-facing release is intentionally independent of the development
 monorepo layout:
 
-1. Build and test `apps/worker`, then build `packages/cf-nix-cache-worker` from
-   the generated Worker bundle.
+1. Build and test `packages/worker`. `pnpm build` runs `vite build` and then
+   lays out the npm package (`dist/index.js`, `dist/index.d.ts`).
 2. Build the `linux/amd64` processor with Nix and publish it to
    `docker.io/willlol/cf-nix-cache` by digest. Do not publish or
    deploy a mutable tag.
 3. Run `node scripts/release-worker-package.mts --version X.Y.Z --image docker.io/willlol/cf-nix-cache@sha256:<digest>` and publish the
-   package with `pnpm --dir packages/cf-nix-cache-worker publish --access public`.
+   package with `pnpm --dir packages/worker publish --access public`.
 4. Update the template's pinned dependency and run its config validation. A
    dependency PR is the only normal customer upgrade input.
 

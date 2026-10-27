@@ -16,7 +16,7 @@ for (const file of files) {
     throw new Error(`${file} is not a draft 2020-12 schema`);
 }
 const generated = await readFile(
-  join(root, "apps/worker/src/generated/contracts.ts"),
+  join(root, "packages/worker/src/generated/contracts.ts"),
   "utf8",
 );
 if (!generated.includes("GENERATED FROM schemas/*.json"))
@@ -42,7 +42,7 @@ try {
   if (regenerated !== generated)
     throw new Error("generated contracts are stale; run contracts:generate");
   const generatedRuntime = await readFile(
-    join(root, "apps/worker/src/generated/json-contracts.ts"),
+    join(root, "packages/worker/src/generated/json-contracts.ts"),
     "utf8",
   );
   const regeneratedRuntime = await readFile(temporaryRuntimeFile, "utf8");

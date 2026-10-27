@@ -9,8 +9,10 @@ a native Rust Container validates NARs and produces deterministic zstd frames.
 
 ## Layout
 
-- `apps/worker`: HTTP API, Nix substituter, authentication, Durable Objects,
-  Container binding, and Workflows.
+- `packages/worker`: the Worker (HTTP API, Nix substituter, authentication,
+  Durable Objects, Container binding, and Workflows). It is also the published
+  `cf-nix-cache` npm package, together with its immutable processor release
+  manifest.
 - `crates/core`: Rust protocol values, encoding parameters, and manifest
   validation.
 - `crates/contracts`: generated Rust wire DTOs from the JSON Schemas.
@@ -18,8 +20,6 @@ a native Rust Container validates NARs and produces deterministic zstd frames.
   FastCDC v2020 chunking, deterministic compression, and R2 writes.
 - `crates/cli`: Nix publisher and administration client.
 - `schemas`: JSON contracts shared by Worker and Rust.
-- `packages/cf-nix-cache-worker`: the published Worker runtime and its
-  immutable processor release manifest.
 - `cf-nix-cache-template`: the isolated public Deploy-to-Cloudflare template.
 
 `wrangler.jsonc` is the source of truth for the Worker, its bindings, and
@@ -51,9 +51,9 @@ integration tests; it is not the customer upgrade path.
 ```console
 cargo fmt --check
 cargo test --workspace
-pnpm --dir apps/worker install
-pnpm --dir apps/worker check  # includes contracts:check and boundaries:check
-pnpm --dir apps/worker test
+pnpm --dir packages/worker install
+pnpm --dir packages/worker check  # includes contracts:check and boundaries:check
+pnpm --dir packages/worker test
 ```
 
 The deployment app has explicit `plan`, `apply`, and `destroy` modes. Only
@@ -66,7 +66,7 @@ Run the full local integration test with Miniflare, local R2, the native Rust
 processor, and a real Nix closure:
 
 ```console
-pnpm --dir apps/worker e2e
+pnpm --dir packages/worker e2e
 ```
 
 The test provisions an isolated Worker, Durable Object, and Workflow environment,
@@ -80,7 +80,7 @@ so local development requires neither an S3 endpoint nor R2 access keys.
 Generate Worker binding types after changing `wrangler.jsonc`:
 
 ```console
-pnpm --dir apps/worker exec wrangler types --config "$PWD/wrangler.jsonc"
+pnpm --dir packages/worker exec wrangler types --config "$PWD/wrangler.jsonc"
 ```
 
 The processor image is built by Nix for `x86_64-linux`, using the Crane/Fenix
@@ -111,11 +111,11 @@ the loaded image when the Nix output is unchanged. Secrets are installed with
 `wrangler secret put` and never committed to the repository:
 
 ```console
-pnpm --dir apps/worker exec wrangler secret put AUTH_PRIVATE_JWK --config "$PWD/wrangler.jsonc"
-pnpm --dir apps/worker exec wrangler secret put AUTH_PUBLIC_JWKS --config "$PWD/wrangler.jsonc"
-pnpm --dir apps/worker exec wrangler secret put NIX_PRIVATE_JWK --config "$PWD/wrangler.jsonc"
-pnpm --dir apps/worker exec wrangler secret put NIX_PUBLIC_KEYS --config "$PWD/wrangler.jsonc"
-pnpm --dir apps/worker exec wrangler secret put BOOTSTRAP_SECRET_HASH --config "$PWD/wrangler.jsonc"
+pnpm --dir packages/worker exec wrangler secret put AUTH_PRIVATE_JWK --config "$PWD/wrangler.jsonc"
+pnpm --dir packages/worker exec wrangler secret put AUTH_PUBLIC_JWKS --config "$PWD/wrangler.jsonc"
+pnpm --dir packages/worker exec wrangler secret put NIX_PRIVATE_JWK --config "$PWD/wrangler.jsonc"
+pnpm --dir packages/worker exec wrangler secret put NIX_PUBLIC_KEYS --config "$PWD/wrangler.jsonc"
+pnpm --dir packages/worker exec wrangler secret put BOOTSTRAP_SECRET_HASH --config "$PWD/wrangler.jsonc"
 ```
 
 ## Storage contract

@@ -1,11 +1,11 @@
 {
-  "$schema": "./apps/worker/node_modules/wrangler/config-schema.json",
+  "$schema": "./packages/worker/node_modules/wrangler/config-schema.json",
   // The top level is local development (`nix run .#dev`, e2e) and the
   // package build; deploys use env.production via `nix run .#deploy -- apply`.
   // Keep this name: the Vite plugin derives its output directory from it
-  // (apps/worker/dist/cf_nix_cache), which the package build and e2e read.
+  // (packages/worker/dist/cf_nix_cache), which the package build and e2e read.
   "name": "cf-nix-cache",
-  "main": "apps/worker/src/index.ts",
+  "main": "packages/worker/src/index.ts",
   "compatibility_date": "2026-08-10",
   "workers_dev": true,
   // Custom hostname: add a "routes" entry, e.g.

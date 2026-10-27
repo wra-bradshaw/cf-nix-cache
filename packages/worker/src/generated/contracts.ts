@@ -1,5 +1,5 @@
 // GENERATED FROM schemas/*.json. Do not edit by hand.
-// Regenerate with: pnpm --dir apps/worker contracts:generate
+// Regenerate with: pnpm --dir packages/worker contracts:generate
 
 // Source: schemas/api.json
 export type CfNixCacheAPIContract =

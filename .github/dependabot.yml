@@ -1,20 +1,13 @@
 version: 2
 updates:
-  # pnpm projects use the npm ecosystem. Each directory has its own lockfile.
+  # pnpm projects use the npm ecosystem. The root pnpm workspace (including
+  # packages/worker) shares one lockfile; the template has its own.
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
     groups:
-      root-minor-and-patch:
-        update-types: [minor, patch]
-
-  - package-ecosystem: npm
-    directory: /apps/worker
-    schedule:
-      interval: weekly
-    groups:
-      worker-minor-and-patch:
+      workspace-minor-and-patch:
         update-types: [minor, patch]
     ignore:
       # Keep Node typings at or below the Node 22 runtime used by CI and

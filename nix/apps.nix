@@ -67,7 +67,7 @@ forEachSupportedSystem (
         ')"
 
         w() {
-          pnpm --dir apps/worker exec wrangler "$@" --config "$PWD/wrangler.jsonc"
+          pnpm --dir packages/worker exec wrangler "$@" --config "$PWD/wrangler.jsonc"
         }
 
         ensure_bucket_and_lifecycle() {
@@ -94,7 +94,7 @@ forEachSupportedSystem (
         }
 
         check_secrets() {
-          secret_json="$(pnpm --dir apps/worker exec wrangler secret list \
+          secret_json="$(pnpm --dir packages/worker exec wrangler secret list \
             --config "$PWD/wrangler.jsonc" \
             --env production \
             --format json)"
@@ -119,7 +119,7 @@ forEachSupportedSystem (
             # account resources.
             CLOUDFLARE_ENV=production \
               CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH="$PWD/wrangler.jsonc" \
-              pnpm --dir apps/worker build
+              pnpm --dir packages/worker build
             w deploy --dry-run --env production
             ;;
           destroy)
@@ -139,18 +139,18 @@ forEachSupportedSystem (
 
             image_ref="$(cf-nix-cache-prepare-image)"
             rendered_config=".wrangler.production.json"
-            node apps/worker/scripts/render-wrangler-config.mts \
+            node packages/worker/scripts/render-wrangler-config.mts \
               --input wrangler.jsonc \
               --output "$rendered_config" \
               --image "registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$image_ref"
             CLOUDFLARE_ENV=production \
               CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH="$PWD/$rendered_config" \
-              pnpm --dir apps/worker build
+              pnpm --dir packages/worker build
 
-            pnpm --dir apps/worker exec wrangler containers push \
+            pnpm --dir packages/worker exec wrangler containers push \
               "$image_ref" \
               --config "$PWD/wrangler.jsonc"
-            pnpm --dir apps/worker exec wrangler deploy \
+            pnpm --dir packages/worker exec wrangler deploy \
               --config "$PWD/$rendered_config" \
               --env production
             ;;
@@ -169,7 +169,7 @@ forEachSupportedSystem (
       text = ''
         image_ref="$(cf-nix-cache-prepare-image)"
         docker tag "$image_ref" "cf-nix-cache-processor:nix-local"
-        exec pnpm --dir apps/worker dev "$@"
+        exec pnpm --dir packages/worker dev "$@"
       '';
     };
   in

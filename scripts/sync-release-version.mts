@@ -8,11 +8,11 @@ const repository = path.resolve(
 );
 const packagePath = path.join(
   repository,
-  "packages/cf-nix-cache-worker/package.json",
+  "packages/worker/package.json",
 );
 const manifestPath = path.join(
   repository,
-  "packages/cf-nix-cache-worker/release-manifest.json",
+  "packages/worker/release-manifest.json",
 );
 const templatePackagePath = path.join(
   repository,

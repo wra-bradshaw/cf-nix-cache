@@ -13,13 +13,13 @@ const writeGithubOutput = process.argv.includes("--github-output");
 
 const packageJson = JSON.parse(
   await readFile(
-    path.join(repository, "packages/cf-nix-cache-worker/package.json"),
+    path.join(repository, "packages/worker/package.json"),
     "utf8",
   ),
 ) as { name: string; version: string };
 const manifest = JSON.parse(
   await readFile(
-    path.join(repository, "packages/cf-nix-cache-worker/release-manifest.json"),
+    path.join(repository, "packages/worker/release-manifest.json"),
     "utf8",
   ),
 ) as {
@@ -84,7 +84,7 @@ if (!allowPlaceholder) {
   const placeholders = [
     ...(await placeholderFiles(path.join(repository, "cf-nix-cache-template"))),
     ...(await placeholderFiles(
-      path.join(repository, "packages/cf-nix-cache-worker"),
+      path.join(repository, "packages/worker"),
     )),
   ];
   if (placeholders.length > 0)

@@ -1,14 +1,46 @@
 {
-  "name": "cf-nix-cache-worker",
-  "private": true,
+  "name": "cf-nix-cache",
+  "version": "0.1.0",
+  "description": "The published Cloudflare Worker runtime for cf-nix-cache",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wra-bradshaw/cf-nix-cache.git",
+    "directory": "packages/worker"
+  },
+  "homepage": "https://github.com/wra-bradshaw/cf-nix-cache#readme",
+  "bugs": {
+    "url": "https://github.com/wra-bradshaw/cf-nix-cache/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist/index.js",
+    "dist/index.js.map",
+    "dist/index.d.ts",
+    "release-manifest.json"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json",
+    "./release-manifest.json": "./release-manifest.json"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "check": "tsc --noEmit && tsc -p tsconfig.node.json && eslint . && prettier --check . && pnpm boundaries:check && pnpm contracts:check && knip",
     "fix": "eslint . --fix && prettier --write .",
     "dev": "vite dev",
     "predev": "pnpm contracts:generate",
-    "build": "vite build",
+    "build": "vite build && node scripts/package.mts",
     "prebuild": "pnpm contracts:generate",
+    "prepack": "pnpm build",
     "deploy": "pnpm build && wrangler deploy",
     "test": "vitest run",
     "pretest": "pnpm contracts:generate",
@@ -21,11 +53,14 @@
     "e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "devDependencies": {
+    "@cloudflare/containers": "^0.3.7",
     "@cloudflare/vite-plugin": "^1.51.2",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
     "ajv": "^8.20.0",
     "eslint": "^10.8.1",
+    "hono": "^4.7.10",
+    "jose": "^6.0.10",
     "jsonc-parser": "^3.3.1",
     "json-schema-to-typescript": "^15.0.4",
     "knip": "^6.32.1",
@@ -35,10 +70,5 @@
     "vite": "^7.3.6",
     "vitest": "^4.1.10",
     "wrangler": "^4.120.1"
-  },
-  "dependencies": {
-    "@cloudflare/containers": "^0.3.7",
-    "hono": "^4.7.10",
-    "jose": "^6.0.10"
   }
 }

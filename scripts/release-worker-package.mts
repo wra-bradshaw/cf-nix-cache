@@ -6,7 +6,7 @@ const repository = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
-const packageDirectory = path.join(repository, "packages/cf-nix-cache-worker");
+const packageDirectory = path.join(repository, "packages/worker");
 
 function option(name: string): string {
   const index = process.argv.indexOf(name);

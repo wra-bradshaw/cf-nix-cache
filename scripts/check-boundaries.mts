@@ -3,7 +3,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const workerSource = join(root, "apps/worker/src");
+const workerSource = join(root, "packages/worker/src");
 const featureRoot = join(workerSource, "features");
 
 async function sourceFiles(directory: string): Promise<string[]> {
@@ -85,7 +85,7 @@ for (const file of allSourceFiles.filter((value) =>
 }
 
 const integrationEntry = await readFile(
-  join(root, "apps/worker/e2e/integration.test.ts"),
+  join(root, "packages/worker/e2e/integration.test.ts"),
   "utf8",
 );
 if (/createTestHarness|execFileSync/.test(integrationEntry))

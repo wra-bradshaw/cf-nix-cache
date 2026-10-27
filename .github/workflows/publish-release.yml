@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "packages/cf-nix-cache-worker/package.json"
-      - "packages/cf-nix-cache-worker/release-manifest.json"
+      - "packages/worker/package.json"
+      - "packages/worker/release-manifest.json"
       - "cf-nix-cache-template/package.json"
       - "cf-nix-cache-template/wrangler.jsonc"
   workflow_dispatch:
@@ -41,7 +41,7 @@ jobs:
       - name: Determine whether a pinned release is ready
         id: release
         run: |
-          if ! node -e "process.exit(require('./packages/cf-nix-cache-worker/release-manifest.json').releaseReady === true ? 0 : 1)"; then
+          if ! node -e "process.exit(require('./packages/worker/release-manifest.json').releaseReady === true ? 0 : 1)"; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "Release metadata has no pinned processor image yet; nothing to publish."
             exit 0
@@ -77,18 +77,16 @@ jobs:
           package_dir="$(mktemp -d)"
           tarball="$(npm pack "$PACKAGE_NAME@$VERSION" --pack-destination "$package_dir" --silent)"
           tar -xOf "$package_dir/$tarball" package/release-manifest.json | jq -S . > "$package_dir/published.json"
-          jq -S . packages/cf-nix-cache-worker/release-manifest.json > "$package_dir/expected.json"
+          jq -S . packages/worker/release-manifest.json > "$package_dir/expected.json"
           diff -u "$package_dir/expected.json" "$package_dir/published.json"
 
       - name: Build and test the npm artifact
         if: steps.release.outputs.ready == 'true' && steps.npm.outputs.published == 'false'
         run: |
-          pnpm --dir apps/worker install --frozen-lockfile
-          pnpm --dir apps/worker check
-          pnpm --dir apps/worker test
-          pnpm --dir apps/worker build
-          pnpm --dir packages/cf-nix-cache-worker build
-          npm pack ./packages/cf-nix-cache-worker --dry-run
+          pnpm --dir packages/worker check
+          pnpm --dir packages/worker test
+          pnpm --dir packages/worker build
+          npm pack ./packages/worker --dry-run
 
       - name: Publish npm package with trusted publishing
         if: steps.release.outputs.ready == 'true' && steps.npm.outputs.published == 'false'
@@ -98,7 +96,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           npm install --global npm@11
-          npm publish ./packages/cf-nix-cache-worker --access public
+          npm publish ./packages/worker --access public
 
       - name: Create the GitHub release
         if: steps.release.outputs.ready == 'true'

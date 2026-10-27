@@ -5,7 +5,7 @@ contract DTOs and authenticates requests; application workflows coordinate
 ports; domain validation and state transitions are independent of Cloudflare,
 SQL, HTTP, R2, AWS, and CLI adapters. The checked-in JSON Schemas are the wire
 contract source, with generated Rust DTOs in `crates/contracts` and generated
-Worker validators in `apps/worker/src/generated`.
+Worker validators in `packages/worker/src/generated`.
 
 ```text
 stock Nix / CLI
