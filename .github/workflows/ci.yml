@@ -16,7 +16,7 @@ jobs:
   checks:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
       - name: Install the pnpm workspace
         run: nix develop --command pnpm install --frozen-lockfile
