@@ -38,7 +38,7 @@
   "containers": [
     {
       "class_name": "ProcessorContainer",
-      "image": "docker.io/willlol/cf-nix-cache@sha256:0341ea1a889bac0aec26bbfd5d0895e81796c40b33508ce341299942a1aedd62",
+      "image": "docker.io/willlol/cf-nix-cache@sha256:d09b2586b7d6cbb8024eace6a531f2e71db4a57de2108a59dce4594fa0ea8b56",
       "max_instances": 10,
     },
   ],
