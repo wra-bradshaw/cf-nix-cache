@@ -28,7 +28,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 zstd = "0.14"
 async-compression = { version = "0.4", features = ["tokio", "zstd"] }
-nix-nar = "0.5"
+nix-nar = "0.6"
 tokio-util = { version = "0.7", features = ["io-util"] }
 axum = "0.8"
 fastcdc = { version = "4.0.1", features = ["tokio"] }
