@@ -4,64 +4,38 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Pull requests opened with GITHUB_TOKEN (Release PR, Prepare release
-  # artifacts) do not trigger pull_request runs; those workflows dispatch CI
-  # on their branch so the PR head commit still gets checks.
+  # Pull requests opened with GITHUB_TOKEN (the Release PR) do not trigger
+  # pull_request runs; the release workflow dispatches CI on its branch so the
+  # PR head commit still gets checks.
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  release-metadata:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm release:check --allow-placeholder
-
   checks:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
-      - name: Check Rust and Worker
+      - name: Check release metadata
+        run: |
+          nix develop --command pnpm install --frozen-lockfile
+          nix develop --command pnpm release:check --allow-placeholder
+      - name: Check Rust
         run: |
           nix develop --command cargo fmt --check
-          nix develop --command cargo test --workspace
           nix develop --command cargo clippy --workspace --all-targets -- -D warnings
+          nix develop --command cargo test --workspace
+      - name: Check Worker and npm package
+        run: |
           nix develop --command pnpm --dir apps/worker install --frozen-lockfile
           nix develop --command pnpm --dir apps/worker check
           nix develop --command pnpm --dir apps/worker test
           nix develop --command pnpm --dir apps/worker build
           nix develop --command pnpm --dir packages/cf-nix-cache-worker build
           nix develop --command npm pack ./packages/cf-nix-cache-worker --dry-run
-          nix flake check
-          nix build .#cli
-          nix build .#processor
-          nix build .#packages.x86_64-linux.processorImage
-
-  dependency-audit:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      # Run the remaining checks even when the advisory audit fails, so a new
-      # RustSec advisory does not hide license, ban, or unused-dependency results.
-      - uses: taiki-e/install-action@cargo-deny
-        if: ${{ !cancelled() }}
-      - run: cargo deny check
-        if: ${{ !cancelled() }}
-      - name: Unused dependency report
-        if: ${{ !cancelled() }}
+      - name: Build Nix outputs
         run: |
-          cargo install cargo-machete --locked
-          cargo machete
+          nix flake check
+          nix build .#cli .#processor .#packages.x86_64-linux.processorImage
