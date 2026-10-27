@@ -40,6 +40,10 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # reqwest-middleware and reqwest-retry are built against a specific
+      # reqwest major, so the three must be upgraded together.
+      reqwest:
+        patterns: ["reqwest", "reqwest-*"]
       cargo-minor-and-patch:
         update-types: [minor, patch]
     ignore:
