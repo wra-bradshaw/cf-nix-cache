@@ -25,9 +25,9 @@
     "cf-nix-cache": "0.1.2"
   },
   "devDependencies": {
-    "@types/node": "24.13.3",
-    "tsx": "4.19.4",
+    "@types/node": "24.19.2",
+    "tsx": "4.23.15",
     "typescript": "5.9.2",
-    "wrangler": "4.120.1"
+    "wrangler": "4.152.0"
   }
 }
