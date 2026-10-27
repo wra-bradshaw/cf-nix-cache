@@ -1,14 +1,11 @@
 name: Release PR
 
+# Every push to main rebuilds the version PR from the new HEAD, so the pinned
+# processor image always matches the code that merging the PR releases. With
+# no pending changesets the job does nothing.
 on:
   push:
     branches: [main]
-    paths:
-      - ".changeset/**"
-      - "packages/cf-nix-cache-worker/package.json"
-      - "pnpm-lock.yaml"
-      - ".github/workflows/release-pr.yml"
-      - "scripts/pin-processor-image.sh"
 
 concurrency:
   group: changesets-release-pr
