@@ -1,5 +1,8 @@
 allowBuilds:
   esbuild: true
   workerd: true
+# cf-nix-cache is published by this project and is installed by the release
+# job minutes after publishing, so the release-age delay cannot apply to it.
 minimumReleaseAgeExclude:
+  - cf-nix-cache
   - wrangler@4.120.1
