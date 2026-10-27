@@ -34,7 +34,7 @@ axum = "0.8"
 fastcdc = { version = "4.0.1", features = ["tokio"] }
 futures = "0.3"
 reqwest-middleware = { version = "0.4", features = ["json"] }
-reqwest-retry = "0.8"
+reqwest-retry = "0.9"
 etcetera = "0.11"
 nix-base32 = "0.2"
 typify = "0.7"
