@@ -42,6 +42,11 @@ updates:
     groups:
       cargo-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # Chunk boundaries are part of the frozen encoding profile
+      # (fastcdc-v2020-...-v1); a new major needs a new encoding id.
+      - dependency-name: fastcdc
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: nix
     directory: /
