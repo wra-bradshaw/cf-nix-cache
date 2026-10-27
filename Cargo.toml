@@ -31,7 +31,7 @@ async-compression = { version = "0.4", features = ["tokio", "zstd"] }
 nix-nar = "0.5"
 tokio-util = { version = "0.7", features = ["io-util"] }
 axum = "0.8"
-fastcdc = { version = "4.0.1", features = ["tokio"] }
+fastcdc = { version = "5.0.0", features = ["tokio"] }
 futures = "0.3"
 reqwest-middleware = { version = "0.4", features = ["json"] }
 reqwest-retry = "0.8"
