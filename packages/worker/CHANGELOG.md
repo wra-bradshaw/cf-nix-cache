@@ -1,5 +1,11 @@
 # cf-nix-cache
 
+## 0.1.3
+
+### Patch Changes
+
+- 8c58909: Repair the Release PR workflow for Changesets v3 compatibility.
+
 ## 0.1.2
 
 ### Patch Changes
