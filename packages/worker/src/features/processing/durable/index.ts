@@ -1,1 +1,1 @@
-export { ProcessorContainer } from './container';
+export { ObjectStoreProxy, ProcessorContainer } from './container';

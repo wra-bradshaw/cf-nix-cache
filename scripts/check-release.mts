@@ -96,7 +96,7 @@ if (templatePackage.dependencies?.[packageJson.name] !== packageJson.version)
   failures.push(
     `template dependency must pin ${packageJson.name}@${packageJson.version}`,
   );
-if (!wrangler.includes(`"image": "${manifest.processorImage}"`))
+if (!wrangler.includes(`"PROCESSOR_IMAGE": "${manifest.processorImage}"`))
   failures.push("template Wrangler image does not match the release manifest");
 
 if (failures.length > 0) {

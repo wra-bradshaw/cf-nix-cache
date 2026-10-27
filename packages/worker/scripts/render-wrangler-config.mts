@@ -14,12 +14,15 @@ const output = option('--output');
 const image = option('--image');
 const source = await readFile(input, 'utf8');
 const errors: ParseError[] = [];
+type ContainerConfig = {
+  class_name?: string;
+  images?: {
+    processor?: { dockerfile?: string; build_vars?: Record<string, string> };
+  };
+};
 const config = parse(source, errors, { allowTrailingComma: true }) as {
-  containers?: Array<{ class_name?: string; image?: string }>;
-  env?: Record<
-    string,
-    { containers?: Array<{ class_name?: string; image?: string }> }
-  >;
+  containers?: ContainerConfig[];
+  env?: Record<string, { containers?: ContainerConfig[] }>;
 };
 
 if (errors.length > 0) {
@@ -30,8 +33,9 @@ if (errors.length > 0) {
   );
 }
 
+// The Dockerfile takes the base image as the PROCESSOR_IMAGE build argument.
 function replaceProcessorImage(
-  containerConfig: Array<{ class_name?: string; image?: string }> | undefined,
+  containerConfig: ContainerConfig[] | undefined,
   location: string,
 ): void {
   if (!Array.isArray(containerConfig)) {
@@ -45,7 +49,16 @@ function replaceProcessorImage(
       `${location}.containers must contain exactly one ProcessorContainer`,
     );
   }
-  processorContainers[0].image = image;
+  const processorImage = processorContainers[0].images?.processor;
+  if (!processorImage?.dockerfile) {
+    throw new Error(
+      `${location}.containers ProcessorContainer must build images.processor from a dockerfile`,
+    );
+  }
+  processorImage.build_vars = {
+    ...processorImage.build_vars,
+    PROCESSOR_IMAGE: image,
+  };
 }
 
 replaceProcessorImage(config.containers, 'top-level');

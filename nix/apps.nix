@@ -137,19 +137,18 @@ forEachSupportedSystem (
             check_secrets
             ensure_bucket_and_lifecycle
 
+            # Wrangler builds the Dockerfile on top of the loaded Nix image and
+            # pushes it to the account's registry during deploy.
             image_ref="$(cf-nix-cache-prepare-image)"
             rendered_config=".wrangler.production.json"
             node packages/worker/scripts/render-wrangler-config.mts \
               --input wrangler.jsonc \
               --output "$rendered_config" \
-              --image "registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$image_ref"
+              --image "$image_ref"
             CLOUDFLARE_ENV=production \
               CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH="$PWD/$rendered_config" \
               pnpm --dir packages/worker build
 
-            pnpm --dir packages/worker exec wrangler containers push \
-              "$image_ref" \
-              --config "$PWD/wrangler.jsonc"
             pnpm --dir packages/worker exec wrangler deploy \
               --config "$PWD/$rendered_config" \
               --env production

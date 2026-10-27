@@ -36,13 +36,14 @@ The supported customer distribution is the standalone
 tiny Worker entrypoint, pinned Wrangler/dependency versions, customer-owned
 `wrangler.jsonc`, and setup/upgrade helpers. Cloudflare Workers Builds runs
 `pnpm run deploy`; external CI can run the same command. No deployment from that
-template builds Rust or a Container image.
+template builds Rust; Wrangler only wraps the pre-built processor image in a
+one-line Dockerfile and pushes it to the account's registry.
 
 Releases publish `cf-nix-cache@X.Y.Z` and the matching public
 `linux/amd64` processor image. The package's release manifest records the
 immutable image digest, so Dependabot/Renovate updates one dependency. The
 template renders a temporary Wrangler config that changes only the processor
-image and leaves customer names, scaling, placement, routes, and observability
+image and leaves customer names, placement, routes, and observability
 intact. The development flake below remains useful for local builds and
 integration tests; it is not the customer upgrade path.
 
@@ -73,19 +74,26 @@ The test provisions an isolated Worker, Durable Object, and Workflow environment
 pushes `nixpkgs#hello`, verifies the signed Nix metadata and ranged NAR
 responses, then reconstructs the closure with `nix copy`.
 
-The Container reaches R2 at the virtual `http://cache.r2` origin. Wrangler's
-Container egress interception dispatches that host to the Worker's R2 binding,
-so local development requires neither an S3 endpoint nor R2 access keys.
+The Container reaches R2 at the virtual `http://cache.r2` origin. Container
+egress interception dispatches that host to the Worker's `ObjectStoreProxy`
+entrypoint and its R2 binding, so local development requires neither an S3
+endpoint nor R2 access keys.
+
+`ProcessorContainer` uses the `durable_object` scheduling policy: it is a plain
+Durable Object that starts its container itself with the `processor` image from
+`ctx.container.images`, registers the `cache.r2` interception, waits for
+`/ready`, and sets a two-minute inactivity timeout.
 
 Generate Worker binding types after changing `wrangler.jsonc`:
 
 ```console
+cp .dev.vars.example .dev.vars # if absent, so the secret types are included
 pnpm --dir packages/worker exec wrangler types --config "$PWD/wrangler.jsonc"
 ```
 
 The processor image is built by Nix for `x86_64-linux`, using the Crane/Fenix
 toolchain and the configured Linux builder. Docker is only used to load the
-result locally and to perform Wrangler's registry operation; it never builds
+result locally and to wrap it in Wrangler's container build; it never builds
 Rust. Start local development with:
 
 ```console
@@ -97,10 +105,10 @@ the `cf-nix-cache-dev` bucket); the required secrets, including `NIX_PUBLIC_KEYS
 from a gitignored `.dev.vars` (copy `.dev.vars.example`). Deployments use
 `env.production`.
 
-For production, the deploy app builds the same cached Nix image, pushes an
-immutable tag to Cloudflare Registry, ensures the production R2 bucket and
-lifecycle rules, and deploys a generated Wrangler config that references that
-tag:
+For production, the deploy app builds the same cached Nix image, ensures the
+production R2 bucket and lifecycle rules, and deploys a generated Wrangler
+config whose `PROCESSOR_IMAGE` build variable names that image; Wrangler builds
+the wrapper `Dockerfile` and pushes it to Cloudflare Registry:
 
 ```console
 nix run .#deploy -- apply

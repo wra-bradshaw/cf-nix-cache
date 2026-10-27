@@ -3,6 +3,7 @@ import {
   AuditLog,
   CacheCoordinator,
   CacheIndexShard,
+  ObjectStoreProxy,
   ProcessorContainer,
   SystemControl,
   TokenCatalog,
@@ -13,8 +14,6 @@ import {
   ProcessUploadWorkflow,
 } from './features/workflows';
 
-export { ContainerProxy } from '@cloudflare/containers';
-
 export {
   SystemControl,
   TokenCatalog,
@@ -22,6 +21,7 @@ export {
   CacheCoordinator,
   CacheIndexShard,
   UploadJob,
+  ObjectStoreProxy,
   ProcessorContainer,
   ProcessUploadWorkflow,
   DeleteCacheWorkflow,

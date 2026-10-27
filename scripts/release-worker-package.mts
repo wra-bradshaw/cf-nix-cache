@@ -70,7 +70,7 @@ const wranglerPath = path.join(
 );
 const wrangler = await readFile(wranglerPath, "utf8");
 const imageProperty =
-  /("image"\s*:\s*")docker\.io\/[^"\s]+@sha256:[0-9a-f]{64}(")/;
+  /("PROCESSOR_IMAGE"\s*:\s*")docker\.io\/[^"\s]+@sha256:[0-9a-f]{64}(")/;
 if (!imageProperty.test(wrangler)) {
   throw new Error(
     "could not find the processor image in template wrangler.jsonc",

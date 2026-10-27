@@ -5,19 +5,19 @@ repository and a real `linux/amd64` processor digest. They are intentionally
 outside the monorepo's Rust/Nix test suite because a Deploy button clones this
 repository independently.
 
-| Scenario               | Check                                                                                                                                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scenario               | Check                                                                                                                                                                                                 |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | First deployment       | Set only `CF_NIX_CACHE_BOOTSTRAP_SECRET`; run `pnpm run setup`; verify Worker, seven Durable Object bindings, two Workflows, Container, R2 bucket, lifecycle rules, `/health`, and `/api/public-key`. |
-| Bootstrap and Nix      | Run the generated command, create a public cache, and complete a real `nix copy` against `/cache/<name>`.                                                                                         |
+| Bootstrap and Nix      | Run the generated command, create a public cache, and complete a real `nix copy` against `/cache/<name>`.                                                                                             |
 | Idempotency            | Run `pnpm run deploy` twice; the public key and all five Worker secret names remain unchanged.                                                                                                        |
-| Package upgrade        | Update only `cf-nix-cache`; verify the rendered config changes only `ProcessorContainer.image`.                                                                                                   |
-| Rollback               | Pin the previous package version and deploy; verify its manifest digest is restored.                                                                                                              |
-| Missing/partial secret | Delete one Worker secret; `pnpm run deploy` and `pnpm run doctor` fail without generating a replacement key.                                                                                              |
-| Container rollout      | Use a deliberately failing image in a disposable account; confirm the Worker version is uploaded but production Container rollout reports failure.                                                |
-| Customer config        | Change bucket name, Worker name, `max_instances`, route, and observability; deploy and verify those values survive package upgrades.                                                              |
+| Package upgrade        | Update only `cf-nix-cache`; verify the rendered config changes only `ProcessorContainer.images.processor.build_vars.PROCESSOR_IMAGE`.                                                                 |
+| Rollback               | Pin the previous package version and deploy; verify its manifest digest is restored.                                                                                                                  |
+| Missing/partial secret | Delete one Worker secret; `pnpm run deploy` and `pnpm run doctor` fail without generating a replacement key.                                                                                          |
+| Container rollout      | Use a deliberately failing image in a disposable account; confirm the Worker version is uploaded but production Container rollout reports failure.                                                    |
+| Customer config        | Change bucket name, Worker name, route, and observability; deploy and verify those values survive package upgrades.                                                                                   |
 | Preview                | Run `pnpm run preview`; verify a Worker version is uploaded and the production Container application is unchanged.                                                                                    |
 | External CI            | Run the same `pnpm run deploy` from GitHub Actions, GitLab CI, and a shell runner with Wrangler credentials.                                                                                          |
-| Teardown safety        | Delete the Worker while the bucket is non-empty; verify the bucket and objects remain until explicitly removed.                                                                                   |
+| Teardown safety        | Delete the Worker while the bucket is non-empty; verify the bucket and objects remain until explicitly removed.                                                                                       |
 
 Private keys must not occur in repository files, command arguments, or Wrangler
 logs. The helper's bulk secret input is stdin-only and all

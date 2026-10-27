@@ -42,8 +42,11 @@
   "containers": [
     {
       "class_name": "ProcessorContainer",
-      "image": "./Dockerfile",
-      "max_instances": 10,
+      // Each ProcessorContainer chooses this image when it starts its
+      // container. PROCESSOR_IMAGE defaults to the locally loaded Nix image;
+      // `nix run .#deploy -- apply` overrides it in the rendered config.
+      "scheduling_policy": "durable_object",
+      "images": { "processor": { "dockerfile": "./Dockerfile" } },
     },
   ],
   "workflows": [
@@ -92,8 +95,8 @@
       "containers": [
         {
           "class_name": "ProcessorContainer",
-          "image": "./Dockerfile",
-          "max_instances": 10,
+          "scheduling_policy": "durable_object",
+          "images": { "processor": { "dockerfile": "./Dockerfile" } },
         },
       ],
       "workflows": [

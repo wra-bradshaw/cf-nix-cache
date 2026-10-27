@@ -25,7 +25,15 @@ export const secretNames = [
 
 type Container = {
   class_name?: string;
-  image?: string;
+  scheduling_policy?: string;
+  images?: {
+    processor?: {
+      dockerfile?: string;
+      build_vars?: Record<string, string>;
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 };
 export type TemplateConfig = {
@@ -235,12 +243,17 @@ export function validateConfig(config: TemplateConfig, image: string): void {
   const containers = processorContainers(config);
   if (containers.length < 1)
     fail("wrangler.jsonc must define at least one ProcessorContainer");
-  const configuredImage = containers[0].image;
-  if (!configuredImage || configuredImage !== image) {
-    // The source config may retain the last release image. It is rendered into
-    // a temporary config for every deploy, so only warn through the caller.
-    validateImageReference(image);
+  for (const container of containers) {
+    if (container.scheduling_policy !== "durable_object")
+      fail('ProcessorContainer must use "scheduling_policy": "durable_object"');
+    if (!container.images?.processor?.dockerfile)
+      fail(
+        "ProcessorContainer must build images.processor from a dockerfile (./Dockerfile)",
+      );
   }
+  // The source config may retain the last release image. It is rendered into
+  // a temporary config for every deploy, so only the rendered value matters.
+  validateImageReference(image);
   const durableNames = new Set(
     (config.durable_objects?.bindings ?? []).map((binding) => binding.name),
   );
@@ -265,8 +278,16 @@ export function validateConfig(config: TemplateConfig, image: string): void {
 export async function renderedConfig(image: string): Promise<string> {
   const config = await readConfig();
   validateConfig(config, image);
-  const containers = processorContainers(config);
-  for (const container of containers) container.image = image;
+  // ./Dockerfile takes the processor image as its PROCESSOR_IMAGE build
+  // argument; Wrangler builds it and pushes it to the account's registry.
+  for (const container of processorContainers(config)) {
+    const processor = container.images?.processor;
+    if (processor)
+      processor.build_vars = {
+        ...processor.build_vars,
+        PROCESSOR_IMAGE: image,
+      };
+  }
   // The rendered file sits beside wrangler.jsonc so that every relative path
   // in the customer config (main, $schema, assets, rules, tsconfig) resolves
   // exactly as it does for the source config.

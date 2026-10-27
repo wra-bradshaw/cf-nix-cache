@@ -8,14 +8,16 @@ This repository is the supported customer deployment surface for cf-nix-cache.
 Cloudflare clones it into your GitHub repository and Workers Builds runs the
 same `pnpm run deploy` command that can be used from GitHub Actions, GitLab CI,
 Jenkins, or another runner. The repository contains no Rust source and never
-builds a processor image.
+compiles the processor.
 
 ## First deployment
 
 This application requires the Workers Paid plan because it uses Containers,
-and the account must have R2 enabled. The template itself does not require
-Docker: it deploys the public, pre-built processor image pinned by the Worker
-package's release manifest.
+and the account must have R2 enabled. The processor Container uses the
+`durable_object` scheduling policy, so `pnpm run deploy` needs Docker: Wrangler
+builds `Dockerfile`, a wrapper that adds nothing to the public, pre-built
+processor image pinned by the Worker package's release manifest, and pushes it
+to the account's Cloudflare container registry.
 
 1. Click **Deploy to Cloudflare**, choose the account and destination
    repository, and keep Workers Builds enabled.
@@ -24,7 +26,9 @@ package's release manifest.
    characters. It is hashed in memory and is never committed or passed as a
    command-line argument.
 3. Review `wrangler.jsonc` and edit the Worker name, R2 bucket name,
-   `max_instances`, placement, routes, and observability to suit the account.
+   placement, routes, and observability to suit the account. Running processor
+   containers count toward the account's Container limits; the
+   `durable_object` policy has no `max_instances` setting.
    The `CACHE_BUCKET` binding is the supported cache bucket. The helper creates
    it if it does not exist and applies the staging/multipart lifecycle rules.
 4. Trigger the build. The first run deploys the Worker and bindings, creates
@@ -55,7 +59,8 @@ pnpm run deploy
 
 The package's `release-manifest.json` supplies the matching immutable
 `linux/amd64` processor image digest. The helper renders a temporary Wrangler
-config that changes only `ProcessorContainer.image`; all other customer
+config that changes only the `PROCESSOR_IMAGE` build variable of
+`ProcessorContainer`'s `processor` image; all other customer
 configuration remains untouched. You may set
 `CF_NIX_CACHE_PROCESSOR_IMAGE` to an immutable digest in a private mirror when
 required. Mutable tags such as `latest` are rejected.

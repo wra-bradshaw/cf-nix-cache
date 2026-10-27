@@ -38,8 +38,19 @@
   "containers": [
     {
       "class_name": "ProcessorContainer",
-      "image": "docker.io/willlol/cf-nix-cache@sha256:27aa6bf4fe57206abd3230ec602904f0db67db56a8890d940c7dbce408d0861b",
-      "max_instances": 10,
+      "scheduling_policy": "durable_object",
+      // `pnpm run deploy` builds ./Dockerfile on top of the processor image
+      // pinned by the installed cf-nix-cache release, and pushes it to this
+      // account's container registry. PROCESSOR_IMAGE is kept in sync with
+      // that release.
+      "images": {
+        "processor": {
+          "dockerfile": "./Dockerfile",
+          "build_vars": {
+            "PROCESSOR_IMAGE": "docker.io/willlol/cf-nix-cache@sha256:27aa6bf4fe57206abd3230ec602904f0db67db56a8890d940c7dbce408d0861b",
+          },
+        },
+      },
     },
   ],
   "workflows": [

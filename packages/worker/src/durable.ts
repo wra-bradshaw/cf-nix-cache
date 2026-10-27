@@ -8,4 +8,7 @@ export {
 export { TokenCatalog } from './features/auth/durable';
 export { AuditLog } from './features/audit/durable';
 export { UploadJob } from './features/uploads/durable';
-export { ProcessorContainer } from './features/processing/durable';
+export {
+  ObjectStoreProxy,
+  ProcessorContainer,
+} from './features/processing/durable';
