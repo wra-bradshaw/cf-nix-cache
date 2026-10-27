@@ -36,32 +36,31 @@ release:check` additionally rejects a platform other than `linux/amd64`.
 
 ### Automated release flow
 
-Runtime changes should include a Changeset (`pnpm changeset`). The `Release
-PR` workflow accumulates those files into a version PR and synchronizes the
-new version into the release manifest and deployment template. Merging the
-version PR does not publish an incomplete npm package.
+Runtime changes should include a Changeset (`pnpm changeset`). On every push
+to `main` with pending changesets, the `Release PR` workflow runs
+`pnpm release:version`:
 
-The version PR and the digest-pinning PR are opened with `GITHUB_TOKEN`,
-which does not trigger `pull_request` workflows. Both workflows therefore
-dispatch `ci.yml` on their branch (`gh workflow run ci.yml --ref <branch>`,
-requiring `actions: write`), so the PR head commit still receives CI checks.
+1. `changeset version` bumps the package and syncs the version into the
+   release manifest and template (`releaseReady: false`).
+2. `scripts/pin-processor-image.sh` builds the Nix processor image, pushes a
+   source-specific tag to `PROCESSOR_REPOSITORY` (repository variable, default
+   `docker.io/willlol/cf-nix-cache`), resolves the registry digest, and pins it
+   in the release manifest (`releaseReady: true`) and template Wrangler config.
 
-After the version PR is merged, run the protected `Prepare release artifacts`
-workflow with the public Docker Hub repository, such as
-`docker.io/willlol/cf-nix-cache`. It builds the Nix processor image,
-pushes a source-specific tag, resolves the registry digest, and opens a second
-PR that pins the digest in both the npm release manifest and the template
-Wrangler configuration. The workflow requires `DOCKERHUB_USERNAME` and a
-repository-scoped `DOCKERHUB_TOKEN` in the `release` GitHub Environment.
+The result is a single version PR containing the whole release. The job needs
+`DOCKERHUB_USERNAME` and a repository-scoped `DOCKERHUB_TOKEN` in the
+`release` GitHub Environment. The PR is opened with `GITHUB_TOKEN`, which does
+not trigger `pull_request` workflows, so the job dispatches `ci.yml` on the PR
+branch (requiring `actions: write`).
 
-Merging the digest PR triggers `Publish release`. That workflow verifies the
+Merging the version PR triggers `Publish release`. That workflow verifies the
 public image by digest, rebuilds and tests the Worker package, publishes npm
 from the pinned commit, and creates `vX.Y.Z` on GitHub. Configure the npm
 package's trusted publisher for `.github/workflows/publish-release.yml`; npm
 publishing uses GitHub OIDC and does not require a long-lived npm token.
-The version workflow sets `releaseReady` to false and only the digest-pinning
-workflow sets it to true, preventing a version PR from publishing the previous
-processor image accidentally.
+`releaseReady` is only set to true once a digest has been pinned for the new
+version, so a partially prepared version PR cannot publish the previous
+processor image.
 
 If the `TEMPLATE_REPOSITORY` variable is set to
 `wra-bradshaw/cf-nix-cache-template`, the publish workflow also opens a PR in

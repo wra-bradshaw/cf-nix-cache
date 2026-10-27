@@ -7,6 +7,7 @@
     "changeset:status": "changeset status",
     "release:check": "node scripts/check-release.mts",
     "release:prepare": "node scripts/release-worker-package.mts",
+    "release:version": "pnpm version-packages && bash scripts/pin-processor-image.sh",
     "version-packages": "changeset version && node scripts/sync-release-version.mts"
   },
   "devDependencies": {
