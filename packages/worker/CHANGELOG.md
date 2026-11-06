@@ -1,5 +1,11 @@
 # cf-nix-cache
 
+## 0.2.1
+
+### Patch Changes
+
+- 152c829: Bundle hono 4.13.16 and jose 6.2.14, and update development tooling.
+
 ## 0.2.0
 
 ### Minor Changes
