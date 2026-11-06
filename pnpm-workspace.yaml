@@ -11,6 +11,9 @@ minimumReleaseAge: 1440
 overrides:
   sharp@0.35: 0.35.5
   undici@7: 7.30.1
+  # eslint and typescript-eslint pin minimatch ^10, every release of which is
+  # affected by a DoS advisory (fixed in 11.0.1). Dev tooling only.
+  minimatch@10: 11.0.4
 minimumReleaseAgeExclude:
   - '@cloudflare/vite-plugin@1.51.2'
   - miniflare@5.20260804.0-alpha
