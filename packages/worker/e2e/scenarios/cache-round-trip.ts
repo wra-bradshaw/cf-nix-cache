@@ -9,9 +9,16 @@ import {
   type E2eFixture,
 } from '../support/harness';
 import { expectJson, jsonRequest, request } from '../support/http';
-import { resolveZstd, repositoryDirectory, run } from '../support/process';
+import {
+  resolveZstd,
+  repositoryDirectory,
+  run,
+  runAsync,
+} from '../support/process';
 
 const cacheName = 'e2e';
+// execFileSync defaults to 1 MiB of output, less than most NARs.
+const narBufferBytes = 1024 * 1024 * 1024;
 
 export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
   const { server, base, bootstrapSecret, publicKey } = fixture;
@@ -73,7 +80,7 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
     ]).trim();
     expect(hello).toMatch(/^\/nix\/store\//);
     const cli = path.join(repositoryDirectory, 'target/debug/cf-nix-cache');
-    run(cli, ['--endpoint', base, 'push', cacheName, hello], {
+    await runAsync(cli, ['--endpoint', base, 'push', cacheName, hello], {
       env: {
         CF_NIX_CACHE_TOKEN: admin.token,
         XDG_CONFIG_HOME: path.join(fixture.scratch, 'config'),
@@ -106,8 +113,13 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
     const narResponse = await request(server, base, narPath);
     expect(narResponse.status).toBe(200);
     const encodedNar = Buffer.from(await narResponse.arrayBuffer());
-    const decodedNar = execFileSync(zstd, ['-d', '-c'], { input: encodedNar });
-    const expectedNar = execFileSync('nix-store', ['--dump', hello]);
+    const decodedNar = execFileSync(zstd, ['-d', '-c'], {
+      input: encodedNar,
+      maxBuffer: narBufferBytes,
+    });
+    const expectedNar = execFileSync('nix-store', ['--dump', hello], {
+      maxBuffer: narBufferBytes,
+    });
     expect(decodedNar).toEqual(expectedNar);
 
     const rangeResponse = await request(server, base, narPath, {
@@ -127,7 +139,7 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
       await realScratchPath(fixture),
       'client-store',
     );
-    run(
+    await runAsync(
       'nix',
       [
         'copy',
@@ -147,15 +159,14 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
     expect(
       run('nix', ['path-info', '--store', clientStore, hello]).trim(),
     ).toBe(hello);
-    const copiedNar = execFileSync('nix-store', [
-      '--dump',
-      '--store',
-      clientStore,
-      hello,
-    ]);
+    const copiedNar = execFileSync(
+      'nix-store',
+      ['--dump', '--store', clientStore, hello],
+      { maxBuffer: narBufferBytes },
+    );
     expect(copiedNar).toEqual(expectedNar);
 
-    const secondPush = run(
+    const secondPush = await runAsync(
       cli,
       ['--endpoint', base, 'push', cacheName, hello],
       {
