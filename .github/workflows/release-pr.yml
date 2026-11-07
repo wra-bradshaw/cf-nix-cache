@@ -11,15 +11,14 @@ concurrency:
   group: changesets-release-pr
 
 permissions:
-  # actions: write lets the job dispatch CI for the version PR branch.
-  actions: write
   contents: write
   pull-requests: write
 
 jobs:
   version:
     runs-on: ubuntu-24.04
-    # Docker Hub credentials for publishing the processor image.
+    # Docker Hub credentials for publishing the processor image, and the token
+    # that opens and merges the version PR.
     environment: release
     steps:
       - uses: actions/checkout@v7
@@ -46,16 +45,17 @@ jobs:
         env:
           PROCESSOR_REPOSITORY: ${{ vars.PROCESSOR_REPOSITORY || 'docker.io/willlol/cf-nix-cache' }}
         with:
+          # Pushes made with GITHUB_TOKEN do not trigger workflows, so the version
+          # PR would get no CI, and merging it would not publish the release.
+          github-token: ${{ secrets.RELEASE_TOKEN }}
           version-script: pnpm release:version
           pr-title: "Release: version packages"
           commit-message: "Release: version packages"
-      # Pushes made with GITHUB_TOKEN do not trigger pull_request workflows,
-      # so run CI explicitly on the version PR branch.
-      - name: Run CI on the version PR
+      # Merges once the required checks pass. The merge counts as the token's
+      # owner, so its push to main starts Publish release.
+      - name: Merge the version PR when CI passes
         if: steps.changesets.outputs['pr-number'] != ''
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           PR_NUMBER: ${{ steps.changesets.outputs['pr-number'] }}
-        run: |
-          gh workflow run ci.yml --ref "changeset-release/$GITHUB_REF_NAME"
-          gh pr merge "$PR_NUMBER" --auto --squash
+        run: gh pr merge "$PR_NUMBER" --auto --squash

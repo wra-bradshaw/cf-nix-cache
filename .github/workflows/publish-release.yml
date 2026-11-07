@@ -8,6 +8,8 @@ on:
       - "packages/worker/release-manifest.json"
       - "cf-nix-cache-template/package.json"
       - "cf-nix-cache-template/wrangler.jsonc"
+  # Normal releases start from the push above. This retries a failed publication:
+  # the job skips what is already on npm.
   workflow_dispatch:
 
 concurrency:
