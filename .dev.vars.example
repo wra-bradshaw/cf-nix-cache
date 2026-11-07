@@ -11,5 +11,6 @@ NIX_PRIVATE_JWK=
 # Ed25519 private JWK and public JWKS array for capability tokens.
 AUTH_PRIVATE_JWK=
 AUTH_PUBLIC_JWKS=
-# base64url SHA-256 of the one-time bootstrap secret.
+# base64url SHA-256 of the bootstrap secret. Each secret works once; setting a
+# new hash re-arms bootstrap.
 BOOTSTRAP_SECRET_HASH=

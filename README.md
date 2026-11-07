@@ -146,4 +146,6 @@ the Nix URL and never decompresses them.
 The `/api` control plane uses Ed25519 capability JWTs. Tokens contain exact
 cache grants and are accepted as Bearer tokens or Basic-auth passwords for
 stock Nix. Token revocation is recorded in the TokenCatalog and checked before
-private access. Bootstrap is a one-time, idempotent secret exchange.
+private access. Bootstrap is an idempotent secret exchange: each secret works
+once, and setting a new `BOOTSTRAP_SECRET_HASH` re-arms it. Anyone who can set
+Worker secrets already controls the installation, so this adds no new authority.

@@ -20,6 +20,33 @@ type IssuedToken = {
 
 type Signed = Awaited<ReturnType<TokenSigner['sign']>>;
 
+export const BOOTSTRAP_SCHEMA = `CREATE TABLE IF NOT EXISTS bootstrap_consumed (secret_hash TEXT PRIMARY KEY, operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL);`;
+
+/**
+ * Earlier releases kept a single consumed flag that did not record which secret
+ * consumed it. Attribute that flag to the currently configured hash, so an
+ * upgrade can never revive a used secret: re-arming still takes a new hash.
+ */
+export function migrateLegacyBootstrap(
+  ctx: DurableObjectState,
+  env: Env,
+): void {
+  const sql = ctx.storage.sql;
+  const legacy = first(
+    sql.exec(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'bootstrap'",
+    ),
+  );
+  if (!legacy || !env.BOOTSTRAP_SECRET_HASH) return;
+  ctx.storage.transactionSync(() => {
+    sql.exec(
+      'INSERT OR IGNORE INTO bootstrap_consumed (secret_hash, operation_id, fingerprint) SELECT ?, operation_id, fingerprint FROM bootstrap WHERE key = 1',
+      env.BOOTSTRAP_SECRET_HASH,
+    );
+    sql.exec('DROP TABLE bootstrap');
+  });
+}
+
 export class TokenIssuance {
   constructor(
     private readonly ctx: DurableObjectState,
@@ -38,9 +65,12 @@ export class TokenIssuance {
   }): Promise<RpcResult<IssuedToken>> {
     if (!input.grants.length || !input.grants.every(validateGrant))
       return failure('invalid_input', 'bootstrap grants are invalid', 422);
-    if ((await hashSecret(input.secret)) !== this.env.BOOTSTRAP_SECRET_HASH)
+    const secretHash = await hashSecret(input.secret);
+    if (secretHash !== this.env.BOOTSTRAP_SECRET_HASH)
       return failure('forbidden', 'invalid bootstrap secret', 403);
-    const operationId = `bootstrap:${input.operation_id}`;
+    // Scoped to the secret, so a re-armed bootstrap that reuses an idempotency
+    // key mints a new token instead of replaying one from an earlier secret.
+    const operationId = `bootstrap:${secretHash.slice(0, 16)}:${input.operation_id}`;
     const existing = this.replay(operationId, input.fingerprint);
     if (existing) return existing;
     const signed = await this.signer.sign(
@@ -53,21 +83,25 @@ export class TokenIssuance {
       if (repeated) return repeated;
       if (
         first(
-          this.ctx.storage.sql.exec('SELECT 1 FROM bootstrap WHERE key = 1'),
+          this.ctx.storage.sql.exec(
+            'SELECT 1 FROM bootstrap_consumed WHERE secret_hash = ?',
+            secretHash,
+          ),
         )
       )
         return failure(
           'bootstrap_consumed',
-          'bootstrap has already been consumed',
+          'this bootstrap secret has already been consumed; set a new BOOTSTRAP_SECRET_HASH to re-arm bootstrap',
           409,
         );
       this.ctx.storage.sql.exec(
-        'INSERT INTO bootstrap (key, operation_id, fingerprint) VALUES (1, ?, ?)',
+        'INSERT INTO bootstrap_consumed (secret_hash, operation_id, fingerprint) VALUES (?, ?, ?)',
+        secretHash,
         input.operation_id,
         input.fingerprint,
       );
       return this.insertToken(operationId, input, signed, {
-        id: `bootstrap:${input.operation_id}`,
+        id: operationId,
         actor: input.subject,
         action: 'bootstrap',
         resource: 'system',

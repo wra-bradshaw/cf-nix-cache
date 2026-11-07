@@ -97,7 +97,7 @@ impl Api {
             .await?)
     }
 
-    /// Exchanges the one-time bootstrap secret for a token; needs no login.
+    /// Exchanges an unused bootstrap secret for a token; needs no login.
     pub(crate) async fn bootstrap(
         &self,
         body: &contract::BootstrapRequest,

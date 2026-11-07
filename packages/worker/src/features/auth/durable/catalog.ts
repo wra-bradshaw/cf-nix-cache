@@ -4,7 +4,11 @@ import {
   AUDIT_OUTBOX_SCHEMA,
   AuditOutbox,
 } from '../../../infrastructure/durable/audit-outbox';
-import { TokenIssuance } from './issuance';
+import {
+  BOOTSTRAP_SCHEMA,
+  migrateLegacyBootstrap,
+  TokenIssuance,
+} from './issuance';
 import { TokenManagement } from './management';
 import { TokenSigner } from './signer';
 import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
@@ -15,7 +19,7 @@ const schema = `CREATE TABLE IF NOT EXISTS tokens (
   token TEXT NOT NULL, operation_id TEXT UNIQUE NOT NULL, fingerprint TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS token_operations (operation_id TEXT PRIMARY KEY, jti TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS bootstrap (key INTEGER PRIMARY KEY CHECK (key = 1), operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL);
+${BOOTSTRAP_SCHEMA}
 ${AUDIT_OUTBOX_SCHEMA}`;
 
 export class TokenCatalog extends RpcOnlyDurableObject {
@@ -26,6 +30,7 @@ export class TokenCatalog extends RpcOnlyDurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(schema);
+    migrateLegacyBootstrap(ctx, env);
     this.audit = new AuditOutbox(ctx, env);
     this.issuance = new TokenIssuance(
       ctx,
