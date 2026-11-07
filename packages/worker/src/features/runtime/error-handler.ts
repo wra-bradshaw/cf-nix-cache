@@ -45,6 +45,10 @@ export function handleError(caught: unknown, c: RequestContext): Response {
     );
   if (caught instanceof RangeRequestError)
     return errorResponse(c, 'range_not_satisfiable', caught.message, 416);
-  console.error({ request_id: c.get('requestId'), error: caught });
+  // Error objects serialize to `{}` in structured Workers logs.
+  console.error({
+    request_id: c.get('requestId'),
+    error: caught instanceof Error ? (caught.stack ?? caught.message) : caught,
+  });
   return errorResponse(c, 'internal_error', 'internal server error', 500);
 }
