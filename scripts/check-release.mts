@@ -60,6 +60,13 @@ async function placeholderFiles(directory: string): Promise<string[]> {
 
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(packageJson.version))
   failures.push(`invalid package version ${packageJson.version}`);
+const cargoVersion = (
+  await readFile(path.join(repository, "Cargo.toml"), "utf8")
+).match(/^version = "([^"]+)"/m)?.[1];
+if (cargoVersion !== packageJson.version)
+  failures.push(
+    `Cargo workspace version ${cargoVersion} does not match package version ${packageJson.version}`,
+  );
 if (manifest.schemaVersion !== 1)
   failures.push(
     `unsupported release manifest schema ${manifest.schemaVersion}`,
