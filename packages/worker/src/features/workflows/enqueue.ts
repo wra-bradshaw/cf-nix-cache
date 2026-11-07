@@ -1,3 +1,8 @@
+/** Workflow instance ids may only contain letters, digits, `-` and `_`. */
+export function deleteCacheWorkflowId(incarnation: string): string {
+  return `delete-${incarnation}`;
+}
+
 export async function ensureWorkflow<T>(
   workflow: Workflow<T>,
   id: string,

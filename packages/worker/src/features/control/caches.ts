@@ -8,7 +8,7 @@ import {
   encodeCursor,
   parseJsonSchema,
 } from '../domain/validation';
-import { ensureWorkflow } from '../workflows/enqueue';
+import { deleteCacheWorkflowId, ensureWorkflow } from '../workflows/enqueue';
 import { idempotency, parseJson, type AppEnv } from '../runtime/http';
 import {
   coordinator,
@@ -126,7 +126,7 @@ cacheRoutes.delete('/api/caches/:name', async (c) => {
   );
   await ensureWorkflow(
     c.env.DELETE_CACHE!,
-    `delete:${cache.reference.incarnation}`,
+    deleteCacheWorkflowId(cache.reference.incarnation),
     {
       cache: cache.name,
       cache_id: cache.reference.id,
