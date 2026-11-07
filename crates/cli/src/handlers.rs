@@ -6,7 +6,15 @@ use cf_nix_cache_core::{
 use etcetera::BaseStrategy;
 use reqwest::{Method, Url};
 use serde::Serialize;
-use std::{num::NonZeroU64, path::Path, process::Command};
+use serde_json::Value;
+use std::{
+    future::Future,
+    num::{NonZeroU64, NonZeroUsize},
+    path::Path,
+    process::Command,
+    sync::Arc,
+};
+use tokio::task::JoinSet;
 
 use crate::{
     args::{
@@ -52,7 +60,8 @@ pub(crate) async fn run(args: Args, config: Config) -> Result<()> {
         CommandKind::Push {
             cache,
             installables,
-        } => push(api()?, cache, installables).await,
+            jobs,
+        } => push(api()?, cache, installables, jobs).await,
         CommandKind::ConfigureNix { cache } => configure_nix(api()?, cache).await,
     }
 }
@@ -160,15 +169,19 @@ async fn upload(api: Api, command: UploadCommand) -> Result<()> {
     }
 }
 
-async fn push(api: Api, cache: CacheName, installables: Vec<String>) -> Result<()> {
+async fn push(
+    api: Api,
+    cache: CacheName,
+    installables: Vec<String>,
+    jobs: NonZeroUsize,
+) -> Result<()> {
     let mut command = Command::new("nix");
     command
         .args(["path-info", "--json", "--recursive"])
         .args(&installables);
-    let value = command_json(command)?;
-    let map = value
-        .as_object()
-        .context("unexpected nix path-info response")?;
+    let Value::Object(map) = command_json(command)? else {
+        anyhow::bail!("unexpected nix path-info response");
+    };
     let hashes = map
         .keys()
         .map(|path| store_hash(path))
@@ -190,14 +203,71 @@ async fn push(api: Api, cache: CacheName, installables: Vec<String>) -> Result<(
             .await?;
         missing.extend(result.missing);
     }
+    let mut uploads = Vec::new();
     for (path, info) in map {
-        if missing.contains(&store_hash(path)?) {
-            upload_path(&api, &cache, path, info).await?
+        if missing.contains(&store_hash(&path)?) {
+            uploads.push((path, info));
         } else {
             println!("already cached {path}");
         }
     }
+    let total = uploads.len();
+    let api = Arc::new(api);
+    let cache = Arc::new(cache);
+    let failures = run_concurrently(uploads, jobs, move |(path, info)| {
+        let api = Arc::clone(&api);
+        let cache = Arc::clone(&cache);
+        async move {
+            upload_path(&api, &cache, &path, &info)
+                .await
+                .with_context(|| format!("failed to upload {path}"))
+        }
+    })
+    .await;
+    if !failures.is_empty() {
+        for failure in &failures {
+            eprintln!("{failure:#}");
+        }
+        anyhow::bail!("{} of {total} uploads failed", failures.len());
+    }
     Ok(())
+}
+
+/// Runs `task` over `items` with at most `limit` running at once. A failure
+/// does not stop the remaining items, since every completed upload is progress
+/// that a retry does not have to repeat. Returns the errors.
+async fn run_concurrently<T, F, Fut>(
+    items: Vec<T>,
+    limit: NonZeroUsize,
+    task: F,
+) -> Vec<anyhow::Error>
+where
+    F: Fn(T) -> Fut,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    let mut running = JoinSet::new();
+    let mut failures = Vec::new();
+    for item in items {
+        if running.len() == limit.get() {
+            collect_failure(running.join_next().await, &mut failures);
+        }
+        running.spawn(task(item));
+    }
+    while let Some(result) = running.join_next().await {
+        collect_failure(Some(result), &mut failures);
+    }
+    failures
+}
+
+fn collect_failure(
+    result: Option<Result<Result<()>, tokio::task::JoinError>>,
+    failures: &mut Vec<anyhow::Error>,
+) {
+    match result {
+        Some(Ok(Err(error))) => failures.push(error),
+        Some(Err(error)) => failures.push(error.into()),
+        Some(Ok(Ok(()))) | None => {}
+    }
 }
 
 async fn configure_nix(api: Api, cache: CacheName) -> Result<()> {
@@ -251,6 +321,54 @@ fn nix_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn run_concurrently_uses_but_never_exceeds_the_limit() {
+        let running = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let failures = run_concurrently(
+            (0..20).collect(),
+            NonZeroUsize::new(4).unwrap(),
+            |_: i32| {
+                let running = Arc::clone(&running);
+                let peak = Arc::clone(&peak);
+                async move {
+                    let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    running.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            },
+        )
+        .await;
+        assert!(failures.is_empty());
+        assert_eq!(peak.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn run_concurrently_finishes_the_remaining_items_after_a_failure() {
+        let finished = Arc::new(AtomicUsize::new(0));
+        let failures = run_concurrently(
+            (0..10).collect(),
+            NonZeroUsize::new(2).unwrap(),
+            |item: i32| {
+                let finished = Arc::clone(&finished);
+                async move {
+                    if item % 5 == 0 {
+                        anyhow::bail!("item {item} failed");
+                    }
+                    finished.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            },
+        )
+        .await;
+        assert_eq!(failures.len(), 2);
+        assert_eq!(finished.load(Ordering::SeqCst), 8);
+    }
 
     #[test]
     fn nix_config_uses_extra_settings_and_absolute_paths() {
