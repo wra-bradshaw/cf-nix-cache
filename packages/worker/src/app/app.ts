@@ -5,6 +5,7 @@ import { pathRoutes } from '../features/cache/path-routes';
 import { cacheRoutes } from '../features/cache/routes';
 import { gcRoutes } from '../features/gc/routes';
 import { nixRoutes } from '../features/nix/routes';
+import { encodedUploadRoutes } from '../features/uploads/encoded-routes';
 import { uploadRoutes } from '../features/uploads/routes';
 import type { AppEnv } from '../shared/http';
 import { errorResponse, handleError } from './error-handler';
@@ -25,6 +26,7 @@ function createApp(): Hono<AppEnv> {
   app.route('', cacheRoutes);
   app.route('', pathRoutes);
   app.route('', gcRoutes);
+  app.route('', encodedUploadRoutes);
   app.route('', uploadRoutes);
   app.route('', nixRoutes);
   app.notFound((c) => errorResponse(c, 'not_found', 'route not found', 404));

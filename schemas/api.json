@@ -21,6 +21,10 @@
     "token_summary": { "type": "object", "additionalProperties": false, "required": ["id", "subject", "grants", "issued_at", "expires_at", "revoked"], "properties": { "id": { "type": "string" }, "subject": { "type": "string" }, "grants": { "type": "array", "items": { "$ref": "#/$defs/grant" } }, "issued_at": { "type": "integer", "minimum": 1 }, "expires_at": { "type": "integer", "minimum": 1 }, "revoked": { "type": "boolean" } } },
     "audit_event": { "type": "object", "additionalProperties": false, "required": ["id", "timestamp", "actor", "action", "resource", "outcome", "metadata"], "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 256 }, "timestamp": { "type": "integer", "minimum": 1 }, "actor": { "type": "string", "minLength": 1, "maxLength": 256 }, "action": { "type": "string", "minLength": 1, "maxLength": 128 }, "resource": { "type": "string", "minLength": 1, "maxLength": 512 }, "outcome": { "type": "string", "enum": ["success", "accepted", "failure"] }, "metadata": { "type": "object", "additionalProperties": { "type": "string" } } } },
     "gc_run_request": { "type": "object", "additionalProperties": false, "properties": { "dry_run": { "type": "boolean", "default": false, "description": "Report what would be evicted and deleted without changing anything." }, "grace_seconds": { "type": "integer", "minimum": 0, "maximum": 31536000, "description": "Keep unreferenced objects newer than this. Defaults to one day." } } },
+    "encoded_chunk": { "type": "object", "additionalProperties": false, "required": ["raw_hash", "raw_size", "compressed_hash", "compressed_size"], "properties": { "raw_hash": { "type": "string", "pattern": "^sha256:[0-9abcdfghijklmnpqrsvwxyz]{52}$" }, "raw_size": { "type": "integer", "minimum": 1, "maximum": 16777216 }, "compressed_hash": { "type": "string", "pattern": "^sha256:[0-9abcdfghijklmnpqrsvwxyz]{52}$" }, "compressed_size": { "type": "integer", "minimum": 1, "maximum": 17825792 } } },
+    "encoded_upload_request": { "type": "object", "additionalProperties": false, "required": ["manifest", "encoding_id", "chunks"], "description": "A NAR the client has already chunked and compressed with encoding_id.", "properties": { "manifest": { "$ref": "#/$defs/manifest" }, "encoding_id": { "const": "fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1" }, "chunks": { "type": "array", "minItems": 1, "maxItems": 16384, "items": { "$ref": "#/$defs/encoded_chunk" } } } },
+    "encoded_upload_batch": { "type": "object", "additionalProperties": false, "required": ["uploads"], "properties": { "uploads": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/encoded_upload_request" } } } },
+    "encoded_complete_batch": { "type": "object", "additionalProperties": false, "required": ["ids"], "properties": { "ids": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 128 } } } },
     "complete_upload": { "type": "object", "additionalProperties": false, "properties": { "parts": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["part_number", "etag"], "properties": { "part_number": { "type": "integer", "minimum": 1 }, "etag": { "type": "string", "minLength": 1 } } } } } }
   },
   "oneOf": [
@@ -36,6 +40,9 @@
     { "$ref": "#/$defs/token_summary" },
     { "$ref": "#/$defs/audit_event" },
     { "$ref": "#/$defs/complete_upload" },
-    { "$ref": "#/$defs/gc_run_request" }
+    { "$ref": "#/$defs/gc_run_request" },
+    { "$ref": "#/$defs/encoded_upload_request" },
+    { "$ref": "#/$defs/encoded_upload_batch" },
+    { "$ref": "#/$defs/encoded_complete_batch" }
   ]
 }

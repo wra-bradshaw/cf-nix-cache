@@ -138,6 +138,16 @@ fn part_range(part_number: i32, part_size: u64, size: u64) -> Result<(u64, u64)>
 }
 
 async fn wait_for_upload(api: &Api, id: &str, path: &str) -> Result<()> {
+    let state = wait_for_state(api, id, path).await?;
+    if state.status != UploadStatus::Ready {
+        bail!("verification failed: {}", state.error.unwrap_or_default());
+    }
+    println!("uploaded {path}");
+    Ok(())
+}
+
+/// Polls an upload until it is READY, FAILED or ABORTED.
+pub(crate) async fn wait_for_state(api: &Api, id: &str, path: &str) -> Result<UploadStateResponse> {
     let deadline = Instant::now() + Duration::from_secs(60 * 60);
     let mut delay = Duration::from_secs(2);
     loop {
@@ -146,17 +156,14 @@ async fn wait_for_upload(api: &Api, id: &str, path: &str) -> Result<()> {
         }
         tokio::time::sleep(delay).await;
         let state: UploadStateResponse = api.get(&api_path(&["uploads", id])).await?;
-        match state.status {
-            UploadStatus::Ready => break,
-            UploadStatus::Failed | UploadStatus::Aborted => {
-                bail!("verification failed: {}", state.error.unwrap_or_default())
-            }
-            _ => {}
+        if matches!(
+            state.status,
+            UploadStatus::Ready | UploadStatus::Failed | UploadStatus::Aborted
+        ) {
+            return Ok(state);
         }
         delay = (delay * 2).min(Duration::from_secs(30));
     }
-    println!("uploaded {path}");
-    Ok(())
 }
 
 #[cfg(test)]

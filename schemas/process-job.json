@@ -10,6 +10,7 @@
     "staging_key": { "type": "string", "pattern": "^staging/[A-Za-z0-9_-]+\\.nar\\.zst$" },
     "nar_hash": { "type": "string", "pattern": "^sha256:[0-9abcdfghijklmnpqrsvwxyz]{52}$" },
     "nar_size": { "type": "integer", "minimum": 1, "maximum": 10737418240 },
-    "encoding_id": { "const": "fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1" }
+    "encoding_id": { "const": "fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1" },
+    "chunks_key": { "type": "string", "pattern": "^staging/[A-Za-z0-9_-]+\\.chunks\\.json$", "description": "A client-encoded upload: verify the chunks listed here instead of reading staging_key." }
   }
 }

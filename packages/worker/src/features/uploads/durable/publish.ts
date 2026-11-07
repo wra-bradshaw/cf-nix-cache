@@ -16,7 +16,14 @@ export class UploadPublisher {
     private readonly storage: UploadStorage,
   ) {}
 
-  async publish(result: ProcessResult): Promise<RpcResult<void>> {
+  /**
+   * `verified` is a manifest the caller has just built or checked; otherwise
+   * the manifest is read back from the bucket.
+   */
+  async publish(
+    result: ProcessResult,
+    verified?: ChunkManifest,
+  ): Promise<RpcResult<void>> {
     const row = this.storage.row();
     if (!row) return failure('not_found', 'upload not found', 404);
     if (row.state === 'READY') return ok();
@@ -45,21 +52,29 @@ export class UploadPublisher {
         'upload belongs to an older cache incarnation',
         409,
       );
-    const manifestObject = await this.env.CACHE_BUCKET.get(result.manifest_key);
-    if (!manifestObject)
-      return failure(
-        'publication_result_missing',
-        'processor manifest is missing',
-        503,
-      );
-    // Outside the try: a failed read is transient, and throwing retries the
-    // step. Only content that was read and is wrong is a permanent failure.
-    const manifestText = await manifestObject.text();
     let manifest: ChunkManifest;
-    try {
-      manifest = parseJsonSchema(ChunkManifestSchema, JSON.parse(manifestText));
-    } catch {
-      return failure('invalid_input', 'processor manifest is invalid', 422);
+    if (verified) manifest = verified;
+    else {
+      const manifestObject = await this.env.CACHE_BUCKET.get(
+        result.manifest_key,
+      );
+      if (!manifestObject)
+        return failure(
+          'publication_result_missing',
+          'processor manifest is missing',
+          503,
+        );
+      // Outside the try: a failed read is transient, and throwing retries the
+      // step. Only content that was read and is wrong is a permanent failure.
+      const manifestText = await manifestObject.text();
+      try {
+        manifest = parseJsonSchema(
+          ChunkManifestSchema,
+          JSON.parse(manifestText),
+        );
+      } catch {
+        return failure('invalid_input', 'processor manifest is invalid', 422);
+      }
     }
     if (
       manifest.nar_hash !== row.manifest.nar_hash ||
@@ -117,7 +132,11 @@ export class UploadPublisher {
       throw error;
     }
     this.storage.setState(row.job_id, ['PUBLISHING'], 'READY');
-    await this.env.CACHE_BUCKET.delete(row.staging_key);
+    // Not awaited: the bucket's lifecycle rule removes staging objects that
+    // are left behind.
+    void this.env.CACHE_BUCKET.delete(
+      row.chunks_key ? [row.staging_key, row.chunks_key] : row.staging_key,
+    ).catch((error: unknown) => console.error('staging cleanup failed', error));
     return ok();
   }
 }

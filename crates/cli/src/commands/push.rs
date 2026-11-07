@@ -1,19 +1,30 @@
 //! `push`: uploads the closure of some installables, skipping paths the server
 //! already has and, by default, paths signed by the cache's upstream caches.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use cf_nix_cache_core::{
     contracts::{api as contract, responses::CacheUpstreamsResponse},
-    CacheName, MissingPathsResponse,
+    CacheName, MissingPathsResponse, UploadStatus,
 };
 use reqwest::Method;
-use std::{future::Future, num::NonZeroUsize, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    num::NonZeroUsize,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 use tokio::task::JoinSet;
 
 use crate::{
     client::Api,
-    nix::{path_info, signed_by_upstream, store_hash},
-    upload::upload_path,
+    encoded_upload::{
+        is_unsupported, upload_encoded, upload_encoded_batch, BATCH_NAR_SIZE, BATCH_PATHS,
+    },
+    nix::{path_info, signed_by_upstream, store_hash, PathInfo},
+    upload::{upload_path, wait_for_state},
 };
 
 pub(super) async fn push(
@@ -22,6 +33,7 @@ pub(super) async fn push(
     installables: Vec<String>,
     jobs: NonZeroUsize,
     ignore_upstream_cache_filter: bool,
+    staging_upload: bool,
 ) -> Result<()> {
     let mut map = path_info(&installables)?;
     let all_paths = map.len();
@@ -35,7 +47,8 @@ pub(super) async fn push(
         .keys()
         .map(|path| store_hash(path))
         .collect::<Result<Vec<_>>>()?;
-    let mut missing = std::collections::BTreeSet::new();
+    let mut missing = BTreeSet::new();
+    let mut pending = BTreeMap::new();
     for batch in hashes.chunks(100) {
         let body = contract::MissingPaths {
             store_hashes: batch
@@ -51,30 +64,40 @@ pub(super) async fn push(
             )
             .await?;
         missing.extend(result.missing);
+        pending.extend(
+            result
+                .pending
+                .into_iter()
+                .map(|upload| (upload.store_hash, upload.upload_id)),
+        );
     }
     let mut uploads = Vec::new();
+    let mut waits = Vec::new();
     for (path, info) in map {
-        if missing.contains(&store_hash(&path)?) {
+        let hash = store_hash(&path)?;
+        if missing.contains(&hash) {
             uploads.push((path, info));
+        } else if let Some(id) = pending.remove(&hash) {
+            waits.push(Work::Wait(path, info, id));
         } else {
             println!("already cached {path}");
         }
     }
-    let total = uploads.len();
+    let total = uploads.len() + waits.len();
     println!(
-        "pushing {total} paths to \"{cache}\" ({} already cached, {in_upstream} in upstream)",
-        considered - total
+        "pushing {total} paths to \"{cache}\" ({} already cached, {in_upstream} in upstream, {} already being uploaded)",
+        considered - total,
+        waits.len(),
     );
-    let api = Arc::new(api);
-    let cache = Arc::new(cache);
-    let failures = run_concurrently(uploads, jobs, move |(path, info)| {
-        let api = Arc::clone(&api);
-        let cache = Arc::clone(&cache);
-        async move {
-            upload_path(&api, &cache, &path, &info)
-                .await
-                .with_context(|| format!("failed to upload {path}"))
-        }
+    let work = plan(uploads, waits, staging_upload);
+    let context = Arc::new(Context {
+        api,
+        cache,
+        client_encoding: AtomicBool::new(!staging_upload),
+    });
+    let failures = run_concurrently(work, jobs, move |work| {
+        let context = Arc::clone(&context);
+        async move { context.run(work).await }
     })
     .await;
     if !failures.is_empty() {
@@ -84,6 +107,108 @@ pub(super) async fn push(
         anyhow::bail!("{} of {total} uploads failed", failures.len());
     }
     Ok(())
+}
+
+enum Work {
+    One(String, PathInfo),
+    /// Small paths that are uploaded together.
+    Batch(Vec<(String, PathInfo)>),
+    /// A path another push is uploading.
+    Wait(String, PathInfo, String),
+}
+
+/// Large paths first, so that they do not start last and finish alone.
+fn plan(mut uploads: Vec<(String, PathInfo)>, waits: Vec<Work>, staging_upload: bool) -> Vec<Work> {
+    uploads.sort_by_key(|(_, info)| std::cmp::Reverse(info.nar_size));
+    let split = if staging_upload {
+        uploads.len()
+    } else {
+        uploads.partition_point(|(_, info)| info.nar_size >= BATCH_NAR_SIZE)
+    };
+    let small = uploads.split_off(split);
+    let mut work: Vec<Work> = uploads
+        .into_iter()
+        .map(|(path, info)| Work::One(path, info))
+        .collect();
+    work.extend(
+        small
+            .chunks(BATCH_PATHS)
+            .map(|batch| Work::Batch(batch.to_vec())),
+    );
+    work.extend(waits);
+    work
+}
+
+struct Context {
+    api: Api,
+    cache: CacheName,
+    /// Cleared when the server turns out not to support client encoding.
+    client_encoding: AtomicBool,
+}
+
+impl Context {
+    /// Every failure, one per path.
+    async fn run(&self, work: Work) -> Vec<anyhow::Error> {
+        match work {
+            Work::One(path, info) => self.one(&path, &info).await.err().into_iter().collect(),
+            Work::Batch(items) => self.batch(items).await,
+            Work::Wait(path, info, id) => {
+                match wait_for_state(&self.api, &id, &path).await {
+                    Ok(state) if state.status == UploadStatus::Ready => {
+                        println!("uploaded {path} (by another push)");
+                        Vec::new()
+                    }
+                    // The other push failed, or its upload is gone: do it here.
+                    _ => self.one(&path, &info).await.err().into_iter().collect(),
+                }
+            }
+        }
+    }
+
+    async fn one(&self, path: &str, info: &PathInfo) -> Result<()> {
+        if self.client_encoding.load(Ordering::Relaxed) {
+            match upload_encoded(&self.api, &self.cache, path, info).await {
+                Err(error) if is_unsupported(&error) => self.disable(&error),
+                result => return result.with_context(|| format!("failed to upload {path}")),
+            }
+        }
+        upload_path(&self.api, &self.cache, path, info)
+            .await
+            .with_context(|| format!("failed to upload {path}"))
+    }
+
+    async fn batch(&self, items: Vec<(String, PathInfo)>) -> Vec<anyhow::Error> {
+        let mut failures = Vec::new();
+        if self.client_encoding.load(Ordering::Relaxed) {
+            match upload_encoded_batch(&self.api, &self.cache, &items).await {
+                Ok(outcomes) => {
+                    for (path, outcome) in outcomes {
+                        if let Err(error) = outcome {
+                            failures.push(error.context(format!("failed to upload {path}")));
+                        }
+                    }
+                    return failures;
+                }
+                Err(error) if is_unsupported(&error) => self.disable(&error),
+                // One bad path fails a whole batch; find it by going one by one.
+                Err(error) => {
+                    eprintln!("batch upload failed, retrying its paths one by one: {error:#}")
+                }
+            }
+        }
+        for (path, info) in items {
+            if let Err(error) = self.one(&path, &info).await {
+                failures.push(error);
+            }
+        }
+        failures
+    }
+
+    fn disable(&self, error: &anyhow::Error) {
+        if self.client_encoding.swap(false, Ordering::Relaxed) {
+            eprintln!("warning: falling back to staging uploads: {error:#}");
+        }
+    }
 }
 
 async fn upstream_key_names(api: &Api, cache: &CacheName) -> Result<Vec<String>> {
@@ -116,37 +241,37 @@ async fn run_concurrently<T, F, Fut>(
 ) -> Vec<anyhow::Error>
 where
     F: Fn(T) -> Fut,
-    Fut: Future<Output = Result<()>> + Send + 'static,
+    Fut: Future<Output = Vec<anyhow::Error>> + Send + 'static,
 {
     let mut running = JoinSet::new();
     let mut failures = Vec::new();
     for item in items {
         if running.len() == limit.get() {
-            collect_failure(running.join_next().await, &mut failures);
+            collect_failures(running.join_next().await, &mut failures);
         }
         running.spawn(task(item));
     }
     while let Some(result) = running.join_next().await {
-        collect_failure(Some(result), &mut failures);
+        collect_failures(Some(result), &mut failures);
     }
     failures
 }
 
-fn collect_failure(
-    result: Option<Result<Result<()>, tokio::task::JoinError>>,
+fn collect_failures(
+    result: Option<Result<Vec<anyhow::Error>, tokio::task::JoinError>>,
     failures: &mut Vec<anyhow::Error>,
 ) {
     match result {
-        Some(Ok(Err(error))) => failures.push(error),
+        Some(Ok(errors)) => failures.extend(errors),
         Some(Err(error)) => failures.push(error.into()),
-        Some(Ok(Ok(()))) | None => {}
+        None => {}
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
 
     #[tokio::test]
@@ -164,7 +289,7 @@ mod tests {
                     peak.fetch_max(now, Ordering::SeqCst);
                     tokio::time::sleep(Duration::from_millis(10)).await;
                     running.fetch_sub(1, Ordering::SeqCst);
-                    Ok(())
+                    Vec::new()
                 }
             },
         )
@@ -183,10 +308,10 @@ mod tests {
                 let finished = Arc::clone(&finished);
                 async move {
                     if item % 5 == 0 {
-                        anyhow::bail!("item {item} failed");
+                        return vec![anyhow::anyhow!("item {item} failed")];
                     }
                     finished.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
+                    Vec::new()
                 }
             },
         )

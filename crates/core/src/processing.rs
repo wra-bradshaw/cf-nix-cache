@@ -70,6 +70,9 @@ pub struct ProcessJob {
     pub nar_hash: String,
     pub nar_size: u64,
     pub encoding_id: String,
+    /// A client-encoded upload: the chunks are already stored, and this
+    /// object lists them. Processing verifies them instead of encoding.
+    pub chunks_key: Option<String>,
 }
 
 /// The schema-generated job is the processor's HTTP boundary; this keeps
@@ -87,6 +90,7 @@ impl TryFrom<CfNixCacheProcessorJob> for ProcessJob {
             nar_hash: job.nar_hash.into(),
             nar_size: job.nar_size.get(),
             encoding_id: ENCODING_ID.into(),
+            chunks_key: job.chunks_key.map(Into::into),
         })
     }
 }
@@ -152,6 +156,7 @@ mod tests {
                 nar_hash: format!("sha256:{}", "0".repeat(52)),
                 nar_size: 9,
                 encoding_id: ENCODING_ID.into(),
+                chunks_key: None,
             })
         );
         assert_eq!(

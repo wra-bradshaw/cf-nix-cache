@@ -50,12 +50,36 @@ abandoned staging data, and garbage collection (below) reclaims manifests and
 chunks. Because a path can be replaced, public NAR responses use a bounded cache lifetime rather than an
 immutable year-long cache directive.
 
+Uploads are normally encoded by the CLI, which already reads every byte of
+the NAR: it splits it with the same FastCDC parameters and zstd call as the
+processor and sends only the chunks the bucket lacks. The upload's
+`UploadJob` Durable Object keeps the chunk list and a garbage collection lease,
+taken before it looks for existing chunks (see below). A chunk is decoded and
+hashed against its claim before it is written to its content-addressed key,
+because the first writer of a key wins for good (verification level 1).
+Completion reads the stored chunks back and checks that they concatenate to a
+structurally valid NAR with the declared hash (levels 2 and 3); the manifest,
+and so the narinfo `FileHash`, is built from the stored bytes, whichever zstd
+build wrote them. NARs up to 256 MiB are checked in the completing Worker
+request, which benchmarks put at well under the 30-second CPU limit; larger ones
+go to the processor workflow, which reads the same chunks and writes only the
+manifest. A completion interrupted while publishing is finished by that workflow
+too, from the chunk list left in staging.
+
+The cache coordinator tracks each path's in-flight upload by store hash and
+NAR hash, so concurrent pushes of a path join one upload instead of processing
+it twice. Entries end when the upload does, and expire after an hour.
+
 The processor is split into HTTP bootstrap, processing service, NAR
 validation, chunking/compression, and an injected object-store adapter. It
 performs a validation pass before the permanent content-addressed write pass,
 so malformed input cannot leave chunks behind. Invalid input is a permanent
 422; object-store and other infrastructure failures are retryable 503
-responses. The Container accesses `CACHE_BUCKET` through the
+responses. Jobs share a pool of 16 `lite` containers, chosen by
+a hash of the job ID so that retries land on the same one; the `durable_object`
+scheduling policy has no `max_instances`, so the pool is the cap. Each
+container runs one job at a time and stops 10 seconds after its last request.
+The Container accesses `CACHE_BUCKET` through the
 Worker's `cache.r2` `outboundByHost` handler, so the same binding targets local
 Miniflare R2 under `wrangler dev` and deployed R2 in production.
 Content-addressed writes are conditional.
@@ -137,5 +161,6 @@ The processor splits into `main` (HTTP bootstrap), `pipeline` (processing),
 `nar` (NAR validation), and `object_store` (storage adapter). The CLI splits
 into `args` (command definitions), `commands` (dispatch, with `admin`, `gc`,
 `push`, and `configure_nix` command flows), `nix` and `upload` (local Nix and
-multipart upload helpers), `client` (HTTP client), and `config` (credential
-storage).
+multipart upload helpers), `encode` and `encoded_upload` (client-side chunking
+and the client-encoded upload flow), `client` (HTTP client), and `config`
+(credential storage).

@@ -14,7 +14,10 @@
     { "$ref": "#/$defs/missing_paths_response" },
     { "$ref": "#/$defs/gc_run_response" },
     { "$ref": "#/$defs/gc_status_response" },
-    { "$ref": "#/$defs/cache_upstreams_response" }
+    { "$ref": "#/$defs/cache_upstreams_response" },
+    { "$ref": "#/$defs/encoded_upload_response" },
+    { "$ref": "#/$defs/encoded_upload_batch_response" },
+    { "$ref": "#/$defs/encoded_complete_batch_response" }
   ],
   "$defs": {
     "api_error": {
@@ -182,8 +185,45 @@
       "additionalProperties": false,
       "required": ["missing"],
       "properties": {
-        "missing": { "type": "array", "items": { "type": "string", "pattern": "^[0-9abcdfghijklmnpqrsvwxyz]{32}$" } }
+        "missing": { "type": "array", "items": { "type": "string", "pattern": "^[0-9abcdfghijklmnpqrsvwxyz]{32}$" } },
+        "pending": {
+          "type": "array",
+          "description": "Paths another push is uploading right now. They are not in missing; wait for the upload instead of starting another.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["store_hash", "upload_id"],
+            "properties": {
+              "store_hash": { "type": "string", "pattern": "^[0-9abcdfghijklmnpqrsvwxyz]{32}$" },
+              "upload_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+            }
+          }
+        }
       }
+    },
+    "encoded_upload_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "error", "merged", "missing_chunks"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": { "enum": ["CREATED", "UPLOADING", "COMPLETING", "QUEUED", "PROCESSING", "PUBLISHING", "READY", "FAILED", "ABORTED"] },
+        "error": { "type": ["string", "null"], "maxLength": 2000 },
+        "merged": { "type": "boolean", "description": "The upload belongs to another push of the same NAR. Wait for it; do not send chunks." },
+        "missing_chunks": { "type": "array", "description": "Raw hashes of the chunks the server needs. Send each once.", "items": { "type": "string", "pattern": "^sha256:[0-9abcdfghijklmnpqrsvwxyz]{52}$" } }
+      }
+    },
+    "encoded_upload_batch_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uploads"],
+      "properties": { "uploads": { "type": "array", "items": { "$ref": "#/$defs/encoded_upload_response" } } }
+    },
+    "encoded_complete_batch_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uploads"],
+      "properties": { "uploads": { "type": "array", "items": { "$ref": "#/$defs/upload_state_response" } } }
     }
   }
 }

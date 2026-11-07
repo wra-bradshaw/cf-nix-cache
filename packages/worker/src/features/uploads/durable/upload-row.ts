@@ -28,6 +28,8 @@ export interface UploadRow {
   parts: Record<string, string>;
   error: string | null;
   result: ProcessReceipt | null;
+  /** Set for a client-encoded upload, whose chunks are already stored. */
+  chunks_key: string | null;
 }
 
 export const toStateResponse = (row: UploadRow): UploadStateResponse => ({
@@ -42,4 +44,5 @@ export const toProcessJob = (row: UploadRow): ProcessJob => ({
   nar_hash: row.manifest.nar_hash,
   nar_size: row.manifest.nar_size,
   encoding_id: ENCODING_ID,
+  ...(row.chunks_key ? { chunks_key: row.chunks_key } : {}),
 });

@@ -19,6 +19,7 @@ const row: UploadRow = {
   parts: {},
   error: null,
   result: null,
+  chunks_key: null,
 };
 
 describe('upload publication', () => {

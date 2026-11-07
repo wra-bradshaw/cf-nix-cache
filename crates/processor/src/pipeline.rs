@@ -6,6 +6,7 @@ use cf_nix_cache_core::{
 };
 use fastcdc::v2020::AsyncStreamCDC;
 use futures::StreamExt;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -50,6 +51,9 @@ pub(crate) async fn process_job<S: ObjectStore>(
     store: &S,
     job: &ProcessJob,
 ) -> Result<ProcessResult> {
+    if let Some(list_key) = &job.chunks_key {
+        return verify_chunk_list(store, job, list_key).await;
+    }
     // Validate the complete archive before creating any permanent objects,
     // so malformed input whose hash or NAR structure is only discovered at
     // the end of the stream cannot leave content-addressed chunks behind.
@@ -242,6 +246,137 @@ async fn validate_nar<S: ObjectStore>(store: &S, job: &ProcessJob) -> Result<(St
     ))
 }
 
+/// The chunk list a client-encoded upload leaves in staging.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChunkList {
+    encoding_id: String,
+    nar_hash: String,
+    nar_size: u64,
+    chunks: Vec<ListedChunk>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListedChunk {
+    raw_hash: String,
+    raw_size: u64,
+    key: String,
+}
+
+/// zstd's worst case for a `CHUNK_MAX_SIZE` frame, rounded up.
+const CHUNK_MAX_COMPRESSED_SIZE: u64 = 17 * 1024 * 1024;
+
+/// Verifies a client-encoded upload whose chunks are already stored: they
+/// must decode to their keys and concatenate to a valid NAR with the declared
+/// hash. Nothing is written but the manifest, which is built from the stored
+/// bytes. Used for NARs too large to verify inside a Worker request.
+async fn verify_chunk_list<S: ObjectStore>(
+    store: &S,
+    job: &ProcessJob,
+    list_key: &str,
+) -> Result<ProcessResult> {
+    let mut body = store.get(list_key).await?;
+    let mut bytes = Vec::new();
+    body.read_to_end(&mut bytes)
+        .await
+        .map_err(|error| ProcessFailure::Retryable(anyhow::Error::new(error)))?;
+    let list: ChunkList = serde_json::from_slice(&bytes)
+        .map_err(|error| ProcessFailure::permanent(format!("invalid chunk list: {error}")))?;
+    if list.encoding_id != job.encoding_id
+        || list.nar_hash != job.nar_hash
+        || list.nar_size != job.nar_size
+    {
+        return Err(ProcessFailure::permanent(
+            "chunk list does not match the upload",
+        ));
+    }
+    if list.chunks.is_empty()
+        || list.chunks.iter().map(|chunk| chunk.raw_size).sum::<u64>() != list.nar_size
+    {
+        return Err(ProcessFailure::permanent(
+            "chunk sizes do not add up to the NAR size",
+        ));
+    }
+
+    let mut validator = NarValidator::spawn();
+    let mut nar_hash = Sha256::new();
+    let mut file_hash = Sha256::new();
+    let mut file_size = 0u64;
+    let mut refs = Vec::with_capacity(list.chunks.len());
+    let invalid_nar = |error: &dyn std::fmt::Display| {
+        ProcessFailure::permanent(format!("invalid NAR archive: {error}"))
+    };
+    for chunk in list.chunks {
+        if chunk.raw_size == 0
+            || chunk.raw_size > CHUNK_MAX_SIZE as u64
+            || chunk.key != format!("chunks/{}/{}.zst", job.encoding_id, chunk.raw_hash)
+        {
+            return Err(ProcessFailure::permanent("invalid chunk in chunk list"));
+        }
+        let mut compressed = Vec::new();
+        LimitedReader::new(store.get(&chunk.key).await?, CHUNK_MAX_COMPRESSED_SIZE)
+            .read_to_end(&mut compressed)
+            .await
+            .map_err(ProcessFailure::from_stream)?;
+        let capacity = chunk.raw_size as usize;
+        let (compressed, raw) = tokio::task::spawn_blocking(move || {
+            let raw = zstd::bulk::decompress(&compressed, capacity);
+            (compressed, raw)
+        })
+        .await
+        .context("waiting for zstd decompression")?;
+        let raw = raw.map_err(|error| {
+            ProcessFailure::permanent(format!("chunk {} is not valid zstd: {error}", chunk.key))
+        })?;
+        if raw.len() as u64 != chunk.raw_size || sha256_nix(&raw) != chunk.raw_hash {
+            return Err(ProcessFailure::permanent(format!(
+                "chunk {} does not match its key",
+                chunk.key
+            )));
+        }
+        nar_hash.update(&raw);
+        file_hash.update(&compressed);
+        file_size += compressed.len() as u64;
+        if let Err(write_error) = validator.writer.write_all(&raw).await {
+            return Err(match validator.finish().await {
+                Err(error) => invalid_nar(&error),
+                Ok(()) => invalid_nar(&write_error),
+            });
+        }
+        refs.push(ChunkRef {
+            raw_hash: chunk.raw_hash,
+            raw_size: chunk.raw_size,
+            compressed_hash: sha256_nix(&compressed),
+            compressed_size: compressed.len() as u64,
+            key: chunk.key,
+        });
+    }
+    validator
+        .finish()
+        .await
+        .map_err(|error| invalid_nar(&error))?;
+    if format!("sha256:{}", nix_base32(&nar_hash.finalize())) != job.nar_hash {
+        return Err(ProcessFailure::permanent(
+            "chunks do not match the declared NAR hash",
+        ));
+    }
+    publish_manifest(
+        store,
+        ChunkManifest {
+            encoding_id: job.encoding_id.clone(),
+            nar_hash: job.nar_hash.clone(),
+            nar_size: job.nar_size,
+            file_hash: format!("sha256:{}", nix_base32(&file_hash.finalize())),
+            file_size,
+            chunks: refs,
+            processing_version: env!("CARGO_PKG_VERSION").into(),
+            created_at: now_seconds(),
+        },
+    )
+    .await
+}
+
 fn sha256_nix(bytes: &[u8]) -> String {
     format!("sha256:{}", nix_base32(&Sha256::digest(bytes)))
 }
@@ -304,6 +439,7 @@ mod tests {
             nar_hash: "sha256:0000000000000000000000000000000000000000000000000000".into(),
             nar_size: 9,
             encoding_id: ENCODING_ID.into(),
+            chunks_key: None,
         };
 
         let result = process_job(&store, &job).await;
@@ -337,6 +473,7 @@ mod tests {
             nar_hash: sha256_nix(raw),
             nar_size: raw.len() as u64,
             encoding_id: ENCODING_ID.into(),
+            chunks_key: None,
         }
     }
 
@@ -428,6 +565,78 @@ mod tests {
                 "read {drop_on_read}: {result:?}",
             );
         }
+    }
+
+    /// Stores `raw` as client-encoded chunks split at `splits`, with a chunk
+    /// list, and returns the job that verifies them.
+    fn encoded(store: &MemoryStore, raw: &[u8], splits: &[usize]) -> ProcessJob {
+        let mut chunks = Vec::new();
+        let mut start = 0;
+        for end in splits.iter().copied().chain([raw.len()]) {
+            let bytes = &raw[start..end];
+            start = end;
+            let raw_hash = sha256_nix(bytes);
+            let key = format!("chunks/{ENCODING_ID}/{raw_hash}.zst");
+            store
+                .objects
+                .lock()
+                .unwrap()
+                .insert(key.clone(), zstd::encode_all(bytes, ZSTD_LEVEL).unwrap());
+            chunks.push(serde_json::json!({
+                "raw_hash": raw_hash, "raw_size": bytes.len(), "key": key,
+            }));
+        }
+        let job = ProcessJob {
+            chunks_key: Some("staging/job.chunks.json".into()),
+            ..job_for(raw)
+        };
+        store.objects.lock().unwrap().insert(
+            "staging/job.chunks.json".into(),
+            serde_json::to_vec(&serde_json::json!({
+                "encoding_id": ENCODING_ID,
+                "nar_hash": job.nar_hash,
+                "nar_size": job.nar_size,
+                "chunks": chunks,
+            }))
+            .unwrap(),
+        );
+        job
+    }
+
+    #[tokio::test]
+    async fn verifies_client_encoded_chunks_and_writes_only_the_manifest() {
+        let raw = nar(&b"hello world ".repeat(100));
+        let store = MemoryStore::default();
+        let job = encoded(&store, &raw, &[40, 500]);
+        let result = process_job(&store, &job).await.unwrap();
+        assert_eq!(result.manifest.chunks.len(), 3);
+        assert_eq!(result.manifest.nar_hash, job.nar_hash);
+        assert_eq!(*store.writes.lock().unwrap(), vec![result.manifest_key]);
+    }
+
+    #[tokio::test]
+    async fn rejects_client_encoded_chunks_that_are_not_the_nar() {
+        let raw = b"not a NAR, but long enough".to_vec();
+        let store = MemoryStore::default();
+        let job = encoded(&store, &raw, &[10]);
+        let result = process_job(&store, &job).await;
+        assert!(
+            matches!(result, Err(ProcessFailure::Permanent(_))),
+            "{result:?}"
+        );
+        assert!(store.writes.lock().unwrap().is_empty());
+
+        let raw = nar(b"hello");
+        let store = MemoryStore::default();
+        let job = ProcessJob {
+            nar_hash: sha256_nix(b"something else"),
+            ..encoded(&store, &raw, &[])
+        };
+        let result = process_job(&store, &job).await;
+        assert!(
+            matches!(result, Err(ProcessFailure::Permanent(_))),
+            "{result:?}"
+        );
     }
 
     #[tokio::test]

@@ -7,6 +7,34 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MissingPathsResponse {
     pub missing: Vec<String>,
+    /// Paths another push is uploading; older servers do not report them.
+    #[serde(default)]
+    pub pending: Vec<PendingUpload>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingUpload {
+    pub store_hash: String,
+    pub upload_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncodedUploadResponse {
+    pub id: String,
+    pub status: UploadStatus,
+    pub error: Option<String>,
+    pub merged: bool,
+    pub missing_chunks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncodedUploadBatchResponse {
+    pub uploads: Vec<EncodedUploadResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncodedCompleteBatchResponse {
+    pub uploads: Vec<UploadStateResponse>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +106,28 @@ mod tests {
             _,
         >(json!({ "missing": ["0".repeat(32)] }));
         assert_eq!(missing.missing, ["0".repeat(32)]);
+        assert!(missing.pending.is_empty());
+
+        let missing: MissingPathsResponse =
+            readable_from_schema::<generated::MissingPathsResponse, _>(json!({
+                "missing": [],
+                "pending": [{ "store_hash": "0".repeat(32), "upload_id": "job" }],
+            }));
+        assert_eq!(missing.pending[0].upload_id, "job");
+
+        let hash = format!("sha256:{}", "0".repeat(52));
+        let opened: EncodedUploadBatchResponse =
+            readable_from_schema::<generated::EncodedUploadBatchResponse, _>(json!({ "uploads": [{
+                "id": "job", "status": "UPLOADING", "error": null,
+                "merged": false, "missing_chunks": [hash],
+            }]}));
+        assert_eq!(opened.uploads[0].missing_chunks, [hash]);
+
+        let completed: EncodedCompleteBatchResponse =
+            readable_from_schema::<generated::EncodedCompleteBatchResponse, _>(
+                json!({ "uploads": [{ "id": "job", "status": "READY", "error": null }] }),
+            );
+        assert_eq!(completed.uploads[0].status, UploadStatus::Ready);
     }
 
     #[test]

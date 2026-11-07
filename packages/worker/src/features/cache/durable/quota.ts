@@ -75,6 +75,31 @@ export class CoordinatorQuota {
     });
   }
 
+  async check(input: { delta: number }): Promise<RpcResult<void>> {
+    const cache = first(
+      this.ctx.storage.sql.exec<{
+        lifecycle: string;
+        logical_bytes: number;
+        quota_bytes: number;
+      }>('SELECT lifecycle, logical_bytes, quota_bytes FROM cache LIMIT 1'),
+    );
+    if (!cache) return failure('not_found', 'cache not found', 404);
+    const blocked = lifecycleFailure(cache.lifecycle);
+    if (blocked) return failure(blocked.code, blocked.message, blocked.status);
+    const pending =
+      first(
+        this.ctx.storage.sql.exec<{ value: number }>(
+          "SELECT COALESCE(SUM(CASE WHEN status = 'RESERVED' AND delta > 0 THEN delta ELSE 0 END), 0) AS value FROM quota_operations",
+        ),
+      )?.value ?? 0;
+    if (
+      Number(cache.logical_bytes) + Number(pending) + input.delta >
+      Number(cache.quota_bytes)
+    )
+      return failure('quota_exceeded', 'cache quota exceeded', 409);
+    return ok();
+  }
+
   async finalize(input: { operation_id: string }): Promise<RpcResult<void>> {
     return this.ctx.storage.transactionSync(() => {
       const row = first(

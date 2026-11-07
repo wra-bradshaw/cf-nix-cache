@@ -41,6 +41,10 @@ POST   /api/gc
 GET    /api/gc
 POST   /api/uploads
 PUT    /api/uploads/{id}/parts/{part-number}
+POST   /api/uploads/encoded
+POST   /api/uploads/encoded/batch
+PUT    /api/uploads/{id}/chunks/{raw-hash}
+POST   /api/uploads/encoded/batch/complete
 POST   /api/uploads/{id}/complete
 GET    /api/uploads/{id}
 DELETE /api/uploads/{id}
@@ -67,6 +71,49 @@ accepting optional `dry_run` and `grace_seconds`. It returns `202` with a
 active run and the last finished one. In a dry-run summary, `deleted_objects`
 and `deleted_bytes` are what would be deleted, not counting objects that the
 reported evictions would also free.
+
+## Uploads
+
+There are two ways to upload a path. Both end in `READY` once the path is
+published, and both are polled with `GET /api/uploads/{id}`.
+
+A **client-encoded upload** sends the NAR already split and compressed with the
+cache's `encoding_id`: FastCDC v2020 chunks of 1, 4 and 16 MiB minimum, average
+and maximum, each one zstd level-3 frame. `POST /api/uploads/encoded` takes the
+path's metadata and the ordered chunk list (raw and compressed hash and size of
+each chunk) and answers with the raw hashes of the chunks the server lacks, in
+`missing_chunks`. The client sends each one with `PUT
+/api/uploads/{id}/chunks/{raw-hash}`, then calls `POST
+/api/uploads/{id}/complete` with an empty body. A chunk is checked against its
+claimed hashes and sizes before it is stored, and a chunk that fails is answered
+with `invalid_chunk` (422) and fails the upload. Completion checks that the
+stored chunks concatenate to a valid NAR with the declared hash, and publishes
+the path, in the same request for NARs up to 256 MiB. Larger ones are queued for
+the processor and complete as `QUEUED`. An upload whose NAR the installation
+already has needs no chunks at all.
+
+Small paths, which are one chunk each, can be opened in batches of up to 64 with
+`POST /api/uploads/encoded/batch` (`{uploads: [...]}`, answered in order).
+`POST /api/uploads/encoded/batch/complete` then sends their missing chunks and
+completes them together, as `multipart/form-data` with a `request` field holding
+`{ids: [...]}` and one file field per chunk, named by its raw hash.
+
+While garbage collection is deleting objects, opening an upload returns
+`gc_in_progress` (503); retry with the same `Idempotency-Key`.
+
+A **staging upload**, the only kind before client encoding, sends the whole
+compressed NAR in 64 MiB parts to `PUT /api/uploads/{id}/parts/{part-number}`
+and completes with the part ETags; the processor then chunks it.
+
+Two pushes of the same path never process it twice. `POST
+/api/caches/{cache}/missing` reports a path that another upload is publishing in
+`pending`, with that upload's ID, rather than in `missing`. Opening an upload of
+a NAR that is already in flight returns that upload, with `merged: true` from
+the encoded routes; wait for it instead of sending anything. A staging upload
+only joins one that is past `UPLOADING`, since older clients would otherwise
+send their parts into it. A different NAR hash for the same store hash is a
+replacement and gets its own upload, and an in-flight upload that fails is
+replaced by the next push.
 
 Upload identity is an opaque ID allocated by the cache coordinator. A retry
 with the same key and request fingerprint returns the existing job; reusing

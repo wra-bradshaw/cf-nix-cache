@@ -7,7 +7,16 @@ const schema = `CREATE TABLE IF NOT EXISTS job (
   staging_key TEXT NOT NULL, upload_id TEXT, state TEXT NOT NULL, manifest TEXT NOT NULL,
   compressed_size INTEGER NOT NULL, idempotency_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
   parts TEXT NOT NULL, error TEXT, result TEXT
-);`;
+);
+CREATE TABLE IF NOT EXISTS session (
+  key INTEGER PRIMARY KEY CHECK (key = 1), lease_token TEXT, chunks_key TEXT NOT NULL,
+  existing_manifest INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_chunks (
+  idx INTEGER PRIMARY KEY, raw_hash TEXT NOT NULL, raw_size INTEGER NOT NULL,
+  compressed_hash TEXT NOT NULL, compressed_size INTEGER NOT NULL, present INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS session_chunks_hash ON session_chunks(raw_hash);`;
 
 export class UploadStorage {
   constructor(private readonly ctx: DurableObjectState) {
@@ -21,7 +30,13 @@ export class UploadStorage {
       ),
     );
     if (!row) return null;
+    const session = first(
+      this.ctx.storage.sql.exec<SqlRow>(
+        'SELECT chunks_key FROM session WHERE key = 1',
+      ),
+    );
     return {
+      chunks_key: session ? String(session.chunks_key) : null,
       job_id: String(row.job_id),
       cache: String(row.cache),
       cache_id: String(row.cache_id),
@@ -47,7 +62,7 @@ export class UploadStorage {
     cache_id: string;
     incarnation: string;
     staging_key: string;
-    upload_id: string;
+    upload_id: string | null;
     manifest: UploadManifest;
     compressed_size: number;
     idempotency_key: string;

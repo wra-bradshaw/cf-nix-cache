@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use cf_nix_cache_core::{validate_store_hash, ZSTD_LEVEL};
+use cf_nix_cache_core::{nix_base32, validate_store_hash, ZSTD_LEVEL};
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -55,6 +55,12 @@ pub(crate) fn nix_hash(hash: &str) -> Result<String> {
     if hash.starts_with("sha256:") {
         return Ok(hash.into());
     }
+    // The SRI form newer Nix reports, converted without running nix.
+    if let Some(digest) = hash.strip_prefix("sha256-").and_then(decode_base64) {
+        if digest.len() == 32 {
+            return Ok(format!("sha256:{}", nix_base32(&digest)));
+        }
+    }
     let output = Command::new("nix")
         .args([
             "hash",
@@ -76,6 +82,30 @@ pub(crate) fn nix_hash(hash: &str) -> Result<String> {
         "sha256:{}",
         String::from_utf8(output.stdout)?.trim()
     ))
+}
+
+/// Standard, padded base64.
+fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let mut buffer = 0u32;
+    let mut bits = 0;
+    for byte in text.trim_end_matches('=').bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        buffer = (buffer << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+        }
+    }
+    Some(out)
 }
 
 pub(crate) fn basename(path: &str) -> Result<String> {
@@ -137,6 +167,15 @@ mod tests {
             "signatures": signatures,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn converts_sri_hashes_without_nix() {
+        // `nix hash convert --to nix32 sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=`
+        assert_eq!(
+            nix_hash("sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=").unwrap(),
+            "sha256:0mdqa9w1p6cmli6976v4wi0sw9r4p5prkj7lzfd1877wk11c9c73",
+        );
     }
 
     #[test]

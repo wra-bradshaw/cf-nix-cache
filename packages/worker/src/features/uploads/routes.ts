@@ -17,7 +17,8 @@ import {
 } from '../../shared/http';
 import { type InitiateUploadResponse, MULTIPART_PART_SIZE } from './types';
 import { authFor } from '../cache/access';
-import { coordinator } from '../cache/stubs';
+import { allocateUpload } from './allocate';
+import { completeEncoded } from './encoded';
 import { getCache } from '../cache/resolve-cache';
 import { idStub, unwrapRpc } from '../../shared/rpc';
 import { uploadAccess, stateResponse } from './access';
@@ -34,12 +35,23 @@ uploadRoutes.post('/api/uploads', async (c) => {
   const cache = await getCache(c.env, input.manifest.cache);
   await authFor(c.req.raw, c.env, cache, 'push');
   const fingerprint = requestFingerprint(input);
-  const allocation = unwrapRpc(
-    await coordinator(c.env, cache.reference).allocateUpload({
-      operation_id: key,
-      fingerprint,
-    }),
+  // This route's clients cannot wait on an upload that is still receiving
+  // parts, so they only join one that is already being processed.
+  const { allocation, state: joined } = await allocateUpload(
+    c.env,
+    cache,
+    { operation_id: key, fingerprint, manifest: input.manifest },
+    false,
   );
+  if (allocation.merged) {
+    const merged: InitiateUploadResponse = {
+      id: allocation.id,
+      status: joined!,
+      error: null,
+      parts: [],
+    };
+    return c.json(merged, 200);
+  }
   const job = idStub(c.env.UPLOAD_JOB, allocation.id);
   const state = unwrapRpc(
     await job.init({
@@ -85,8 +97,9 @@ uploadRoutes.put('/api/uploads/:id/parts/:number', async (c) => {
 });
 
 uploadRoutes.post('/api/uploads/:id/complete', async (c) => {
-  const { job } = await uploadAccess(c);
+  const { job, access } = await uploadAccess(c);
   idempotency(c.req.raw);
+  if (access.encoded) return stateResponse(await completeEncoded(c.env, job));
   const input = parseJsonSchema(
     CompleteUploadSchema,
     await parseJson(c.req.raw),

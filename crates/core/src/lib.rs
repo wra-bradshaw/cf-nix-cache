@@ -13,7 +13,9 @@ pub use error::Error;
 pub use identifiers::{nix_base32, validate_store_hash, CacheName, StorePathName};
 pub use processing::{ChunkManifest, ChunkRef, ProcessJob, ProcessResult};
 pub use wire::{
-    InitiateUploadResponse, MissingPathsResponse, UploadPart, UploadStateResponse, UploadStatus,
+    EncodedCompleteBatchResponse, EncodedUploadBatchResponse, EncodedUploadResponse,
+    InitiateUploadResponse, MissingPathsResponse, PendingUpload, UploadPart, UploadStateResponse,
+    UploadStatus,
 };
 
 pub const MAX_NAR_SIZE: u64 = 10 * 1024 * 1024 * 1024;

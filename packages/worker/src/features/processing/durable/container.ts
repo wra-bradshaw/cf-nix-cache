@@ -2,8 +2,19 @@ import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 
 const objectStoreHost = 'cache.r2';
 const processorPort = 8080;
-// How long the container keeps running once the Durable Object is idle.
-const inactivityTimeoutMs = 2 * 60 * 1000;
+// How long the container keeps running once the Durable Object is idle. Jobs
+// share a fixed pool of containers (see processorFor), so a short tail is
+// enough to catch the next queued job without paying for idle minutes.
+const inactivityTimeoutMs = 10 * 1000;
+// 1/16 vCPU, 256 MiB, 2 GB disk. Under the durable_object scheduling policy
+// the size is chosen here rather than by `instance_type` in wrangler.jsonc.
+const instanceType = 'lite';
+/**
+ * Upper bound on live processor containers. The durable_object scheduling
+ * policy has no `max_instances`, so the cap is the number of Durable Object
+ * names jobs are spread over.
+ */
+const PROCESSOR_POOL_SIZE = 16;
 const readyTimeoutMs = 20_000;
 const readyPollIntervalMs = 300;
 // A probe made before the processor listens can hang instead of failing.
@@ -59,6 +70,27 @@ export class ObjectStoreProxy extends WorkerEntrypoint<Env> {
   override fetch(request: Request): Promise<Response> {
     return handleObjectStore(request, this.env);
   }
+}
+
+/**
+ * The pooled container for a job. Hashing the job ID sends every retry of a
+ * job to the same container, and bounds the number of containers.
+ */
+export async function processorFor(
+  namespace: NonNullable<Env['PROCESSOR']>,
+  jobId: string,
+): Promise<DurableObjectStub<ProcessorContainer>> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(jobId)),
+  );
+  const slot =
+    (((digest[0]! << 24) |
+      (digest[1]! << 16) |
+      (digest[2]! << 8) |
+      digest[3]!) >>>
+      0) %
+    PROCESSOR_POOL_SIZE;
+  return namespace.getByName(`processor-${slot}`);
 }
 
 function delay(ms: number): Promise<void> {
@@ -119,8 +151,13 @@ export class ProcessorContainer extends DurableObject<Env> {
     );
     this.container.start({
       image,
+      instance: instanceType,
       enableInternet: false,
-      env: { OBJECT_STORE_ENDPOINT: `http://${objectStoreHost}` },
+      env: {
+        OBJECT_STORE_ENDPOINT: `http://${objectStoreHost}`,
+        // A lite instance has 256 MiB; one job at a time keeps it well inside.
+        MAX_CONCURRENT_JOBS: '1',
+      },
     });
     await this.container.setInactivityTimeout(inactivityTimeoutMs);
     await this.waitUntilReady();

@@ -9,7 +9,12 @@ import { type RpcResult, failure, ok } from '../../../shared/rpc';
 import { AUDIT_OUTBOX_SCHEMA, AuditOutbox } from '../../audit/outbox';
 import { CoordinatorQuota } from './quota';
 import { CoordinatorLifecycle } from './coordinator-lifecycle';
-import { UploadAllocations } from './upload-allocations';
+import {
+  type Allocation,
+  type AllocationRequest,
+  INFLIGHT_SCHEMA,
+  UploadAllocations,
+} from './upload-allocations';
 import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
 
 const schema = `CREATE TABLE IF NOT EXISTS cache (
@@ -26,6 +31,7 @@ CREATE TABLE IF NOT EXISTS upload_allocations (
 CREATE TABLE IF NOT EXISTS clear_operations (
   operation_id TEXT PRIMARY KEY, delta INTEGER NOT NULL
 );
+${INFLIGHT_SCHEMA}
 ${AUDIT_OUTBOX_SCHEMA}`;
 
 const ADDED_COLUMNS: Record<string, string> = {
@@ -97,13 +103,27 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
     return this.lifecycle.remove();
   }
 
-  allocateUpload(input: {
-    operation_id: string;
-    fingerprint: string;
-  }): Promise<
-    RpcResult<{ id: string; staging_key: string; repeated: boolean }>
-  > {
+  allocateUpload(input: AllocationRequest): Promise<RpcResult<Allocation>> {
     return this.allocations.allocate(input);
+  }
+
+  pendingUploads(input: {
+    store_hashes: string[];
+    now: number;
+  }): Promise<RpcResult<{ store_hash: string; upload_id: string }[]>> {
+    return this.allocations.pending(input);
+  }
+
+  releaseUpload(input: {
+    store_hash: string;
+    upload_id: string;
+  }): Promise<RpcResult<void>> {
+    return this.allocations.release(input);
+  }
+
+  /** An early, non-binding quota check; publication reserves for real. */
+  checkQuota(input: { delta: number }): Promise<RpcResult<void>> {
+    return this.quota.check(input);
   }
 
   reserve(input: {

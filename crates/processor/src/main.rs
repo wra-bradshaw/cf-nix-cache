@@ -13,7 +13,8 @@ use cf_nix_cache_core::contracts::process_job::CfNixCacheProcessorJob;
 use cf_nix_cache_core::{ProcessJob, ProcessResult};
 use object_store::HttpObjectStore;
 use serde::Serialize;
-use tokio::net::TcpListener;
+use std::sync::Arc;
+use tokio::{net::TcpListener, sync::Semaphore};
 
 mod nar;
 mod object_store;
@@ -22,6 +23,9 @@ mod pipeline;
 #[derive(Clone)]
 struct AppState {
     store: HttpObjectStore,
+    /// Containers are pooled, so one may receive several jobs at once. They
+    /// queue here instead of sharing a small instance's memory.
+    jobs: Arc<Semaphore>,
 }
 
 #[derive(Debug, Serialize)]
@@ -34,8 +38,17 @@ struct ErrorBody {
 async fn main() -> Result<()> {
     let endpoint =
         std::env::var("OBJECT_STORE_ENDPOINT").context("OBJECT_STORE_ENDPOINT is required")?;
+    let concurrency = match std::env::var("MAX_CONCURRENT_JOBS") {
+        Ok(value) => value
+            .parse::<usize>()
+            .ok()
+            .filter(|value| *value > 0)
+            .context("MAX_CONCURRENT_JOBS must be a positive integer")?,
+        Err(_) => 1,
+    };
     let state = AppState {
         store: HttpObjectStore::new(&endpoint)?,
+        jobs: Arc::new(Semaphore::new(concurrency)),
     };
     let app = Router::new()
         .route("/ready", get(ready))
@@ -58,6 +71,9 @@ async fn process(
     // the domain job, which only accepts this build's encoding.
     let job = ProcessJob::try_from(contract)
         .map_err(|_| ProcessorRejection::permanent("unsupported processing contract"))?;
+    let _permit = state.jobs.acquire().await.map_err(|error| {
+        ProcessorRejection::from_failure(pipeline::ProcessFailure::Retryable(error.into()))
+    })?;
     pipeline::process_job(&state.store, &job)
         .await
         .map(Json)
