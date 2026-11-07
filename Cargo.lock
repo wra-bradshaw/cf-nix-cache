@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "cf-nix-cache"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "cf-nix-cache-core",
@@ -241,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "cf-nix-cache-contracts"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "cf-nix-cache-workspace-hack",
  "regress",
@@ -253,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "cf-nix-cache-core"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "cf-nix-cache-contracts",
  "cf-nix-cache-workspace-hack",
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "cf-nix-cache-processor"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-compression",

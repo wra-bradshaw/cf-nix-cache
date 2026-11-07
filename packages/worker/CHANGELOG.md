@@ -1,5 +1,11 @@
 # cf-nix-cache
 
+## 0.5.1
+
+### Patch Changes
+
+- 2c89c9a: Fix an issue where deployments failed due to incorrect schedules in wrangler.jsonc
+
 ## 0.5.0
 
 ### Minor Changes

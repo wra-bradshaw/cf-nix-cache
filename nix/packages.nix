@@ -24,7 +24,7 @@ forEachSupportedSystem (
     common = {
       src = workspaceSrc;
       strictDeps = true;
-      version = "0.5.0";
+      version = "0.5.1";
     };
     cargoArtifacts = craneLib.buildDepsOnly (
       common
@@ -37,7 +37,7 @@ forEachSupportedSystem (
       inherit cargoArtifacts;
       src = workspaceSrc;
       strictDeps = true;
-      version = "0.5.0";
+      version = "0.5.1";
       doCheck = false;
     };
     separateCli = craneLib.buildPackage (
@@ -78,12 +78,12 @@ forEachSupportedSystem (
       '';
     cli =
       if workspaceBinaries != null then
-        fromWorkspace "cf-nix-cache-0.5.0" "cf-nix-cache"
+        fromWorkspace "cf-nix-cache-0.5.1" "cf-nix-cache"
       else
         separateCli;
     processor =
       if workspaceBinaries != null then
-        fromWorkspace "cf-nix-cache-processor-0.5.0" "cf-nix-cache-processor"
+        fromWorkspace "cf-nix-cache-processor-0.5.1" "cf-nix-cache-processor"
       else
         separateProcessor;
     processorImage = pkgs.dockerTools.buildLayeredImage {
