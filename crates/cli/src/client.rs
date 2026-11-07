@@ -7,7 +7,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::config::Config;
+use crate::{args::PageArgs, config::Config};
 
 pub(crate) struct Api {
     client: ClientWithMiddleware,
@@ -144,6 +144,23 @@ pub(crate) fn api_path(segments: &[&str]) -> String {
         .expect("static URL has a path")
         .extend(segments);
     url.path().to_owned()
+}
+
+/// `base` with the query string for a `--limit`/`--cursor` page request.
+pub(crate) fn page_path(base: &str, page: &PageArgs) -> Result<String> {
+    if !(1..=100).contains(&page.limit) {
+        anyhow::bail!("limit must be between 1 and 100");
+    }
+    let mut url = Url::parse(&format!("https://invalid.example{base}"))?;
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("limit", &page.limit.to_string());
+        if let Some(cursor) = &page.cursor {
+            query.append_pair("cursor", cursor);
+        }
+    }
+    let query = url.query().unwrap_or_default();
+    Ok(format!("{}?{query}", url.path()))
 }
 
 fn retry_safe(method: &Method, path: &str) -> bool {

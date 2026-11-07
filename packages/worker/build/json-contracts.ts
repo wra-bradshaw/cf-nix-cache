@@ -93,9 +93,8 @@ function generateModule(schemaDirectory: string): string {
   const validators = standaloneCode(ajv, validatorRefs);
   const descriptors = discovered
     .map(
-      ({ name, ref, typeName }) =>
+      ({ name, typeName }) =>
         `export const ${name} = {\n` +
-        `  ref: ${JSON.stringify(ref)},\n` +
         `  validate: ${name}Validator as ContractSchema<${typeName}>['validate'],\n` +
         `} satisfies ContractSchema<${typeName}>;`,
     )
@@ -111,7 +110,7 @@ function generateModule(schemaDirectory: string): string {
   );
   return (
     `${generatedFileHeader}\n` +
-    `import type { ContractSchema } from '../contracts';\n` +
+    `import type { ContractSchema } from '../shared/schemas';\n` +
     `import type { ${[...new Set(discovered.map(({ typeName }) => typeName))].join(', ')} } from './contracts';\n\n` +
     `${renamedValidators}\n${descriptors}\n`
   );

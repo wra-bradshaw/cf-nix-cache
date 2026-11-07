@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { canDelegate, permitsCache, permitsGlobal } from './authorization';
-import type { TokenClaims } from '../../types';
+import type { TokenClaims } from './types';
 
 const parent: TokenClaims = {
   iss: 'issuer',

@@ -1,6 +1,6 @@
-import type { UploadManifest, UploadState } from '../../../types';
-import type { ProcessReceipt, UploadRow } from './model';
-import { first, type SqlRow } from '../../../infrastructure/durable/shared';
+import type { UploadManifest, UploadState } from '../types';
+import type { ProcessReceipt, UploadRow } from './upload-row';
+import { first, type SqlRow } from '../../../shared/sql';
 
 const schema = `CREATE TABLE IF NOT EXISTS job (
   job_id TEXT PRIMARY KEY, cache TEXT NOT NULL, cache_id TEXT NOT NULL, incarnation TEXT NOT NULL,

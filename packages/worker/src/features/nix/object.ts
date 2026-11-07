@@ -1,13 +1,10 @@
 import type { Context } from 'hono';
-import type { AppEnv } from '../runtime/http';
-import type { CacheState, PathRecord } from '../../types';
-import {
-  ChunkManifestSchema,
-  DomainError,
-  parseJsonSchema,
-} from '../domain/validation';
+import type { AppEnv } from '../../shared/http';
+import type { CacheState, PathRecord } from '../cache/types';
+import { ChunkManifestSchema, parseJsonSchema } from '../../shared/schemas';
+import { DomainError } from '../../shared/errors';
 import { planRange, parseRange } from './range';
-import { touchPath } from '../cache/directory';
+import { touchPath } from '../cache/resolve-cache';
 
 export async function serveNarObject(
   c: Context<AppEnv>,

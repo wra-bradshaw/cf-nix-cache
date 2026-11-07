@@ -1,15 +1,11 @@
-import { validateGrant } from '../../domain/validation';
-import type { AuditEvent, Grant } from '../../../types';
-import type { RpcResult } from '../../../rpc';
+import { validateGrant } from '../authorization';
+import type { AuditEvent } from '../../audit/types';
+import type { Grant } from '../types';
+import { type RpcResult, failure, ok } from '../../../shared/rpc';
 import { hashSecret } from '../credentials';
-import { AuditOutbox } from '../../../infrastructure/durable/audit-outbox';
+import { AuditOutbox } from '../../audit/outbox';
 import { TokenSigner } from './signer';
-import {
-  failure,
-  first,
-  ok,
-  type SqlRow,
-} from '../../../infrastructure/durable/shared';
+import { first, type SqlRow } from '../../../shared/sql';
 
 type IssuedToken = {
   id: string;

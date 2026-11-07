@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CompleteUploadRequest } from '../../../types';
+import type { CompleteUploadRequest } from '../types';
 import { UploadMultipart } from './multipart';
 import type { UploadStorage } from './storage';
 

@@ -1,11 +1,6 @@
-import type { GcActiveRun, GcPhase, GcSummary } from '../model';
-import type { RpcResult } from '../../../rpc';
-import {
-  failure,
-  first,
-  ok,
-  type SqlRow,
-} from '../../../infrastructure/durable/shared';
+import type { GcActiveRun, GcPhase, GcSummary } from '../types';
+import { type RpcResult, failure, ok } from '../../../shared/rpc';
+import { first, type SqlRow } from '../../../shared/sql';
 
 /**
  * Longest a run may go without calling the ledger before it loses the gate.

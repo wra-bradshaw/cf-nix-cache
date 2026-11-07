@@ -82,3 +82,45 @@ pub(crate) fn make_nar(path: &str) -> Result<NamedTempFile> {
     }
     Ok(file)
 }
+
+/// Whether any signature on a `nix path-info` entry uses an upstream key.
+pub(crate) fn signed_by_upstream(info: &Value, upstreams: &[String]) -> bool {
+    info["signatures"].as_array().is_some_and(|signatures| {
+        signatures
+            .iter()
+            .filter_map(|signature| signature.as_str()?.split_once(':'))
+            .any(|(name, _)| upstreams.iter().any(|upstream| upstream == name))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_upstream_key_names_exactly() {
+        let upstreams = ["cache.nixos.org-1".to_string()];
+        let info = |signatures: Value| serde_json::json!({ "signatures": signatures });
+        assert!(signed_by_upstream(
+            &info(serde_json::json!(["other-1:a", "cache.nixos.org-1:b"])),
+            &upstreams
+        ));
+        assert!(!signed_by_upstream(
+            &info(serde_json::json!(["other-1:a"])),
+            &upstreams
+        ));
+        assert!(!signed_by_upstream(
+            &info(serde_json::json!(["cache.nixos.org-10:a"])),
+            &upstreams
+        ));
+        assert!(!signed_by_upstream(
+            &info(serde_json::json!(["cache.nixos.org-1"])),
+            &upstreams
+        ));
+        assert!(!signed_by_upstream(
+            &info(serde_json::json!(["cache.nixos.org-1:a"])),
+            &[]
+        ));
+        assert!(!signed_by_upstream(&serde_json::json!({}), &upstreams));
+    }
+}

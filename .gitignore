@@ -4,7 +4,7 @@ target/
 crash.log
 .DS_Store
 node_modules/
-packages/worker/src/generated/
+packages/worker/src/generated/json-contracts.ts
 .wrangler/
 .wrangler.production.json
 .dev.vars

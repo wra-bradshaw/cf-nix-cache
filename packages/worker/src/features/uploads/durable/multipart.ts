@@ -1,16 +1,16 @@
-import { CompleteUploadSchema, partsFor } from '../../domain/validation';
-import type {
-  CompleteUploadRequest,
-  UploadManifest,
-  UploadState,
-  UploadStateResponse,
-} from '../../../types';
-import { MULTIPART_PART_SIZE } from '../../../types';
-import type { RpcResult } from '../../../rpc';
-import { ensureWorkflow } from '../../workflows/enqueue';
-import { processJob, state, type UploadRow } from './model';
+import { CompleteUploadSchema } from '../../../shared/schemas';
+import { partsFor } from '../manifest';
+import {
+  type CompleteUploadRequest,
+  type UploadManifest,
+  type UploadState,
+  type UploadStateResponse,
+  MULTIPART_PART_SIZE,
+} from '../types';
+import { type RpcResult, failure, ok } from '../../../shared/rpc';
+import { ensureWorkflow } from '../../../shared/workflows';
+import { toProcessJob, toStateResponse, type UploadRow } from './upload-row';
 import { UploadStorage } from './storage';
-import { failure, ok } from '../../../infrastructure/durable/shared';
 
 export class UploadMultipart {
   constructor(
@@ -130,12 +130,12 @@ export class UploadMultipart {
       await ensureWorkflow(
         this.env.PROCESS_UPLOAD!,
         row.job_id,
-        processJob(row),
+        toProcessJob(row),
       );
-      return ok(state(this.storage.row()!));
+      return ok(toStateResponse(this.storage.row()!));
     }
     if (row.state !== 'UPLOADING' && row.state !== 'COMPLETING')
-      return ok(state(row));
+      return ok(toStateResponse(row));
     if (row.state === 'COMPLETING') return this.completeMultipart(row);
     const values = input.parts?.length
       ? input.parts
@@ -184,8 +184,12 @@ export class UploadMultipart {
     if (completed.size !== row.compressed_size)
       return this.failSize(row, completed.size);
     this.storage.setQueued(row.job_id);
-    await ensureWorkflow(this.env.PROCESS_UPLOAD!, row.job_id, processJob(row));
-    return ok(state(this.storage.row()!));
+    await ensureWorkflow(
+      this.env.PROCESS_UPLOAD!,
+      row.job_id,
+      toProcessJob(row),
+    );
+    return ok(toStateResponse(this.storage.row()!));
   }
 
   private async failSize(
@@ -197,6 +201,6 @@ export class UploadMultipart {
       `completed object size ${size} does not match declared size ${row.compressed_size}`,
     );
     await this.env.CACHE_BUCKET.delete(row.staging_key);
-    return ok(state(this.storage.row()!));
+    return ok(toStateResponse(this.storage.row()!));
   }
 }

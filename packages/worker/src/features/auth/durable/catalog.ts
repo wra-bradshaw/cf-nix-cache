@@ -1,9 +1,7 @@
-import type { Grant, PageResponse, TokenSummary } from '../../../types';
-import type { RpcResult } from '../../../rpc';
-import {
-  AUDIT_OUTBOX_SCHEMA,
-  AuditOutbox,
-} from '../../../infrastructure/durable/audit-outbox';
+import type { Grant, TokenSummary } from '../types';
+import type { PageResponse } from '../../../shared/cursors';
+import type { RpcResult } from '../../../shared/rpc';
+import { AUDIT_OUTBOX_SCHEMA, AuditOutbox } from '../../audit/outbox';
 import {
   BOOTSTRAP_SCHEMA,
   migrateLegacyBootstrap,
@@ -11,7 +9,7 @@ import {
 } from './issuance';
 import { TokenManagement } from './management';
 import { TokenSigner } from './signer';
-import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
+import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
 
 const schema = `CREATE TABLE IF NOT EXISTS tokens (
   jti TEXT PRIMARY KEY, subject TEXT NOT NULL, expires_at INTEGER NOT NULL,

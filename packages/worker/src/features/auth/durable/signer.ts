@@ -1,6 +1,6 @@
 import { importJWK, SignJWT } from 'jose';
-import type { Grant } from '../../../types';
-import { now } from '../../../infrastructure/durable/shared';
+import type { Grant } from '../types';
+import { now } from '../../../shared/clock';
 
 export class TokenSigner {
   constructor(private readonly env: Env) {}

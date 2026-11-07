@@ -1,14 +1,14 @@
+import { fail } from "./lib/fail.mts";
+import { keyMaterial } from "./lib/keys.mts";
+import { configPath } from "./lib/paths.mts";
 import {
-  configPath,
-  fail,
-  keyMaterial,
+  missingSecrets,
   putSecrets,
-  secretNames,
   secretNamesFromWrangler,
-} from "./lib.mts";
+} from "./lib/secrets.mts";
 
 const configured = await secretNamesFromWrangler(configPath);
-const missing = secretNames.filter((name) => !configured.has(name));
+const missing = missingSecrets(configured);
 if (missing.length)
   fail(
     `cannot rotate auth keys with an incomplete secret set (missing ${missing.join(", ")})`,

@@ -1,4 +1,5 @@
-import type { ChunkManifest, PathRecord } from '../../types';
+import type { ChunkManifest } from '../uploads/types';
+import type { PathRecord } from '../cache/types';
 
 const encoder = new TextEncoder();
 

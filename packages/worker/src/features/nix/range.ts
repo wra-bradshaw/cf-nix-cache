@@ -1,4 +1,4 @@
-import type { ChunkRef } from '../../types';
+import type { ChunkRef } from '../uploads/types';
 
 export interface PlannedRange {
   chunk: ChunkRef;

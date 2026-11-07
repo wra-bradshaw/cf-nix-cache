@@ -33,17 +33,19 @@ through routing; the coordinator remains the serving authority, so catalog
 traffic is reduced without allowing a CREATING or DELETING transition to serve
 data. Global control-plane operations require a wildcard admin grant.
 
-Publication, replacement, direct deletion, and cache teardown all use the
-same `PublicationApplication`: `prepare(operation_id) -> reserve(operation_id)
+Publication, replacement, and direct deletion all use the same
+`PublicationProtocol`: `prepare(operation_id) -> reserve(operation_id)
 -> commit(operation_id) -> finalize(operation_id)`. Prepare locks the store
 hash and records the exact delta. Quota reservations include pending positive
 deltas. Every operation is safe to repeat after a restart; an uncommitted
 reservation is aborted and a committed index mutation retains its pending
-charge until finalization. Cache teardown first fences every index shard and
-aborts prepared mutations, preventing a publication already in flight from
-recreating paths after the shard is cleared. Already-reserved publications
-are reconciled and finalized during deletion before their shard delta is
-applied, so a response loss cannot strand teardown. R2 lifecycle rules clean
+charge until finalization. Cache teardown does not go through that protocol:
+`DeleteCacheWorkflow` calls the shard's `clear` and the coordinator's
+`reconcile` and `clearDelta` directly, once per shard. Clearing first fences
+the index shard and aborts prepared mutations, preventing a publication already
+in flight from recreating paths after the shard is cleared. Already-reserved
+publications are reconciled and finalized during deletion before their shard
+delta is applied, so a response loss cannot strand teardown. R2 lifecycle rules clean
 abandoned staging data, and garbage collection (below) reclaims manifests and
 chunks. Because a path can be replaced, public NAR responses use a bounded cache lifetime rather than an
 immutable year-long cache directive.
@@ -105,25 +107,35 @@ sweep cannot leave a manifest whose chunks are gone.
 
 ## Worker structure
 
-The worker is organized by feature first. `src/features` owns the application
-surface, with each feature keeping its routes, use cases, domain rules, and
-feature-specific helpers together. Runtime composition lives in
-`features/runtime`; Durable Object entrypoints remain infrastructure adapters
-and are exported through the stable `src/durable.ts` registry.
+The worker is organized by feature first. `src/index.ts` is the entrypoint and
+exports the Durable Object and Workflow classes directly from their feature
+modules. `src/app` composes the Hono application and renders errors.
+`src/features` owns the application surface, with each feature keeping its
+routes, use cases, types, and helpers together; Durable Object classes live in
+`features/*/durable`. `src/shared` is the small cross-feature kernel for errors,
+identifiers, cursors, schema parsing, HTTP helpers, and RPC, SQL and Workflow
+helpers.
 
-Pure rules are kept behind the domain and application boundaries and may not
-import Cloudflare or other infrastructure adapters. The boundary check is
-part of the worker check command.
+Dependencies point one way: `app` may import `features`, and `features` may
+import `shared` and each other, but `shared` may not import `features` or `app`
+and `features` may not import `app`. Pure modules (most of `shared`, each
+feature's `types.ts`, `auth/authorization`, `cache/publication-protocol`,
+`cache/publication-ports`, `cache/shards`, `gc/garbage-collection`,
+`gc/gc-ports`, and `uploads/manifest`) may import only other pure modules or
+generated contracts, and may not use Cloudflare or other infrastructure APIs.
+`packages/worker/scripts/check-boundaries.mts` enforces this as part of the
+worker check command.
 
 Unit tests live beside their implementation as `<module>.test.ts`. End-to-end
 tests keep the Vitest file focused on lifecycle and scenario declarations;
 harness setup, HTTP assertions, process utilities, and scenario implementations
 are split under `e2e/support` and `e2e/scenarios`.
 
-The Rust crates are small, so each uses a flat module layout. `core/src`
-owns shared protocol semantics (`identifiers`, `manifests`, `wire`, `error`).
-The processor splits into `main` (HTTP bootstrap), `service` (processing),
+The Rust crates are small, so their module layouts stay nearly flat. `core/src`
+owns shared protocol semantics (`identifiers`, `processing`, `wire`, `error`).
+The processor splits into `main` (HTTP bootstrap), `pipeline` (processing),
 `nar` (NAR validation), and `object_store` (storage adapter). The CLI splits
-into `args` (command definitions), `handlers` (command flows), `nix` and
-`upload` (local Nix and multipart upload helpers), `client` (HTTP client),
-and `config` (credential storage).
+into `args` (command definitions), `commands` (dispatch, with `admin`, `gc`,
+`push`, and `configure_nix` command flows), `nix` and `upload` (local Nix and
+multipart upload helpers), `client` (HTTP client), and `config` (credential
+storage).

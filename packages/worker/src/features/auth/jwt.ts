@@ -1,6 +1,6 @@
 import { createLocalJWKSet, jwtVerify, type JWTPayload } from 'jose';
-import type { Grant, TokenClaims } from '../../types';
-import { validateGrant } from '../domain/uploads';
+import type { Grant, TokenClaims } from './types';
+import { validateGrant } from './authorization';
 
 function claimsFromPayload(payload: JWTPayload): TokenClaims {
   if (

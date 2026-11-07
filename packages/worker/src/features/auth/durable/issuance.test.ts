@@ -2,7 +2,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { hashSecret } from '../credentials';
-import type { AuditOutbox } from '../../../infrastructure/durable/audit-outbox';
+import type { AuditOutbox } from '../../audit/outbox';
 import {
   BOOTSTRAP_SCHEMA,
   migrateLegacyBootstrap,

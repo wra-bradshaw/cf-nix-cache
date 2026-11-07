@@ -1,7 +1,8 @@
-import type { UploadStateResponse } from '../../types';
-import { assertNamespaceId } from '../domain/validation';
-import { authFor, getCache } from '../cache/directory';
-import { idStub, unwrapRpc } from '../../rpc';
+import type { UploadStateResponse } from './types';
+import { assertNamespaceId } from '../../shared/identifiers';
+import { authFor } from '../cache/access';
+import { getCache } from '../cache/resolve-cache';
+import { idStub, unwrapRpc } from '../../shared/rpc';
 
 export async function uploadAccess(c: {
   env: Env;

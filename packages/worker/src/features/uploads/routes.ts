@@ -2,17 +2,24 @@ import { Hono } from 'hono';
 import {
   CompleteUploadSchema,
   parseJsonSchema,
+  UploadRequestSchema,
+} from '../../shared/schemas';
+import {
   partsFor,
   requestFingerprint,
-  parseContentLength,
-  UploadRequestSchema,
   validateUploadManifest,
-} from '../domain/validation';
-import type { InitiateUploadResponse } from '../../types';
-import { MULTIPART_PART_SIZE } from '../../types';
-import { idempotency, parseJson, type AppEnv } from '../runtime/http';
-import { authFor, coordinator, getCache } from '../cache/directory';
-import { idStub, unwrapRpc } from '../../rpc';
+} from './manifest';
+import {
+  parseContentLength,
+  idempotency,
+  parseJson,
+  type AppEnv,
+} from '../../shared/http';
+import { type InitiateUploadResponse, MULTIPART_PART_SIZE } from './types';
+import { authFor } from '../cache/access';
+import { coordinator } from '../cache/stubs';
+import { getCache } from '../cache/resolve-cache';
+import { idStub, unwrapRpc } from '../../shared/rpc';
 import { uploadAccess, stateResponse } from './access';
 
 export const uploadRoutes = new Hono<AppEnv>();

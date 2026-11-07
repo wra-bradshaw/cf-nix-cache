@@ -1,1 +1,0 @@
-export { controlRoutes } from './routes';

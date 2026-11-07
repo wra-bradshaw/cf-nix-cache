@@ -1,4 +1,4 @@
-use crate::{default_encoding_id, CacheName, UploadStatus};
+use crate::{CacheName, ENCODING_ID};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -43,9 +43,27 @@ pub struct CacheConfig {
     pub upstream_cache_key_names: Vec<String>,
 }
 
+fn default_encoding_id() -> String {
+    ENCODING_ID.into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MissingPathsResponse {
     pub missing: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum UploadStatus {
+    Created,
+    Uploading,
+    Completing,
+    Queued,
+    Processing,
+    Publishing,
+    Ready,
+    Failed,
+    Aborted,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,8 +1,6 @@
-use anyhow::Result;
 use cf_nix_cache_core::{contracts::api as contract, CacheName};
 use clap::{Parser, Subcommand, ValueEnum};
-use reqwest::Url;
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroUsize;
 
 #[derive(Parser)]
 #[command(
@@ -170,7 +168,7 @@ pub(crate) enum UploadCommand {
     Cancel { id: String },
 }
 
-pub(crate) fn parse_grant(value: &str) -> std::result::Result<contract::Grant, String> {
+fn parse_grant(value: &str) -> Result<contract::Grant, String> {
     let (cache, role) = value.split_once('=').ok_or("grant must be CACHE=ROLE")?;
     Ok(contract::Grant {
         cache: cache
@@ -180,26 +178,4 @@ pub(crate) fn parse_grant(value: &str) -> std::result::Result<contract::Grant, S
             .parse()
             .map_err(|_| "role must be pull, push, or admin")?,
     })
-}
-
-/// Converts a `--valid-for` duration to the contract's whole seconds.
-pub(crate) fn valid_for_seconds(valid_for: humantime::Duration) -> Result<NonZeroU64> {
-    NonZeroU64::new(valid_for.as_secs())
-        .ok_or_else(|| anyhow::anyhow!("--valid-for must be at least one second"))
-}
-
-pub(crate) fn page_path(base: &str, page: &PageArgs) -> Result<String> {
-    if !(1..=100).contains(&page.limit) {
-        anyhow::bail!("limit must be between 1 and 100");
-    }
-    let mut url = Url::parse(&format!("https://invalid.example{base}"))?;
-    {
-        let mut query = url.query_pairs_mut();
-        query.append_pair("limit", &page.limit.to_string());
-        if let Some(cursor) = &page.cursor {
-            query.append_pair("cursor", cursor);
-        }
-    }
-    let query = url.query().unwrap_or_default();
-    Ok(format!("{}?{query}", url.path()))
 }

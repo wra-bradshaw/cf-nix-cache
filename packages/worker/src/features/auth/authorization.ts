@@ -1,4 +1,5 @@
-import type { Grant, Role, TokenClaims } from '../../types';
+import type { Grant, Role, TokenClaims } from './types';
+import { GrantSchema } from '../../shared/schemas';
 
 function permits(grant: Role, required: Role): boolean {
   return (
@@ -48,4 +49,8 @@ export function permitsGlobal(claims: TokenClaims, required: Role): boolean {
   return claims.grants.some(
     (grant) => grant.cache === '*' && permits(grant.role, required),
   );
+}
+
+export function validateGrant(grant: unknown): grant is Grant {
+  return Boolean(GrantSchema.validate(grant));
 }

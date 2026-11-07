@@ -1,12 +1,9 @@
-import type { GcSummary } from '../model';
-import type { RpcResult } from '../../../rpc';
-import type { AuditEvent } from '../../../types';
-import {
-  AUDIT_OUTBOX_SCHEMA,
-  AuditOutbox,
-} from '../../../infrastructure/durable/audit-outbox';
-import { now, ok } from '../../../infrastructure/durable/shared';
-import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
+import type { GcSummary } from '../types';
+import { type RpcResult, ok } from '../../../shared/rpc';
+import type { AuditEvent } from '../../audit/types';
+import { AUDIT_OUTBOX_SCHEMA, AuditOutbox } from '../../audit/outbox';
+import { now } from '../../../shared/clock';
+import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
 import { GcLedger } from './ledger';
 
 /** The installation-wide authority for garbage collection and upload leases. */
