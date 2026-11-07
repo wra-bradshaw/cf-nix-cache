@@ -59,10 +59,17 @@ pub(crate) async fn upload_path(
     path: &str,
     info: &Value,
 ) -> Result<()> {
-    let mut file = make_nar(path)?;
+    // These run subprocesses and compress the NAR. On the async runtime they
+    // would hold up the network and polling work of the other uploads.
+    let (mut file, manifest) = {
+        let (cache, path, info) = (cache.clone(), path.to_owned(), info.clone());
+        tokio::task::spawn_blocking(move || {
+            Ok::<_, anyhow::Error>((make_nar(&path)?, manifest(&cache, &path, &info)?))
+        })
+        .await??
+    };
     let size = file.as_file().metadata()?.len();
     let part_size = cf_nix_cache_core::MULTIPART_PART_SIZE;
-    let manifest = manifest(cache, path, info)?;
     let init: InitiateUploadResponse = api
         .request(
             Method::POST,
@@ -79,6 +86,7 @@ pub(crate) async fn upload_path(
             return Ok(());
         }
         UploadStatus::Queued | UploadStatus::Processing | UploadStatus::Publishing => {
+            drop(file);
             return wait_for_upload(api, &init.id, path).await;
         }
         UploadStatus::Uploading => {}
@@ -107,6 +115,9 @@ pub(crate) async fn upload_path(
                 .context("part numbers start at 1")?,
         });
     }
+    // Concurrent uploads shouldn't hold temporary NARs on disk while they wait
+    // for the server.
+    drop(file);
     let _: UploadStateResponse = api
         .request(
             Method::POST,

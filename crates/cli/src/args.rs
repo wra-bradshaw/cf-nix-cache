@@ -2,7 +2,7 @@ use anyhow::Result;
 use cf_nix_cache_core::{contracts::api as contract, CacheName};
 use clap::{Parser, Subcommand, ValueEnum};
 use reqwest::Url;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU64, NonZeroUsize};
 
 #[derive(Parser)]
 #[command(
@@ -42,6 +42,9 @@ pub(crate) enum CommandKind {
         cache: CacheName,
         #[arg(required = true)]
         installables: Vec<String>,
+        /// Store paths to upload at the same time.
+        #[arg(long, short, default_value = "16")]
+        jobs: NonZeroUsize,
     },
     Token {
         #[command(subcommand)]
