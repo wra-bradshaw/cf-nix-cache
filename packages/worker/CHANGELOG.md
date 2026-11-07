@@ -1,5 +1,12 @@
 # cf-nix-cache
 
+## 0.3.0
+
+### Minor Changes
+
+- 0832e86: `cf-nix-cache push` now uploads store paths concurrently, 16 at a time by default (set with `--jobs`). A failed path no longer stops the rest of the push: the remaining paths still upload, each failure is reported, and the command exits non-zero.
+- cd62388: Re-arm bootstrap by setting a new `BOOTSTRAP_SECRET_HASH`, so a lost or expired admin token is recoverable. Each secret still works only once, and the secret configured when upgrading is treated as used. Raise the maximum token lifetime from 5 years to 200 years.
+
 ## 0.2.1
 
 ### Patch Changes
