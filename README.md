@@ -119,11 +119,11 @@ the loaded image when the Nix output is unchanged. Secrets are installed with
 `wrangler secret put` and never committed to the repository:
 
 ```console
-pnpm --dir packages/worker exec wrangler secret put AUTH_PRIVATE_JWK --config "$PWD/wrangler.jsonc"
-pnpm --dir packages/worker exec wrangler secret put AUTH_PUBLIC_JWKS --config "$PWD/wrangler.jsonc"
-pnpm --dir packages/worker exec wrangler secret put NIX_PRIVATE_JWK --config "$PWD/wrangler.jsonc"
-pnpm --dir packages/worker exec wrangler secret put NIX_PUBLIC_KEYS --config "$PWD/wrangler.jsonc"
-pnpm --dir packages/worker exec wrangler secret put BOOTSTRAP_SECRET_HASH --config "$PWD/wrangler.jsonc"
+pnpm --dir packages/worker exec wrangler secret put AUTH_PRIVATE_JWK --config "$PWD/wrangler.jsonc" --env production
+pnpm --dir packages/worker exec wrangler secret put AUTH_PUBLIC_JWKS --config "$PWD/wrangler.jsonc" --env production
+pnpm --dir packages/worker exec wrangler secret put NIX_PRIVATE_JWK --config "$PWD/wrangler.jsonc" --env production
+pnpm --dir packages/worker exec wrangler secret put NIX_PUBLIC_KEYS --config "$PWD/wrangler.jsonc" --env production
+pnpm --dir packages/worker exec wrangler secret put BOOTSTRAP_SECRET_HASH --config "$PWD/wrangler.jsonc" --env production
 ```
 
 ## Storage contract

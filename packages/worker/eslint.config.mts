@@ -11,20 +11,6 @@ export default tseslint.config(
       'src/generated/json-contracts.ts',
     ],
   },
-  {
-    files: ['e2e/**/*.mts'],
-    languageOptions: {
-      globals: {
-        Buffer: 'readonly',
-        URL: 'readonly',
-        console: 'readonly',
-        crypto: 'readonly',
-        fetch: 'readonly',
-        process: 'readonly',
-        setTimeout: 'readonly',
-      },
-    },
-  },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
 );

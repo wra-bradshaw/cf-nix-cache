@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
-import type { RpcResult } from '../../../rpc';
+import type { RpcResult } from '../../../shared/rpc';
 import { GcLedger, LEASE_TTL_SECONDS, RUN_TTL_SECONDS } from './ledger';
 
 function ledger(): GcLedger {

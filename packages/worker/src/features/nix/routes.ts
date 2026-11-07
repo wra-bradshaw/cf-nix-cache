@@ -1,20 +1,23 @@
 import { Hono, type Context } from 'hono';
-import {
-  assertCacheName,
-  DomainError,
-  STORE_HASH_PATTERN,
-} from '../domain/validation';
-import type { AppEnv } from '../runtime/http';
-import {
-  assertActive,
-  authFor,
-  getCache,
-  getPath,
-  touchPath,
-} from '../cache/directory';
+import { assertCacheName, STORE_HASH_PATTERN } from '../../shared/identifiers';
+import { DomainError } from '../../shared/errors';
+import type { AppEnv } from '../../shared/http';
+import { assertActive, authFor } from '../cache/access';
+import { getCache, getPath, touchPath } from '../cache/resolve-cache';
 import { serveNarObject } from './object';
 
 export const nixRoutes = new Hono<AppEnv>();
+
+nixRoutes.get(
+  '/api/public-key',
+  (c) =>
+    new Response(`${c.env.NIX_PUBLIC_KEYS.trim()}\n`, {
+      headers: {
+        'content-type': 'text/plain; charset=utf-8',
+        'cache-control': 'public, max-age=300',
+      },
+    }),
+);
 
 const NARINFO = new RegExp(`^(${STORE_HASH_PATTERN})\\.narinfo$`);
 const NAR_OBJECT = new RegExp(`^nar/(${STORE_HASH_PATTERN})\\.nar\\.zst$`);

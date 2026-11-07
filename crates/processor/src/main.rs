@@ -1,5 +1,5 @@
-//! HTTP bootstrap for the processor container. Processing lives in `service`;
-//! storage and NAR validation are injected adapters.
+//! HTTP bootstrap for the processor container. Processing lives in `pipeline`;
+//! storage is an injected adapter, while NAR validation always runs in-process.
 
 use anyhow::{Context, Result};
 use axum::{
@@ -17,7 +17,7 @@ use tokio::net::TcpListener;
 
 mod nar;
 mod object_store;
-mod service;
+mod pipeline;
 
 #[derive(Clone)]
 struct AppState {
@@ -58,7 +58,7 @@ async fn process(
     // the domain job, which only accepts this build's encoding.
     let job = ProcessJob::try_from(contract)
         .map_err(|_| ProcessorRejection::permanent("unsupported processing contract"))?;
-    service::process_job(&state.store, &job)
+    pipeline::process_job(&state.store, &job)
         .await
         .map(Json)
         .map_err(ProcessorRejection::from_failure)
@@ -75,10 +75,10 @@ impl ProcessorRejection {
             },
         )
     }
-    fn from_failure(error: service::ProcessFailure) -> Self {
+    fn from_failure(error: pipeline::ProcessFailure) -> Self {
         match error {
-            service::ProcessFailure::Permanent(message) => Self::permanent(message),
-            service::ProcessFailure::Retryable(error) => Self(
+            pipeline::ProcessFailure::Permanent(message) => Self::permanent(message),
+            pipeline::ProcessFailure::Retryable(error) => Self(
                 StatusCode::SERVICE_UNAVAILABLE,
                 ErrorBody {
                     code: "retryable_failure",
@@ -97,7 +97,7 @@ impl IntoResponse for ProcessorRejection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use service::ProcessFailure;
+    use pipeline::ProcessFailure;
 
     #[test]
     fn failures_map_to_status_and_code() {

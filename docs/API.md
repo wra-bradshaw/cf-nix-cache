@@ -73,6 +73,10 @@ with the same key and request fingerprint returns the existing job; reusing
 the key with different metadata returns `idempotency_conflict`. Upload operations
 authenticate on every request and recheck the job's cache grant.
 
+Repeating a token request with the same key signs the token again from its stored
+metadata, because the bearer token itself is not stored. It returns `token_revoked`
+if that token has since been revoked.
+
 Private-cache token status is edge-cached for up to five seconds after an
 active catalog check. Revocation therefore propagates within that bounded
 window while avoiding a catalog Durable Object hop on every Nix read.

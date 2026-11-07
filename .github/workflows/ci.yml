@@ -29,6 +29,7 @@ jobs:
       - name: Check Worker and npm package
         run: |
           nix develop --command pnpm --dir packages/worker check
+          git diff --exit-code -- packages/worker/src/generated/contracts.ts
           nix develop --command pnpm --dir packages/worker test
           nix develop --command pnpm --dir packages/worker build
           nix develop --command npm pack ./packages/worker --dry-run

@@ -1,5 +1,5 @@
-import type { Role, TokenClaims } from '../../types';
-import { namedStub } from '../../rpc';
+import type { Role, TokenClaims } from './types';
+import { namedStub } from '../../shared/rpc';
 import { permitsAny, permitsCache, permitsGlobal } from './authorization';
 import { tokenFromRequest } from './credentials';
 import { AuthError } from './errors';

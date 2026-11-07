@@ -1,10 +1,5 @@
 {
-  "entry": [
-    "src/index.ts",
-    "scripts/render-wrangler-config.mts",
-    "build/json-contracts.ts"
-  ],
-  "ignoreDependencies": ["cloudflare", "json-schema-to-typescript"],
+  "entry": ["src/index.ts", "scripts/render-wrangler-config.mts"],
   "ignoreBinaries": ["nix-store"],
-  "ignore": ["dist/**"]
+  "ignore": ["src/generated/contracts.ts"]
 }

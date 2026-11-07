@@ -1,12 +1,12 @@
-import type { AuditEvent, PageResponse } from '../../../types';
-import type { RpcResult } from '../../../rpc';
-import { decodeCursor, encodeCursor } from '../../domain/validation';
+import type { AuditEvent } from '../types';
 import {
-  failure,
-  ok,
-  type SqlRow,
-} from '../../../infrastructure/durable/shared';
-import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
+  type PageResponse,
+  decodeCursor,
+  encodeCursor,
+} from '../../../shared/cursors';
+import { type RpcResult, failure, ok } from '../../../shared/rpc';
+import type { SqlRow } from '../../../shared/sql';
+import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
 
 export class AuditLog extends RpcOnlyDurableObject {
   constructor(ctx: DurableObjectState, env: Env) {

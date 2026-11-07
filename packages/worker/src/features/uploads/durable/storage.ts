@@ -1,6 +1,6 @@
-import type { UploadManifest, UploadState } from '../../../types';
-import type { ProcessReceipt, UploadRow } from './model';
-import { first, type SqlRow } from '../../../infrastructure/durable/shared';
+import type { UploadManifest, UploadState } from '../types';
+import type { ProcessReceipt, UploadRow } from './upload-row';
+import { first, type SqlRow } from '../../../shared/sql';
 
 const schema = `CREATE TABLE IF NOT EXISTS job (
   job_id TEXT PRIMARY KEY, cache TEXT NOT NULL, cache_id TEXT NOT NULL, incarnation TEXT NOT NULL,
@@ -113,21 +113,27 @@ export class UploadStorage {
     );
   }
 
+  /** Returns the stored receipt, whose `published_at` the first attempt set. */
   setResult(
     jobId: string,
     result: ProcessReceipt,
     from: UploadState[],
     to: UploadState,
-  ): void {
-    this.ctx.storage.transactionSync(() =>
+  ): ProcessReceipt {
+    return this.ctx.storage.transactionSync(() => {
+      const receipt = {
+        ...result,
+        published_at: this.row()?.result?.published_at ?? result.published_at,
+      };
       this.ctx.storage.sql.exec(
         `UPDATE job SET state = ?, result = ? WHERE job_id = ? AND state IN (${from.map(() => '?').join(', ')})`,
         to,
-        JSON.stringify(result),
+        JSON.stringify(receipt),
         jobId,
         ...from,
-      ),
-    );
+      );
+      return receipt;
+    });
   }
 
   setError(jobId: string, message: string, to: UploadState = 'FAILED'): void {

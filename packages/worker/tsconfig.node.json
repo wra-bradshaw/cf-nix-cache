@@ -3,7 +3,14 @@
   "compilerOptions": {
     "types": ["node", "vitest/globals"],
     "lib": ["ES2022", "DOM"],
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["build/**/*.ts", "e2e/**/*.ts", "vite.config.ts", "vitest*.ts"]
+  "include": [
+    "build/**/*.ts",
+    "e2e/**/*.ts",
+    "scripts/**/*.mts",
+    "vite.config.ts",
+    "vitest*.ts"
+  ]
 }

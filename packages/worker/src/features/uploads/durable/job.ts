@@ -4,24 +4,26 @@ import type {
   UploadManifest,
   UploadState,
   UploadStateResponse,
-} from '../../../types';
-import type { RpcResult } from '../../../rpc';
+} from '../types';
+import { type RpcResult, failure, ok } from '../../../shared/rpc';
 import { UploadMultipart } from './multipart';
-import { UploadPublication } from './publication';
+import { UploadJobLifecycle } from './job-lifecycle';
+import { UploadPublisher } from './publish';
 import { UploadStorage } from './storage';
-import { failure, ok } from '../../../infrastructure/durable/shared';
-import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
+import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
 
 export class UploadJob extends RpcOnlyDurableObject {
   private readonly storage: UploadStorage;
   private readonly multipart: UploadMultipart;
-  private readonly publication: UploadPublication;
+  private readonly publisher: UploadPublisher;
+  private readonly lifecycle: UploadJobLifecycle;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.storage = new UploadStorage(ctx);
     this.multipart = new UploadMultipart(ctx, env, this.storage);
-    this.publication = new UploadPublication(ctx, env, this.storage);
+    this.publisher = new UploadPublisher(env, this.storage);
+    this.lifecycle = new UploadJobLifecycle(ctx, env, this.storage);
   }
 
   async access(): Promise<RpcResult<{ cache: string; state: UploadState }>> {
@@ -60,22 +62,22 @@ export class UploadJob extends RpcOnlyDurableObject {
   }
 
   processing(): Promise<RpcResult<void>> {
-    return this.publication.processing();
+    return this.lifecycle.processing();
   }
 
   publish(result: ProcessResult): Promise<RpcResult<void>> {
-    return this.publication.publish(result);
+    return this.publisher.publish(result);
   }
 
   fail(message: string): Promise<RpcResult<void>> {
-    return this.publication.fail(message);
+    return this.lifecycle.fail(message);
   }
 
   abort(): Promise<RpcResult<UploadStateResponse>> {
-    return this.publication.abort();
+    return this.lifecycle.abort();
   }
 
   state(): Promise<RpcResult<UploadStateResponse>> {
-    return this.publication.state();
+    return this.lifecycle.state();
   }
 }

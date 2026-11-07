@@ -1,33 +1,29 @@
+import { doctor } from "./doctor.mts";
 import {
-  bucketExists,
-  bucketName,
-  bootstrapCommand,
-  configPath,
-  ensureBucket,
-  ensureLifecycle,
-  fail,
-  healthCheck,
-  hashSecret,
-  installedPackageVersion,
-  keyMaterial,
-  lifecycleIsConfigured,
-  nixPublicKey,
-  putSecrets,
-  processorContainers,
   readConfig,
-  releaseImage,
-  secretNames,
-  secretNamesFromWrangler,
+  signingKeyName,
   withRenderedConfig,
+} from "./lib/config.mts";
+import { fail } from "./lib/fail.mts";
+import { keyMaterial, nixPublicKey } from "./lib/keys.mts";
+import { bucketName, ensureBucket, ensureLifecycle } from "./lib/r2.mts";
+import { releaseImage } from "./lib/release.mts";
+import {
+  hashSecret,
+  missingSecrets,
+  putSecrets,
+  secretNamesFromWrangler,
+  secretState,
+} from "./lib/secrets.mts";
+import {
+  bootstrapCommand,
+  healthCheck,
   workerUrl,
-  wrangler,
-} from "./lib.mts";
+} from "./lib/worker-endpoint.mts";
+import { wrangler } from "./lib/wrangler.mts";
+import { preview } from "./preview.mts";
 
 const action = process.argv[2] ?? "deploy";
-
-function missing(names: Set<string>): string[] {
-  return secretNames.filter((name) => !names.has(name));
-}
 
 function requireBootstrapSecret(): string {
   const secret = process.env.CF_NIX_CACHE_BOOTSTRAP_SECRET;
@@ -41,15 +37,6 @@ function requireBootstrapSecret(): string {
   return secret;
 }
 
-function secretState(names: Set<string>): "none" | "complete" | "partial" {
-  const count = secretNames.filter((name) => names.has(name)).length;
-  return count === 0
-    ? "none"
-    : count === secretNames.length
-      ? "complete"
-      : "partial";
-}
-
 async function deployWorker(rendered: string): Promise<string | undefined> {
   const output = await wrangler(["deploy"], {}, rendered);
   return workerUrl(`${output.stdout}\n${output.stderr}`);
@@ -59,6 +46,7 @@ async function configureSecrets(
   state: "none" | "complete",
   initialUrl: string | undefined,
   rendered: string,
+  keyName: string,
 ): Promise<{
   publicKey: string;
   url: string;
@@ -74,7 +62,7 @@ async function configureSecrets(
     const bootstrapSecret = requireBootstrapSecret();
     const auth = keyMaterial();
     const nix = keyMaterial();
-    publicKey = nixPublicKey("cache.nix-signing", nix.publicJwk);
+    publicKey = nixPublicKey(keyName, nix.publicJwk);
     await putSecrets(
       {
         AUTH_PRIVATE_JWK: JSON.stringify(auth.privateJwk),
@@ -120,9 +108,12 @@ async function setup(): Promise<void> {
       const state = secretState(existingSecrets);
       if (state === "partial") {
         fail(
-          `partial Wrangler secret set detected (missing: ${missing(existingSecrets).join(", ")}). Refusing to deploy until the missing secrets are restored or an explicit key rotation is performed.`,
+          `partial Wrangler secret set detected (missing: ${missingSecrets(existingSecrets).join(", ")}). Refusing to deploy until the missing secrets are restored or an explicit key rotation is performed.`,
         );
       }
+      // Checked before anything is created, so that a first run without the
+      // secret can't leave a live Worker that has no secrets.
+      if (state === "none") requireBootstrapSecret();
       const bucket = bucketName(config);
       await ensureBucket(bucket, rendered);
       await ensureLifecycle(bucket, rendered);
@@ -130,8 +121,14 @@ async function setup(): Promise<void> {
       // A first deploy creates the Worker, Durable Objects, Workflows, and
       // Container binding before the bulk secret operation targets the Worker.
       const initialUrl = await deployWorker(rendered);
-      const configured = await configureSecrets(state, initialUrl, rendered);
-      await deployWorker(rendered);
+      const configured = await configureSecrets(
+        state,
+        initialUrl,
+        rendered,
+        signingKeyName(config),
+      );
+      // Only a first deploy has just installed secrets to start up with.
+      if (state === "none") await deployWorker(rendered);
       return configured;
     },
   );
@@ -150,113 +147,13 @@ async function setup(): Promise<void> {
   console.log(`trusted-public-keys = ${publicKey}`);
 }
 
-async function deploy(): Promise<void> {
-  // setup is deliberately idempotent. It performs no key generation when the
-  // complete secret set already exists, which makes this command safe for
-  // Workers Builds and every external CI runner.
-  await setup();
-}
-
-async function preview(): Promise<void> {
-  const { image } = await releaseImage();
-  await withRenderedConfig(image, async (rendered) => {
-    await wrangler(["versions", "upload"], {}, rendered);
-  });
-  console.log(
-    "Uploaded a Worker version for preview; production Container state was not changed.",
-  );
-}
-
-async function doctor(): Promise<void> {
-  const config = await readConfig();
-  const { manifest, image } = await releaseImage();
-  const findings: string[] = [];
-  if ((await installedPackageVersion()) !== manifest.version)
-    findings.push(
-      "installed Worker package and release manifest versions differ",
-    );
-  try {
-    const names = await secretNamesFromWrangler(configPath);
-    const state = secretState(names);
-    if (state === "partial")
-      findings.push(
-        `partial secret set (missing ${missing(names).join(", ")})`,
-      );
-    if (state === "none")
-      findings.push("required Worker secrets are not installed");
-  } catch (error) {
-    findings.push(
-      error instanceof Error
-        ? error.message
-        : "could not inspect Worker secrets",
-    );
-  }
-
-  try {
-    const bucket = bucketName(config);
-    if (!(await bucketExists(bucket, configPath)))
-      findings.push(
-        `R2 bucket ${bucket} is not listed by \`wrangler r2 bucket list\` for this account`,
-      );
-    const lifecycle = await lifecycleIsConfigured(bucket, configPath);
-    if (lifecycle === false)
-      findings.push("R2 staging/multipart lifecycle rules are missing");
-    if (lifecycle === undefined)
-      findings.push(
-        "cannot verify R2 lifecycle rules; check Wrangler authentication",
-      );
-  } catch (error) {
-    findings.push(
-      error instanceof Error ? error.message : "could not inspect R2",
-    );
-  }
-
-  const containerStatus = await wrangler(
-    ["containers", "list"],
-    { allowFailure: true, quiet: true },
-    configPath,
-  );
-  if (containerStatus.status !== 0)
-    findings.push(
-      "could not inspect Container status (deploy once, then check Wrangler credentials and Container rollout)",
-    );
-
-  const containers = processorContainers(config);
-  if (containers.length < 1)
-    findings.push("ProcessorContainer binding is missing");
-  if (config.observability?.enabled !== true)
-    findings.push("observability.enabled should be true");
-  if (config.vars?.CF_NIX_CACHE_CONFIG_SCHEMA !== "1")
-    findings.push("CF_NIX_CACHE_CONFIG_SCHEMA must be 1");
-  if (
-    image !== manifest.processorImage &&
-    !process.env.CF_NIX_CACHE_PROCESSOR_IMAGE
-  )
-    findings.push("rendered image does not match the package release manifest");
-  if (manifest.platform !== "linux/amd64")
-    findings.push("processor platform is not linux/amd64");
-
-  if (findings.length) {
-    console.error("doctor found issues:");
-    for (const finding of findings) console.error(`- ${finding}`);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(
-    `doctor: ${config.name} is compatible with cf-nix-cache@${manifest.version}`,
-  );
-  console.log(`doctor: processor ${image}`);
-  console.log(
-    "doctor: secrets, R2 binding, Container binding, lifecycle configuration, and schema checks passed",
-  );
-}
-
 switch (action) {
   case "setup":
-    await setup();
-    break;
   case "deploy":
-    await deploy();
+    // setup is deliberately idempotent. It performs no key generation when the
+    // complete secret set already exists, which makes this command safe for
+    // Workers Builds and every external CI runner.
+    await setup();
     break;
   case "doctor":
     await doctor();

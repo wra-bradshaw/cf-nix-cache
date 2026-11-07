@@ -1,8 +1,6 @@
-use anyhow::Result;
 use cf_nix_cache_core::{contracts::api as contract, CacheName};
 use clap::{Parser, Subcommand, ValueEnum};
-use reqwest::Url;
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroUsize;
 
 #[derive(Parser)]
 #[command(
@@ -19,7 +17,7 @@ pub(crate) struct Args {
 #[derive(Subcommand)]
 pub(crate) enum CommandKind {
     Bootstrap {
-        #[arg(long, env = "CF_NIX_CACHE_BOOTSTRAP_SECRET")]
+        #[arg(long, env = "CF_NIX_CACHE_BOOTSTRAP_SECRET", hide_env_values = true)]
         secret: String,
         #[arg(long)]
         subject: String,
@@ -90,7 +88,15 @@ pub(crate) enum CacheCommand {
     },
     Configure {
         name: CacheName,
-        #[arg(long)]
+        /// Whether pulling needs no token: --public or --public=false.
+        #[arg(
+            long,
+            required = true,
+            action = clap::ArgAction::Set,
+            num_args = 0..=1,
+            default_missing_value = "true",
+            require_equals = true,
+        )]
         public: bool,
     },
     /// Evict paths not accessed for this many days during garbage collection.
@@ -170,7 +176,7 @@ pub(crate) enum UploadCommand {
     Cancel { id: String },
 }
 
-pub(crate) fn parse_grant(value: &str) -> std::result::Result<contract::Grant, String> {
+fn parse_grant(value: &str) -> Result<contract::Grant, String> {
     let (cache, role) = value.split_once('=').ok_or("grant must be CACHE=ROLE")?;
     Ok(contract::Grant {
         cache: cache
@@ -182,24 +188,27 @@ pub(crate) fn parse_grant(value: &str) -> std::result::Result<contract::Grant, S
     })
 }
 
-/// Converts a `--valid-for` duration to the contract's whole seconds.
-pub(crate) fn valid_for_seconds(valid_for: humantime::Duration) -> Result<NonZeroU64> {
-    NonZeroU64::new(valid_for.as_secs())
-        .ok_or_else(|| anyhow::anyhow!("--valid-for must be at least one second"))
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-pub(crate) fn page_path(base: &str, page: &PageArgs) -> Result<String> {
-    if !(1..=100).contains(&page.limit) {
-        anyhow::bail!("limit must be between 1 and 100");
-    }
-    let mut url = Url::parse(&format!("https://invalid.example{base}"))?;
-    {
-        let mut query = url.query_pairs_mut();
-        query.append_pair("limit", &page.limit.to_string());
-        if let Some(cursor) = &page.cursor {
-            query.append_pair("cursor", cursor);
+    fn configure(extra: &[&str]) -> std::result::Result<bool, clap::Error> {
+        let args = ["cf-nix-cache", "cache", "configure", "team"]
+            .iter()
+            .chain(extra);
+        match Args::try_parse_from(args)?.command {
+            CommandKind::Cache {
+                command: CacheCommand::Configure { public, .. },
+            } => Ok(public),
+            _ => unreachable!(),
         }
     }
-    let query = url.query().unwrap_or_default();
-    Ok(format!("{}?{query}", url.path()))
+
+    #[test]
+    fn configure_requires_an_explicit_visibility() {
+        assert!(configure(&[]).is_err());
+        assert!(configure(&["--public"]).unwrap());
+        assert!(configure(&["--public=true"]).unwrap());
+        assert!(!configure(&["--public=false"]).unwrap());
+    }
 }

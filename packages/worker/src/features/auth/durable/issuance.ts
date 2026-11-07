@@ -1,15 +1,11 @@
-import { validateGrant } from '../../domain/validation';
-import type { AuditEvent, Grant } from '../../../types';
-import type { RpcResult } from '../../../rpc';
+import { validateGrant } from '../authorization';
+import type { AuditEvent } from '../../audit/types';
+import type { Grant } from '../types';
+import { type RpcResult, failure, ok } from '../../../shared/rpc';
 import { hashSecret } from '../credentials';
-import { AuditOutbox } from '../../../infrastructure/durable/audit-outbox';
+import { AuditOutbox } from '../../audit/outbox';
 import { TokenSigner } from './signer';
-import {
-  failure,
-  first,
-  ok,
-  type SqlRow,
-} from '../../../infrastructure/durable/shared';
+import { first, type SqlRow } from '../../../shared/sql';
 
 type IssuedToken = {
   id: string;
@@ -20,6 +16,19 @@ type IssuedToken = {
 
 type Signed = Awaited<ReturnType<TokenSigner['sign']>>;
 
+type IssueOutcome =
+  | { repeated: EarlierIssue | RpcResult<never>; issued?: never }
+  | { issued: RpcResult<IssuedToken>; repeated?: never };
+
+type EarlierIssue = {
+  jti: string;
+  subject: string;
+  grants: Grant[];
+  issued_at: number;
+  expires_at: number;
+  revoked: boolean;
+};
+
 export const BOOTSTRAP_SCHEMA = `CREATE TABLE IF NOT EXISTS bootstrap_consumed (secret_hash TEXT PRIMARY KEY, operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL);`;
 
 /**
@@ -27,6 +36,14 @@ export const BOOTSTRAP_SCHEMA = `CREATE TABLE IF NOT EXISTS bootstrap_consumed (
  * consumed it. Attribute that flag to the currently configured hash, so an
  * upgrade can never revive a used secret: re-arming still takes a new hash.
  */
+/**
+ * Clears the bearer tokens that earlier releases stored for replay. A replay
+ * now re-signs from the row's metadata, so storage holds no usable credential.
+ */
+export function scrubStoredTokens(ctx: DurableObjectState): void {
+  ctx.storage.sql.exec("UPDATE tokens SET token = '' WHERE token <> ''");
+}
+
 export function migrateLegacyBootstrap(
   ctx: DurableObjectState,
   env: Env,
@@ -71,16 +88,16 @@ export class TokenIssuance {
     // Scoped to the secret, so a re-armed bootstrap that reuses an idempotency
     // key mints a new token instead of replaying one from an earlier secret.
     const operationId = `bootstrap:${secretHash.slice(0, 16)}:${input.operation_id}`;
-    const existing = this.replay(operationId, input.fingerprint);
-    if (existing) return existing;
+    const existing = this.earlierIssue(operationId, input.fingerprint);
+    if (existing) return this.replay(existing);
     const signed = await this.signer.sign(
       input.subject,
       input.grants,
       input.expires_at,
     );
-    return this.ctx.storage.transactionSync(() => {
-      const repeated = this.replay(operationId, input.fingerprint);
-      if (repeated) return repeated;
+    const outcome = this.ctx.storage.transactionSync((): IssueOutcome => {
+      const repeated = this.earlierIssue(operationId, input.fingerprint);
+      if (repeated) return { repeated };
       if (
         first(
           this.ctx.storage.sql.exec(
@@ -89,24 +106,29 @@ export class TokenIssuance {
           ),
         )
       )
-        return failure(
-          'bootstrap_consumed',
-          'this bootstrap secret has already been consumed; set a new BOOTSTRAP_SECRET_HASH to re-arm bootstrap',
-          409,
-        );
+        return {
+          issued: failure(
+            'bootstrap_consumed',
+            'this bootstrap secret has already been consumed; set a new BOOTSTRAP_SECRET_HASH to re-arm bootstrap',
+            409,
+          ),
+        };
       this.ctx.storage.sql.exec(
         'INSERT INTO bootstrap_consumed (secret_hash, operation_id, fingerprint) VALUES (?, ?, ?)',
         secretHash,
         input.operation_id,
         input.fingerprint,
       );
-      return this.insertToken(operationId, input, signed, {
-        id: operationId,
-        actor: input.subject,
-        action: 'bootstrap',
-        resource: 'system',
-      });
+      return {
+        issued: this.insertToken(operationId, input, signed, {
+          id: operationId,
+          actor: input.subject,
+          action: 'bootstrap',
+          resource: 'system',
+        }),
+      };
     });
+    return outcome.repeated ? this.replay(outcome.repeated) : outcome.issued;
   }
 
   async issue(input: {
@@ -119,33 +141,36 @@ export class TokenIssuance {
   }): Promise<RpcResult<IssuedToken>> {
     if (!input.grants.length || !input.grants.every(validateGrant))
       return failure('invalid_input', 'token grants are invalid', 422);
-    const existing = this.replay(input.operation_id, input.fingerprint);
-    if (existing) return existing;
+    const existing = this.earlierIssue(input.operation_id, input.fingerprint);
+    if (existing) return this.replay(existing);
     const signed = await this.signer.sign(
       input.subject,
       input.grants,
       input.expires_at,
     );
-    return this.ctx.storage.transactionSync(
-      () =>
-        this.replay(input.operation_id, input.fingerprint) ??
-        this.insertToken(input.operation_id, input, signed, {
+    const outcome = this.ctx.storage.transactionSync((): IssueOutcome => {
+      const repeated = this.earlierIssue(input.operation_id, input.fingerprint);
+      if (repeated) return { repeated };
+      return {
+        issued: this.insertToken(input.operation_id, input, signed, {
           id: `token:${input.operation_id}`,
           actor: input.actor,
           action: 'token.issue',
           resource: signed.jti,
         }),
-    );
+      };
+    });
+    return outcome.repeated ? this.replay(outcome.repeated) : outcome.issued;
   }
 
-  /** The stored result of an earlier attempt of this operation, if any. */
-  private replay(
+  /** What an earlier attempt of this operation issued, if any. */
+  private earlierIssue(
     operationId: string,
     fingerprint: string,
-  ): RpcResult<IssuedToken> | null {
+  ): EarlierIssue | RpcResult<never> | null {
     const row = first(
       this.ctx.storage.sql.exec<SqlRow>(
-        'SELECT jti, token, expires_at, fingerprint FROM tokens WHERE operation_id = ?',
+        'SELECT jti, subject, grants, issued_at, expires_at, revoked, fingerprint FROM tokens WHERE operation_id = ?',
         operationId,
       ),
     );
@@ -156,10 +181,35 @@ export class TokenIssuance {
         'idempotency key was reused with different token metadata',
         409,
       );
-    return ok({
-      id: String(row.jti),
-      token: String(row.token),
+    return {
+      jti: String(row.jti),
+      subject: String(row.subject),
+      grants: JSON.parse(String(row.grants)) as Grant[],
+      issued_at: Number(row.issued_at),
       expires_at: Number(row.expires_at),
+      revoked: Number(row.revoked) === 1,
+    };
+  }
+
+  private async replay(
+    earlier: EarlierIssue | RpcResult<never>,
+  ): Promise<RpcResult<IssuedToken>> {
+    if ('ok' in earlier) return earlier;
+    if (earlier.revoked)
+      return failure(
+        'token_revoked',
+        'the token issued for this idempotency key has been revoked',
+        409,
+      );
+    return ok({
+      id: earlier.jti,
+      token: await this.signer.signFor(
+        earlier,
+        earlier.subject,
+        earlier.grants,
+        earlier.expires_at,
+      ),
+      expires_at: earlier.expires_at,
       repeated: true,
     });
   }
@@ -182,7 +232,7 @@ export class TokenIssuance {
       input.expires_at,
       signed.issued_at,
       JSON.stringify(input.grants),
-      signed.token,
+      '',
       operationId,
       input.fingerprint,
     );

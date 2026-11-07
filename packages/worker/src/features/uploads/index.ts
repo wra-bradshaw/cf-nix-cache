@@ -1,1 +1,0 @@
-export { uploadRoutes } from './routes';

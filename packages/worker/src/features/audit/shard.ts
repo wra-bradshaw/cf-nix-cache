@@ -1,4 +1,4 @@
-import { namedStub } from '../../rpc';
+import { namedStub } from '../../shared/rpc';
 
 const AUDIT_SHARD_COUNT = 16;
 

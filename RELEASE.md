@@ -41,7 +41,8 @@ to `main` with pending changesets, the `Release PR` workflow runs
 `pnpm release:version`:
 
 1. `changeset version` bumps the package and syncs the version into the
-   release manifest and template (`releaseReady: false`).
+   release manifest, the template, and the Rust workspace and Nix packages
+   (`releaseReady: false`).
 2. `scripts/pin-processor-image.sh` builds the Nix processor image, pushes a
    source-specific tag to `PROCESSOR_REPOSITORY` (repository variable, default
    `docker.io/willlol/cf-nix-cache`), resolves the registry digest, and pins it

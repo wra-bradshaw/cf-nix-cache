@@ -41,15 +41,13 @@
     "build": "vite build && node scripts/package.mts",
     "prebuild": "pnpm contracts:generate",
     "prepack": "pnpm build",
-    "deploy": "pnpm build && wrangler deploy",
     "test": "vitest run",
     "pretest": "pnpm contracts:generate",
-    "contracts:generate": "node ../../scripts/generate-contracts.mts",
+    "contracts:generate": "node scripts/generate-contracts.mts",
     "precheck": "pnpm contracts:generate",
     "pree2e": "pnpm contracts:generate",
-    "precontracts:check": "pnpm contracts:generate",
-    "contracts:check": "node ../../scripts/check-contracts.mts",
-    "boundaries:check": "node ../../scripts/check-boundaries.mts",
+    "contracts:check": "node scripts/check-contracts.mts",
+    "boundaries:check": "node scripts/check-boundaries.mts",
     "e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "devDependencies": {

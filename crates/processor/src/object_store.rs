@@ -9,6 +9,13 @@ use tokio_util::io::StreamReader;
 
 pub(crate) type ObjectBody = Pin<Box<dyn AsyncRead + Send>>;
 
+/// A failure while reading an object's bytes from the store. It travels inside
+/// the `io::Error` through the decoder, so that the pipeline can tell it apart
+/// from content the decoder rejected.
+#[derive(Debug, thiserror::Error)]
+#[error("object store read failed: {0}")]
+pub(crate) struct ObjectReadError(pub(crate) String);
+
 #[async_trait]
 pub(crate) trait ObjectStore: Send + Sync {
     async fn get(&self, key: &str) -> Result<ObjectBody>;
@@ -60,7 +67,9 @@ impl ObjectStore for HttpObjectStore {
             .with_context(|| format!("requesting object {key}"))?
             .error_for_status()
             .with_context(|| format!("reading object {key}"))?;
-        let stream = response.bytes_stream().map_err(std::io::Error::other);
+        let stream = response
+            .bytes_stream()
+            .map_err(|error| std::io::Error::other(ObjectReadError(error.to_string())));
         Ok(Box::pin(StreamReader::new(stream)))
     }
 

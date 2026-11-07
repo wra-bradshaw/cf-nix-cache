@@ -2,10 +2,11 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { hashSecret } from '../credentials';
-import type { AuditOutbox } from '../../../infrastructure/durable/audit-outbox';
+import type { AuditOutbox } from '../../audit/outbox';
 import {
   BOOTSTRAP_SCHEMA,
   migrateLegacyBootstrap,
+  scrubStoredTokens,
   TokenIssuance,
 } from './issuance';
 import type { TokenSigner } from './signer';
@@ -48,8 +49,9 @@ function installation(ctx: DurableObjectState) {
   const signer = {
     sign: async () => {
       minted += 1;
-      return { jti: `jti-${minted}`, token: `token-${minted}`, issued_at: 1 };
+      return { jti: `${minted}`, token: `token-${minted}`, issued_at: 1 };
     },
+    signFor: async ({ jti }: { jti: string }) => `token-${jti}`,
   } as unknown as TokenSigner;
   const audit = { enqueue: () => undefined } as unknown as AuditOutbox;
   const env = {} as Env;
@@ -131,6 +133,50 @@ describe('re-armable bootstrap', () => {
       ok: true,
       value: { token: 'token-2', repeated: false },
     });
+  });
+});
+
+describe('stored tokens', () => {
+  function issued() {
+    const { db, ctx } = fakeState();
+    db.exec(BOOTSTRAP_SCHEMA);
+    const { arm, bootstrap } = installation(ctx);
+    return { db, ctx, arm, bootstrap };
+  }
+
+  it('keeps no bearer token, and replays by signing again', async () => {
+    const { db, arm, bootstrap } = issued();
+    await arm('first');
+    await bootstrap('first', 'a');
+    expect(db.prepare('SELECT token FROM tokens').all()).toEqual([
+      { token: '' },
+    ]);
+    expect(await bootstrap('first', 'a')).toMatchObject({
+      ok: true,
+      value: { token: 'token-1', repeated: true },
+    });
+  });
+
+  it('refuses to replay a revoked token', async () => {
+    const { db, arm, bootstrap } = issued();
+    await arm('first');
+    await bootstrap('first', 'a');
+    db.exec('UPDATE tokens SET revoked = 1');
+    expect(await bootstrap('first', 'a')).toMatchObject({
+      ok: false,
+      error: { code: 'token_revoked', status: 409 },
+    });
+  });
+
+  it('scrubs tokens stored by earlier releases', async () => {
+    const { db, ctx } = issued();
+    db.exec(
+      "INSERT INTO tokens (jti, subject, expires_at, issued_at, grants, token, operation_id, fingerprint) VALUES ('j', 's', 2, 1, '[]', 'secret', 'o', 'f')",
+    );
+    scrubStoredTokens(ctx);
+    expect(db.prepare('SELECT token FROM tokens').all()).toEqual([
+      { token: '' },
+    ]);
   });
 });
 

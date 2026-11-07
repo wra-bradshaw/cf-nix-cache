@@ -1,6 +1,11 @@
 import { importJWK, SignJWT } from 'jose';
-import type { Grant } from '../../../types';
-import { now } from '../../../infrastructure/durable/shared';
+import type { Grant } from '../types';
+import { now } from '../../../shared/clock';
+
+export interface TokenIdentity {
+  jti: string;
+  issued_at: number;
+}
 
 export class TokenSigner {
   constructor(private readonly env: Env) {}
@@ -9,14 +14,29 @@ export class TokenSigner {
     subject: string,
     grants: Grant[],
     expiresAt: number,
-  ): Promise<{ jti: string; token: string; issued_at: number }> {
-    const issuedAt = now();
-    const jti = crypto.randomUUID().replaceAll('-', '');
+  ): Promise<TokenIdentity & { token: string }> {
+    const identity = {
+      jti: crypto.randomUUID().replaceAll('-', ''),
+      issued_at: now(),
+    };
+    return {
+      ...identity,
+      token: await this.signFor(identity, subject, grants, expiresAt),
+    };
+  }
+
+  /** Reproduces an issued token from its stored metadata. */
+  async signFor(
+    { jti, issued_at: issuedAt }: TokenIdentity,
+    subject: string,
+    grants: Grant[],
+    expiresAt: number,
+  ): Promise<string> {
     const key = await importJWK(
       JSON.parse(this.env.AUTH_PRIVATE_JWK) as JsonWebKey,
       'EdDSA',
     );
-    const token = await new SignJWT({ grants })
+    return new SignJWT({ grants })
       .setProtectedHeader({ alg: 'EdDSA', typ: 'JWT', kid: 'current' })
       .setIssuer(this.env.TOKEN_ISSUER)
       .setAudience(this.env.TOKEN_AUDIENCE)
@@ -26,6 +46,5 @@ export class TokenSigner {
       .setNotBefore(issuedAt)
       .setExpirationTime(expiresAt)
       .sign(key);
-    return { jti, token, issued_at: issuedAt };
   }
 }

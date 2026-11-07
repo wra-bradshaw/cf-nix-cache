@@ -1,23 +1,20 @@
-import { deltaFor } from '../../domain/uploads';
-import type {
-  CacheMutation,
-  PathRecord,
-  PreparedMutation,
-} from '../../../types';
-import type { RpcResult } from '../../../rpc';
-import {
-  failure,
-  first,
-  now,
-  ok,
-  type SqlRow,
-} from '../../../infrastructure/durable/shared';
-import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
+import type { CacheMutation, PathRecord, PreparedMutation } from '../types';
+import { type RpcResult, failure, ok } from '../../../shared/rpc';
+import { first, type SqlRow } from '../../../shared/sql';
+import { now } from '../../../shared/clock';
+import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
 
 const TOUCH_INTERVAL_SECONDS = 60 * 60;
 
 type Mutation = Exclude<CacheMutation, { kind: 'clear' }>;
 type Prepared = Omit<PreparedMutation, 'cache' | 'store_hash'>;
+
+function deltaFor(
+  next: PathRecord | null,
+  previous: PathRecord | null,
+): number {
+  return (next?.file_size ?? 0) - (previous?.file_size ?? 0);
+}
 
 export class CacheIndexShard extends RpcOnlyDurableObject {
   constructor(ctx: DurableObjectState, env: Env) {

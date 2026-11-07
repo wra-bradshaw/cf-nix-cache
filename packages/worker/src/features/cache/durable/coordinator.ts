@@ -1,20 +1,16 @@
-import type {
-  AuditEvent,
-  CacheConfig,
-  CacheReference,
-  QuotaReservation,
-} from '../../../types';
-import type { RpcResult } from '../../../rpc';
+import type { AuditEvent } from '../../audit/types';
 import {
-  AUDIT_OUTBOX_SCHEMA,
-  AuditOutbox,
-} from '../../../infrastructure/durable/audit-outbox';
-import { DEFAULT_UPSTREAM_CACHE_KEY_NAMES } from '../../domain/identifiers';
-import { failure, ok } from '../../../infrastructure/durable/shared';
+  type CacheConfig,
+  type CacheReference,
+  type QuotaReservation,
+  DEFAULT_UPSTREAM_CACHE_KEY_NAMES,
+} from '../types';
+import { type RpcResult, failure, ok } from '../../../shared/rpc';
+import { AUDIT_OUTBOX_SCHEMA, AuditOutbox } from '../../audit/outbox';
 import { CoordinatorQuota } from './quota';
-import { CoordinatorState } from './state';
-import { CoordinatorUploads } from './uploads';
-import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
+import { CoordinatorLifecycle } from './coordinator-lifecycle';
+import { UploadAllocations } from './upload-allocations';
+import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
 
 const schema = `CREATE TABLE IF NOT EXISTS cache (
   cache_id TEXT PRIMARY KEY, name TEXT NOT NULL, incarnation TEXT NOT NULL,
@@ -51,8 +47,8 @@ function addMissingColumns(ctx: DurableObjectState): void {
 }
 
 export class CacheCoordinator extends RpcOnlyDurableObject {
-  private readonly state: CoordinatorState;
-  private readonly uploads: CoordinatorUploads;
+  private readonly lifecycle: CoordinatorLifecycle;
+  private readonly allocations: UploadAllocations;
   private readonly quota: CoordinatorQuota;
   private readonly audit: AuditOutbox;
 
@@ -60,8 +56,8 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
     super(ctx, env);
     ctx.storage.sql.exec(schema);
     addMissingColumns(ctx);
-    this.state = new CoordinatorState(ctx);
-    this.uploads = new CoordinatorUploads(ctx, env);
+    this.lifecycle = new CoordinatorLifecycle(ctx);
+    this.allocations = new UploadAllocations(ctx, env);
     this.quota = new CoordinatorQuota(ctx);
     this.audit = new AuditOutbox(ctx, env);
   }
@@ -74,11 +70,11 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
     created_at: number;
     upstream_cache_key_names: string[];
   }): Promise<RpcResult<CacheConfig>> {
-    return this.state.initialize(input);
+    return this.lifecycle.initialize(input);
   }
 
   getCache(): Promise<RpcResult<CacheConfig>> {
-    return this.state.getCache();
+    return this.lifecycle.getCache();
   }
 
   configure(input: {
@@ -86,19 +82,19 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
     retention_days?: number;
     upstream_cache_key_names?: string[];
   }): Promise<RpcResult<CacheConfig>> {
-    return this.state.configure(input);
+    return this.lifecycle.configure(input);
   }
 
   activate(): Promise<RpcResult<CacheConfig>> {
-    return this.state.activate();
+    return this.lifecycle.activate();
   }
 
   beginDelete(): Promise<RpcResult<CacheConfig>> {
-    return this.state.beginDelete();
+    return this.lifecycle.beginDelete();
   }
 
   remove(): Promise<RpcResult<void>> {
-    return this.state.remove();
+    return this.lifecycle.remove();
   }
 
   allocateUpload(input: {
@@ -107,7 +103,7 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
   }): Promise<
     RpcResult<{ id: string; staging_key: string; repeated: boolean }>
   > {
-    return this.uploads.allocate(input);
+    return this.allocations.allocate(input);
   }
 
   reserve(input: {

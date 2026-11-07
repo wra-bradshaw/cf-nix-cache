@@ -1,7 +1,7 @@
-import type { QuotaReservation } from '../../../types';
-import type { RpcResult } from '../../../rpc';
-import { failure, first, ok } from '../../../infrastructure/durable/shared';
-import { lifecycleFailure } from '../../domain/errors';
+import type { QuotaReservation } from '../types';
+import { type RpcResult, failure, ok } from '../../../shared/rpc';
+import { first } from '../../../shared/sql';
+import { lifecycleFailure } from '../access';
 
 export class CoordinatorQuota {
   constructor(private readonly ctx: DurableObjectState) {}
