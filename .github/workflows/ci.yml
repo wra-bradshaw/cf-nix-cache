@@ -4,9 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Pull requests opened with GITHUB_TOKEN (the Release PR) do not trigger
-  # pull_request runs; the release workflow dispatches CI on its branch so the
-  # PR head commit still gets checks.
+  # Lets a maintainer rerun CI on any branch by hand.
   workflow_dispatch:
 
 permissions:

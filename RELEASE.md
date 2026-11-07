@@ -47,13 +47,20 @@ to `main` with pending changesets, the `Release PR` workflow runs
    `docker.io/willlol/cf-nix-cache`), resolves the registry digest, and pins it
    in the release manifest (`releaseReady: true`) and template Wrangler config.
 
-The result is a single version PR containing the whole release. The job needs
-`DOCKERHUB_USERNAME` and a repository-scoped `DOCKERHUB_TOKEN` in the
-`release` GitHub Environment. The PR is opened with `GITHUB_TOKEN`, which does
-not trigger `pull_request` workflows, so the job dispatches `ci.yml` on the PR
-branch (requiring `actions: write`).
+The result is a single version PR containing the whole release, set to
+auto-merge once CI passes. A changeset reaching `main` therefore releases without
+further review. The job needs `DOCKERHUB_USERNAME`, a repository-scoped
+`DOCKERHUB_TOKEN`, and `RELEASE_TOKEN` in the `release` GitHub Environment.
 
-Merging the version PR triggers `Publish release`. That workflow verifies the
+`RELEASE_TOKEN` is a fine-grained token scoped to this repository with
+**Contents: read and write** and **Pull requests: read and write**. It replaces
+`GITHUB_TOKEN` because pushes and merges made with `GITHUB_TOKEN` do not trigger
+workflows, which would leave the version PR without CI and stop its merge from
+publishing. If it expires, the `Release PR` job fails until the secret is
+replaced.
+
+Merging the version PR triggers `Publish release`. To retry a failed publication,
+run `gh workflow run publish-release.yml --ref main`. That workflow verifies the
 public image by digest, rebuilds and tests the Worker package, publishes npm
 from the pinned commit, and creates `vX.Y.Z` on GitHub. Configure the npm
 package's trusted publisher for `.github/workflows/publish-release.yml`; npm
