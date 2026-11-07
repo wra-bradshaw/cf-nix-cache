@@ -1,21 +1,54 @@
 use anyhow::{bail, Context, Result};
 use cf_nix_cache_core::{validate_store_hash, ZSTD_LEVEL};
-use serde_json::Value;
+use serde::Deserialize;
 use std::{
+    collections::BTreeMap,
     path::Path,
     process::{Command, Stdio},
 };
 use tempfile::NamedTempFile;
 
-pub(crate) fn command_json(mut command: Command) -> Result<Value> {
-    let output = command.output()?;
+/// One entry of `nix path-info --json`. Every field the published narinfo
+/// depends on is required, so that a change of format fails loudly rather than
+/// signing a narinfo with missing references.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PathInfo {
+    pub(crate) nar_hash: String,
+    pub(crate) nar_size: u64,
+    pub(crate) references: Vec<String>,
+    #[serde(default)]
+    pub(crate) deriver: Option<String>,
+    #[serde(default)]
+    pub(crate) ca: Option<String>,
+    /// Older Nix omits this when a path has no signatures.
+    #[serde(default)]
+    pub(crate) signatures: Vec<String>,
+}
+
+/// The closure of `installables`, keyed by store path.
+pub(crate) fn path_info(installables: &[String]) -> Result<BTreeMap<String, PathInfo>> {
+    let run = |format_flag: &[&str]| {
+        Command::new("nix")
+            .args(["path-info", "--json", "--recursive"])
+            .args(format_flag)
+            .args(installables)
+            .output()
+    };
+    // Bare --json is deprecated, but older Nix doesn't know --json-format.
+    let mut output = run(&["--json-format", "1"])?;
+    if !output.status.success()
+        && String::from_utf8_lossy(&output.stderr).contains("unrecognised flag")
+    {
+        output = run(&[])?;
+    }
     if !output.status.success() {
         bail!(
             "command failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    Ok(serde_json::from_slice(&output.stdout)?)
+    serde_json::from_slice(&output.stdout).context("unexpected nix path-info response")
 }
 
 pub(crate) fn nix_hash(hash: &str) -> Result<String> {
@@ -84,43 +117,79 @@ pub(crate) fn make_nar(path: &str) -> Result<NamedTempFile> {
 }
 
 /// Whether any signature on a `nix path-info` entry uses an upstream key.
-pub(crate) fn signed_by_upstream(info: &Value, upstreams: &[String]) -> bool {
-    info["signatures"].as_array().is_some_and(|signatures| {
-        signatures
-            .iter()
-            .filter_map(|signature| signature.as_str()?.split_once(':'))
-            .any(|(name, _)| upstreams.iter().any(|upstream| upstream == name))
-    })
+pub(crate) fn signed_by_upstream(info: &PathInfo, upstreams: &[String]) -> bool {
+    info.signatures
+        .iter()
+        .filter_map(|signature| signature.split_once(':'))
+        .any(|(name, _)| upstreams.iter().any(|upstream| upstream == name))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn info(signatures: &[&str]) -> PathInfo {
+        serde_json::from_value(json!({
+            "narHash": "sha256-abc",
+            "narSize": 1,
+            "references": [],
+            "signatures": signatures,
+        }))
+        .unwrap()
+    }
 
     #[test]
     fn matches_upstream_key_names_exactly() {
         let upstreams = ["cache.nixos.org-1".to_string()];
-        let info = |signatures: Value| serde_json::json!({ "signatures": signatures });
-        assert!(signed_by_upstream(
-            &info(serde_json::json!(["other-1:a", "cache.nixos.org-1:b"])),
-            &upstreams
-        ));
-        assert!(!signed_by_upstream(
-            &info(serde_json::json!(["other-1:a"])),
-            &upstreams
-        ));
-        assert!(!signed_by_upstream(
-            &info(serde_json::json!(["cache.nixos.org-10:a"])),
-            &upstreams
-        ));
-        assert!(!signed_by_upstream(
-            &info(serde_json::json!(["cache.nixos.org-1"])),
-            &upstreams
-        ));
-        assert!(!signed_by_upstream(
-            &info(serde_json::json!(["cache.nixos.org-1:a"])),
-            &[]
-        ));
-        assert!(!signed_by_upstream(&serde_json::json!({}), &upstreams));
+        let signed = |signatures: &[&str]| signed_by_upstream(&info(signatures), &upstreams);
+        assert!(signed(&["other-1:a", "cache.nixos.org-1:b"]));
+        assert!(!signed(&["other-1:a"]));
+        assert!(!signed(&["cache.nixos.org-10:a"]));
+        assert!(!signed(&["cache.nixos.org-1"]));
+        assert!(!signed(&[]));
+        assert!(!signed_by_upstream(&info(&["other-1:a"]), &[]));
+    }
+
+    #[test]
+    fn parses_format_1_path_info() {
+        let parsed: BTreeMap<String, PathInfo> = serde_json::from_value(json!({
+            "/nix/store/x-hello": {
+                "ca": null,
+                "deriver": "/nix/store/y-hello.drv",
+                "narHash": "sha256-abc",
+                "narSize": 113096,
+                "references": ["/nix/store/z-dep"],
+                "registrationTime": 1,
+                "signatures": ["cache.nixos.org-1:a"],
+                "ultimate": false,
+                "valid": true,
+            }
+        }))
+        .unwrap();
+        let hello = &parsed["/nix/store/x-hello"];
+        assert_eq!(hello.references, ["/nix/store/z-dep"]);
+        assert_eq!(hello.deriver.as_deref(), Some("/nix/store/y-hello.drv"));
+        assert_eq!(hello.ca, None);
+    }
+
+    #[test]
+    fn missing_references_are_an_error_not_an_empty_closure() {
+        let parsed = serde_json::from_value::<PathInfo>(json!({
+            "narHash": "sha256-abc",
+            "narSize": 1,
+        }));
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn older_nix_may_omit_signatures() {
+        let parsed: PathInfo = serde_json::from_value(json!({
+            "narHash": "sha256-abc",
+            "narSize": 1,
+            "references": [],
+        }))
+        .unwrap();
+        assert!(parsed.signatures.is_empty());
     }
 }

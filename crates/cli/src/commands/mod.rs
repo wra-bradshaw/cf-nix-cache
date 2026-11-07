@@ -1,8 +1,9 @@
 //! Command dispatch and the output helpers shared by the command flows.
 
-use anyhow::Result;
-use cf_nix_cache_core::{contracts::api as contract, CreateTokenResponse};
+use anyhow::{Context, Result};
+use cf_nix_cache_core::contracts::api as contract;
 use serde::Serialize;
+use serde_json::Value;
 use std::num::NonZeroU64;
 
 use crate::{
@@ -71,9 +72,14 @@ fn print_json(value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-fn print_token(response: &CreateTokenResponse, output: TokenOutput) -> Result<()> {
+fn print_token(response: &Value, output: TokenOutput) -> Result<()> {
     match output {
-        TokenOutput::Token => println!("{}", response.token),
+        TokenOutput::Token => println!(
+            "{}",
+            response["token"]
+                .as_str()
+                .context("server response has no token")?
+        ),
         TokenOutput::Json => print_json(response)?,
     }
     Ok(())

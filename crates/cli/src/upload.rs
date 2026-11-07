@@ -1,6 +1,6 @@
 use crate::{
     client::{api_path, Api},
-    nix::{basename, make_nar, nix_hash, store_hash},
+    nix::{basename, make_nar, nix_hash, store_hash, PathInfo},
 };
 use anyhow::{anyhow, bail, Context, Result};
 use cf_nix_cache_core::{
@@ -8,7 +8,6 @@ use cf_nix_cache_core::{
     UploadStateResponse, UploadStatus,
 };
 use reqwest::Method;
-use serde_json::Value;
 use std::{
     fmt::Display,
     io::{Read, Seek, SeekFrom},
@@ -28,25 +27,21 @@ where
 }
 
 /// Builds the upload manifest for `path` from its `nix path-info` entry.
-pub(crate) fn manifest(cache: &CacheName, path: &str, info: &Value) -> Result<contract::Manifest> {
-    let field = |name: &str| info.get(name).and_then(Value::as_str);
+pub(crate) fn manifest(
+    cache: &CacheName,
+    path: &str,
+    info: &PathInfo,
+) -> Result<contract::Manifest> {
     Ok(contract::Manifest {
-        ca: field("ca").map(str::parse).transpose()?,
+        ca: info.ca.as_deref().map(str::parse).transpose()?,
         cache: cache.to_string().parse()?,
-        deriver: field("deriver").map(store_path_name).transpose()?,
-        nar_hash: nix_hash(field("narHash").context("missing narHash")?)?.parse()?,
-        nar_size: info
-            .get("narSize")
-            .and_then(Value::as_u64)
-            .and_then(NonZeroU64::new)
-            .context("missing narSize")?,
+        deriver: info.deriver.as_deref().map(store_path_name).transpose()?,
+        nar_hash: nix_hash(&info.nar_hash)?.parse()?,
+        nar_size: NonZeroU64::new(info.nar_size).context("narSize is zero")?,
         references: info
-            .get("references")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(store_path_name)
+            .references
+            .iter()
+            .map(|reference| store_path_name(reference))
             .collect::<Result<_>>()?,
         store_hash: store_hash(path)?.parse()?,
         store_path: path.parse()?,
@@ -57,7 +52,7 @@ pub(crate) async fn upload_path(
     api: &Api,
     cache: &CacheName,
     path: &str,
-    info: &Value,
+    info: &PathInfo,
 ) -> Result<()> {
     // These run subprocesses and compress the NAR. On the async runtime they
     // would hold up the network and polling work of the other uploads.

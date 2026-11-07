@@ -17,7 +17,7 @@ pub(crate) struct Args {
 #[derive(Subcommand)]
 pub(crate) enum CommandKind {
     Bootstrap {
-        #[arg(long, env = "CF_NIX_CACHE_BOOTSTRAP_SECRET")]
+        #[arg(long, env = "CF_NIX_CACHE_BOOTSTRAP_SECRET", hide_env_values = true)]
         secret: String,
         #[arg(long)]
         subject: String,
@@ -88,7 +88,15 @@ pub(crate) enum CacheCommand {
     },
     Configure {
         name: CacheName,
-        #[arg(long)]
+        /// Whether pulling needs no token: --public or --public=false.
+        #[arg(
+            long,
+            required = true,
+            action = clap::ArgAction::Set,
+            num_args = 0..=1,
+            default_missing_value = "true",
+            require_equals = true,
+        )]
         public: bool,
     },
     /// Evict paths not accessed for this many days during garbage collection.
@@ -178,4 +186,29 @@ fn parse_grant(value: &str) -> Result<contract::Grant, String> {
             .parse()
             .map_err(|_| "role must be pull, push, or admin")?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn configure(extra: &[&str]) -> std::result::Result<bool, clap::Error> {
+        let args = ["cf-nix-cache", "cache", "configure", "team"]
+            .iter()
+            .chain(extra);
+        match Args::try_parse_from(args)?.command {
+            CommandKind::Cache {
+                command: CacheCommand::Configure { public, .. },
+            } => Ok(public),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn configure_requires_an_explicit_visibility() {
+        assert!(configure(&[]).is_err());
+        assert!(configure(&["--public"]).unwrap());
+        assert!(configure(&["--public=true"]).unwrap());
+        assert!(!configure(&["--public=false"]).unwrap());
+    }
 }

@@ -7,13 +7,12 @@ use cf_nix_cache_core::{
     CacheName, MissingPathsResponse,
 };
 use reqwest::Method;
-use serde_json::Value;
-use std::{future::Future, num::NonZeroUsize, process::Command, sync::Arc};
+use std::{future::Future, num::NonZeroUsize, sync::Arc};
 use tokio::task::JoinSet;
 
 use crate::{
     client::Api,
-    nix::{command_json, signed_by_upstream, store_hash},
+    nix::{path_info, signed_by_upstream, store_hash},
     upload::upload_path,
 };
 
@@ -24,13 +23,7 @@ pub(super) async fn push(
     jobs: NonZeroUsize,
     ignore_upstream_cache_filter: bool,
 ) -> Result<()> {
-    let mut command = Command::new("nix");
-    command
-        .args(["path-info", "--json", "--recursive"])
-        .args(&installables);
-    let Value::Object(mut map) = command_json(command)? else {
-        anyhow::bail!("unexpected nix path-info response");
-    };
+    let mut map = path_info(&installables)?;
     let all_paths = map.len();
     if !ignore_upstream_cache_filter {
         let upstreams = upstream_key_names(&api, &cache).await?;

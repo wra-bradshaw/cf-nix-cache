@@ -1,51 +1,8 @@
-use crate::{CacheName, ENCODING_ID};
+//! The API responses the CLI acts on, limited to the fields it reads, so that a
+//! newer server's additions don't break it. Commands that only show a response
+//! print it unparsed. The tests tie these shapes to the schemas.
+
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Role {
-    Pull,
-    Push,
-    Admin,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TokenGrant {
-    pub cache: String,
-    pub role: Role,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum CacheLifecycle {
-    Creating,
-    Active,
-    Deleting,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheConfig {
-    pub id: String,
-    pub name: CacheName,
-    #[serde(default)]
-    pub public: bool,
-    pub quota_bytes: u64,
-    #[serde(default)]
-    pub logical_bytes: u64,
-    #[serde(default = "default_encoding_id")]
-    pub encoding_id: String,
-    pub created_at: u64,
-    pub lifecycle: CacheLifecycle,
-    #[serde(default)]
-    pub retention_days: u64,
-    #[serde(default)]
-    pub upstream_cache_key_names: Vec<String>,
-}
-
-fn default_encoding_id() -> String {
-    ENCODING_ID.into()
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MissingPathsResponse {
@@ -87,37 +44,56 @@ pub struct UploadStateResponse {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateTokenResponse {
-    pub id: String,
-    pub token: String,
-    pub expires_at: usize,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contracts::responses as generated;
+    use serde::de::DeserializeOwned;
+    use serde_json::{json, Value};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenSummary {
-    pub id: String,
-    pub subject: String,
-    pub grants: Vec<TokenGrant>,
-    pub issued_at: usize,
-    pub expires_at: usize,
-    pub revoked: bool,
-}
+    /// `value` must be valid for the schema type `S` and readable as `W`.
+    fn readable_from_schema<S: DeserializeOwned, W: DeserializeOwned>(value: Value) -> W {
+        serde_json::from_value::<S>(value.clone()).expect("sample violates the schema");
+        serde_json::from_value(value).expect("wire type cannot read a valid response")
+    }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuditEvent {
-    pub id: String,
-    pub timestamp: u64,
-    pub actor: String,
-    pub action: String,
-    pub resource: String,
-    pub outcome: String,
-    #[serde(default)]
-    pub metadata: BTreeMap<String, String>,
-}
+    #[test]
+    fn reads_schema_valid_responses() {
+        let state: UploadStateResponse = readable_from_schema::<generated::UploadStateResponse, _>(
+            json!({ "id": "job", "status": "PUBLISHING", "error": null }),
+        );
+        assert_eq!(state.status, UploadStatus::Publishing);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PageResponse<T> {
-    pub items: Vec<T>,
-    pub next_cursor: Option<String>,
+        let init: InitiateUploadResponse =
+            readable_from_schema::<generated::InitiateUploadResponse, _>(json!({
+                "id": "job",
+                "status": "UPLOADING",
+                "error": null,
+                "parts": [{ "part_number": 1, "url": "/api/uploads/job/parts/1" }],
+            }));
+        assert_eq!(init.parts[0].part_number, 1);
+
+        let missing: MissingPathsResponse = readable_from_schema::<
+            generated::MissingPathsResponse,
+            _,
+        >(json!({ "missing": ["0".repeat(32)] }));
+        assert_eq!(missing.missing, ["0".repeat(32)]);
+    }
+
+    #[test]
+    fn every_schema_upload_status_is_known() {
+        for status in [
+            "CREATED",
+            "UPLOADING",
+            "COMPLETING",
+            "QUEUED",
+            "PROCESSING",
+            "PUBLISHING",
+            "READY",
+            "FAILED",
+            "ABORTED",
+        ] {
+            let _: UploadStatus = serde_json::from_value(json!(status)).unwrap();
+        }
+    }
 }

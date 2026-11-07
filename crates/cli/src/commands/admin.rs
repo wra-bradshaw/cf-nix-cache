@@ -1,10 +1,9 @@
 //! Thin API wrappers: the cache, token, audit, and upload admin subcommands.
 
 use anyhow::{Context, Result};
-use cf_nix_cache_core::{
-    contracts::api as contract, AuditEvent, CacheConfig, PageResponse, TokenSummary, ENCODING_ID,
-};
+use cf_nix_cache_core::{contracts::api as contract, ENCODING_ID};
 use reqwest::Method;
+use serde_json::Value;
 use std::num::NonZeroU64;
 
 use super::{print_json, print_token, valid_for_seconds};
@@ -15,10 +14,9 @@ use crate::{
 
 pub(super) async fn cache(api: Api, command: CacheCommand) -> Result<()> {
     match command {
-        CacheCommand::List(page) => print_json(
-            &api.get::<PageResponse<CacheConfig>>(&page_path("/api/caches", &page)?)
-                .await?,
-        ),
+        CacheCommand::List(page) => {
+            print_json(&api.get::<Value>(&page_path("/api/caches", &page)?).await?)
+        }
         CacheCommand::Create {
             name,
             public,
@@ -37,16 +35,15 @@ pub(super) async fn cache(api: Api, command: CacheCommand) -> Result<()> {
                     .collect::<Result<_, _>>()?,
             };
             print_json(
-                &api.request::<CacheConfig, _>(Method::POST, "/api/caches", Some(&body))
+                &api.request::<Value, _>(Method::POST, "/api/caches", Some(&body))
                     .await?,
             )
         }
-        CacheCommand::Info { name } => print_json(
-            &api.get::<CacheConfig>(&format!("/api/caches/{name}"))
-                .await?,
-        ),
+        CacheCommand::Info { name } => {
+            print_json(&api.get::<Value>(&format!("/api/caches/{name}")).await?)
+        }
         CacheCommand::Configure { name, public } => print_json(
-            &api.request::<CacheConfig, _>(
+            &api.request::<Value, _>(
                 Method::PATCH,
                 &format!("/api/caches/{name}/config"),
                 Some(&contract::ConfigureCache {
@@ -58,7 +55,7 @@ pub(super) async fn cache(api: Api, command: CacheCommand) -> Result<()> {
             .await?,
         ),
         CacheCommand::Retention { name, days } => print_json(
-            &api.request::<CacheConfig, _>(
+            &api.request::<Value, _>(
                 Method::PATCH,
                 &format!("/api/caches/{name}/config"),
                 Some(&contract::ConfigureCache {
@@ -74,7 +71,7 @@ pub(super) async fn cache(api: Api, command: CacheCommand) -> Result<()> {
             key_names,
             none: _,
         } => print_json(
-            &api.request::<CacheConfig, _>(
+            &api.request::<Value, _>(
                 Method::PATCH,
                 &format!("/api/caches/{name}/config"),
                 // Not the generated DTO, which omits an empty list: clearing
@@ -92,10 +89,9 @@ pub(super) async fn cache(api: Api, command: CacheCommand) -> Result<()> {
 
 pub(super) async fn token(api: Api, command: TokenCommand) -> Result<()> {
     match command {
-        TokenCommand::List(page) => print_json(
-            &api.get::<PageResponse<TokenSummary>>(&page_path("/api/tokens", &page)?)
-                .await?,
-        ),
+        TokenCommand::List(page) => {
+            print_json(&api.get::<Value>(&page_path("/api/tokens", &page)?).await?)
+        }
         TokenCommand::Create {
             subject,
             grants,
@@ -122,10 +118,9 @@ pub(super) async fn token(api: Api, command: TokenCommand) -> Result<()> {
 
 pub(super) async fn audit(api: Api, command: AuditCommand) -> Result<()> {
     match command {
-        AuditCommand::List(page) => print_json(
-            &api.get::<PageResponse<AuditEvent>>(&page_path("/api/audit", &page)?)
-                .await?,
-        ),
+        AuditCommand::List(page) => {
+            print_json(&api.get::<Value>(&page_path("/api/audit", &page)?).await?)
+        }
     }
 }
 

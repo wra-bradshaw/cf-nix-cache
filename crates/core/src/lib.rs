@@ -1,11 +1,7 @@
 //! Shared protocol types for the CLI and processor: validated identifiers
-//! (`identifiers`), chunk manifests and processor jobs (`processing`), and
-//! hand-written API response shapes (`wire`). Request DTOs and the processor's
+//! (`identifiers`), chunk manifests and processor jobs (`processing`), and the
+//! API responses the CLI acts on (`wire`). Request DTOs and the processor's
 //! HTTP boundary are schema-generated in `contracts`.
-//!
-//! The response shapes are not free of semantic validation: fields typed with
-//! a validating identifier, such as `CacheConfig::name`, reject invalid values
-//! during deserialization.
 
 mod error;
 mod identifiers;
@@ -17,9 +13,7 @@ pub use error::Error;
 pub use identifiers::{nix_base32, validate_store_hash, CacheName, StorePathName};
 pub use processing::{ChunkManifest, ChunkRef, ProcessJob, ProcessResult};
 pub use wire::{
-    AuditEvent, CacheConfig, CacheLifecycle, CreateTokenResponse, InitiateUploadResponse,
-    MissingPathsResponse, PageResponse, Role, TokenGrant, TokenSummary, UploadPart,
-    UploadStateResponse, UploadStatus,
+    InitiateUploadResponse, MissingPathsResponse, UploadPart, UploadStateResponse, UploadStatus,
 };
 
 pub const MAX_NAR_SIZE: u64 = 10 * 1024 * 1024 * 1024;

@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use cf_nix_cache_core::{contracts::api as contract, CreateTokenResponse};
+use cf_nix_cache_core::contracts::api as contract;
 use reqwest::{Client, Method, Response, Url};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware, RequestBuilder};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
@@ -101,7 +101,7 @@ impl Api {
     pub(crate) async fn bootstrap(
         &self,
         body: &contract::BootstrapRequest,
-    ) -> Result<CreateTokenResponse> {
+    ) -> Result<serde_json::Value> {
         let request = self.builder(Method::POST, "/api/bootstrap").json(body);
         Ok(send_checked(request).await?.json().await?)
     }
