@@ -31,14 +31,15 @@ impl NarValidator {
 
 fn validate(reader: tokio::io::DuplexStream) -> Result<()> {
     let mut shared = SharedReader(Arc::new(Mutex::new(SyncIoBridge::new(reader))));
-    let decoder =
-        nix_nar::Decoder::new(shared.clone()).map_err(|_| anyhow!("invalid NAR header"))?;
+    let decoder = nix_nar::Decoder::new(shared.clone())
+        .map_err(|error| anyhow!("invalid NAR header: {error}"))?;
     for entry in decoder
         .entries()
-        .map_err(|_| anyhow!("invalid NAR entry list"))?
+        .map_err(|error| anyhow!("invalid NAR entry list: {error}"))?
     {
-        if let nix_nar::Content::File { mut data, .. } =
-            entry.map_err(|_| anyhow!("invalid NAR entry"))?.content
+        if let nix_nar::Content::File { mut data, .. } = entry
+            .map_err(|error| anyhow!("invalid NAR entry: {error}"))?
+            .content
         {
             std::io::copy(&mut data, &mut std::io::sink()).context("reading NAR file")?;
         }

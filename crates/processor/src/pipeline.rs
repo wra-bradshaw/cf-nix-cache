@@ -12,7 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use crate::{
     nar::{LimitedReader, NarValidator},
-    object_store::ObjectStore,
+    object_store::{ObjectReadError, ObjectStore},
 };
 
 #[derive(Debug, Error)]
@@ -28,6 +28,19 @@ pub(crate) enum ProcessFailure {
 impl ProcessFailure {
     fn permanent(message: impl Into<String>) -> Self {
         Self::Permanent(message.into())
+    }
+
+    /// A read through the decoder fails for one of two reasons: the connection
+    /// to the store, which is worth retrying, or the content, which is not.
+    fn from_stream(error: std::io::Error) -> Self {
+        if error
+            .get_ref()
+            .is_some_and(|inner| inner.is::<ObjectReadError>())
+        {
+            Self::Retryable(anyhow::Error::new(error).context("reading staging object"))
+        } else {
+            Self::permanent(format!("invalid compressed NAR stream: {error}"))
+        }
     }
 }
 
@@ -48,7 +61,7 @@ pub(crate) async fn process_job<S: ObjectStore>(
     }
 
     let chunked = chunk_and_store(store, job).await?;
-    if chunked.raw_size != raw_size {
+    if chunked.raw_size != raw_size || chunked.raw_hash != nar_hash {
         return Err(ProcessFailure::permanent(
             "staging object changed during processing",
         ));
@@ -75,10 +88,12 @@ pub(crate) async fn process_job<S: ObjectStore>(
 }
 
 /// What [`chunk_and_store`] wrote. `file_hash` and `file_size` cover the
-/// concatenated compressed chunks; `raw_size` is what the chunker actually read.
+/// concatenated compressed chunks; `raw_size` and `raw_hash` cover what the
+/// chunker actually read.
 struct ChunkedNar {
     refs: Vec<ChunkRef>,
     raw_size: u64,
+    raw_hash: String,
     file_hash: String,
     file_size: u64,
 }
@@ -94,17 +109,17 @@ async fn chunk_and_store<S: ObjectStore>(store: &S, job: &ProcessJob) -> Result<
     let mut file_hash = Sha256::new();
     let mut file_size = 0u64;
     let mut chunked_raw_size = 0u64;
+    let mut chunked_raw_hash = Sha256::new();
     let mut refs = Vec::new();
 
     while let Some(chunk) = chunks.next().await {
         let bytes = chunk
-            .map_err(|error| {
-                ProcessFailure::permanent(format!("invalid compressed NAR stream: {error}"))
-            })?
+            .map_err(|error| ProcessFailure::from_stream(error.into()))?
             .data;
         let raw_size = bytes.len() as u64;
         let raw_hash = sha256_nix(&bytes);
         chunked_raw_size += raw_size;
+        chunked_raw_hash.update(&bytes);
         let compressed =
             tokio::task::spawn_blocking(move || zstd::encode_all(bytes.as_slice(), ZSTD_LEVEL))
                 .await
@@ -129,6 +144,7 @@ async fn chunk_and_store<S: ObjectStore>(store: &S, job: &ProcessJob) -> Result<
     Ok(ChunkedNar {
         refs,
         raw_size: chunked_raw_size,
+        raw_hash: format!("sha256:{}", nix_base32(&chunked_raw_hash.finalize())),
         file_hash: format!("sha256:{}", nix_base32(&file_hash.finalize())),
         file_size,
     })
@@ -193,9 +209,10 @@ async fn validate_nar<S: ObjectStore>(store: &S, job: &ProcessJob) -> Result<(St
     };
 
     loop {
-        let read = decoder.read(&mut buffer).await.map_err(|error| {
-            ProcessFailure::permanent(format!("invalid compressed NAR stream: {error}"))
-        })?;
+        let read = decoder
+            .read(&mut buffer)
+            .await
+            .map_err(ProcessFailure::from_stream)?;
         if read == 0 {
             break;
         }
@@ -206,11 +223,14 @@ async fn validate_nar<S: ObjectStore>(store: &S, job: &ProcessJob) -> Result<(St
             ));
         }
         raw_hash.update(&buffer[..read]);
-        validator
-            .writer
-            .write_all(&buffer[..read])
-            .await
-            .map_err(|error| invalid_nar(&error))?;
+        // The write fails because the validator has stopped, so what it found
+        // is the real error and the broken pipe is only a symptom.
+        if let Err(write_error) = validator.writer.write_all(&buffer[..read]).await {
+            return Err(match validator.finish().await {
+                Err(error) => invalid_nar(&error),
+                Ok(()) => invalid_nar(&write_error),
+            });
+        }
     }
     validator
         .finish()
@@ -289,5 +309,136 @@ mod tests {
         let result = process_job(&store, &job).await;
         assert!(matches!(result, Err(ProcessFailure::Permanent(_))));
         assert!(store.writes.lock().unwrap().is_empty());
+    }
+
+    /// A NAR holding one regular file.
+    fn nar(contents: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for field in [
+            b"nix-archive-1".as_slice(),
+            b"(",
+            b"type",
+            b"regular",
+            b"contents",
+            contents,
+            b")",
+        ] {
+            out.extend((field.len() as u64).to_le_bytes());
+            out.extend(field);
+            out.extend(vec![0; (8 - field.len() % 8) % 8]);
+        }
+        out
+    }
+
+    fn job_for(raw: &[u8]) -> ProcessJob {
+        ProcessJob {
+            job_id: "job".into(),
+            staging_key: "staging/job.nar.zst".into(),
+            nar_hash: sha256_nix(raw),
+            nar_size: raw.len() as u64,
+            encoding_id: ENCODING_ID.into(),
+        }
+    }
+
+    fn store_with(compressed: Vec<u8>) -> MemoryStore {
+        let store = MemoryStore::default();
+        store
+            .objects
+            .lock()
+            .unwrap()
+            .insert("staging/job.nar.zst".into(), compressed);
+        store
+    }
+
+    #[tokio::test]
+    async fn publishes_a_valid_nar_then_deduplicates_it() {
+        let raw = nar(b"hello world");
+        let store = store_with(zstd::encode_all(raw.as_slice(), ZSTD_LEVEL).unwrap());
+        let job = job_for(&raw);
+
+        let first = process_job(&store, &job).await.unwrap();
+        assert!(!first.deduplicated);
+        assert_eq!(first.manifest.nar_hash, job.nar_hash);
+        assert_eq!(first.manifest.nar_size, job.nar_size);
+
+        let second = process_job(&store, &job).await.unwrap();
+        assert!(second.deduplicated);
+        assert_eq!(second.manifest_key, first.manifest_key);
+    }
+
+    /// Serves `prefix` of the staging object on the chosen read, then fails as
+    /// a dropped connection would.
+    #[derive(Clone)]
+    struct DroppingStore {
+        inner: MemoryStore,
+        prefix: Vec<u8>,
+        drop_on_read: usize,
+        reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    struct FailingReader;
+    impl tokio::io::AsyncRead for FailingReader {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            _: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Err(std::io::Error::other(ObjectReadError(
+                "connection reset".into(),
+            ))))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for DroppingStore {
+        async fn get(&self, key: &str) -> anyhow::Result<crate::object_store::ObjectBody> {
+            let read = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if read != self.drop_on_read {
+                return self.inner.get(key).await;
+            }
+            Ok(Box::pin(
+                std::io::Cursor::new(self.prefix.clone()).chain(FailingReader),
+            ))
+        }
+
+        async fn put_if_absent(
+            &self,
+            key: &str,
+            body: Vec<u8>,
+            content_type: &str,
+        ) -> anyhow::Result<bool> {
+            self.inner.put_if_absent(key, body, content_type).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dropped_connection_is_retryable_in_both_passes() {
+        let raw = nar(b"hello world");
+        let compressed = zstd::encode_all(raw.as_slice(), ZSTD_LEVEL).unwrap();
+        for drop_on_read in [0, 1] {
+            let store = DroppingStore {
+                inner: store_with(compressed.clone()),
+                prefix: compressed[..compressed.len() / 2].to_vec(),
+                drop_on_read,
+                reads: Default::default(),
+            };
+            let result = process_job(&store, &job_for(&raw)).await;
+            assert!(
+                matches!(result, Err(ProcessFailure::Retryable(_))),
+                "read {drop_on_read}: {result:?}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn truncated_content_remains_permanent() {
+        let raw = nar(b"hello world");
+        let compressed = zstd::encode_all(raw.as_slice(), ZSTD_LEVEL).unwrap();
+        let store = store_with(compressed[..compressed.len() / 2].to_vec());
+        let result = process_job(&store, &job_for(&raw)).await;
+        assert!(
+            matches!(result, Err(ProcessFailure::Permanent(_))),
+            "{result:?}"
+        );
     }
 }
