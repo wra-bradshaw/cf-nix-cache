@@ -17,7 +17,7 @@
   "cloudflare": {
     "bindings": {
       "CF_NIX_CACHE_BOOTSTRAP_SECRET": {
-        "description": "Generate a one-time bootstrap value with at least 32 random characters, for example with `openssl rand -hex 32`."
+        "description": "Generate a bootstrap value with at least 32 random characters, for example with `openssl rand -hex 32`."
       }
     }
   },

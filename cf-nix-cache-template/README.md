@@ -39,8 +39,8 @@ to the account's Cloudflare container registry.
 The build log prints the workers.dev URL, public Nix key, a bootstrap command,
 and the Nix configuration. It never prints a private key or the bootstrap
 secret. Run the printed command once to mint the first one-year admin token.
-Bootstrap is idempotent for its idempotency key and is rejected after it has
-been consumed.
+Bootstrap is idempotent for its idempotency key, and each secret works once.
+See [Recovering admin access](#recovering-admin-access) to mint another token.
 
 If the account uses a custom hostname, add a route in `wrangler.jsonc` and set
 `CF_NIX_CACHE_URL` in CI so health checks and the generated command use that
@@ -90,10 +90,32 @@ scripts.
 binding and lifecycle configuration, Durable Object and Workflow bindings,
 Container configuration, and observability. A partial secret set always fails:
 the helper never silently regenerates keys. Authentication rotation invalidates
-all existing capability tokens. Nix-key rotation invalidates existing narinfo
+all existing capability tokens, so re-arm bootstrap afterwards to mint a new
+admin token. Nix-key rotation invalidates existing narinfo
 signatures, so publish the new public key to every client before rotating.
 The generated Nix substituter is `https://<worker>/cache/<cache-name>` after
 you create a cache with the admin token.
+
+### Recovering admin access
+
+If the admin token is lost or expired, or after an authentication rotation, set
+a new secret to re-arm bootstrap. A secret that has already been used stays
+rejected with HTTP 409, even if you set it again.
+
+```console
+read -rs CF_NIX_CACHE_BOOTSTRAP_SECRET; export CF_NIX_CACHE_BOOTSTRAP_SECRET
+printf '%s' "$CF_NIX_CACHE_BOOTSTRAP_SECRET" \
+  | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=' \
+  | pnpm exec wrangler secret put BOOTSTRAP_SECRET_HASH
+```
+
+Then run the bootstrap command from the build log again. Re-arming does not
+revoke existing tokens, so revoke a lost token with `DELETE /api/tokens/{jti}`.
+Requests may set `valid_for_seconds` up to 6311520000 (200 years).
+
+The first request after upgrading from a release without re-arming treats the
+secret configured at that moment as used. If bootstrap returns 409 after
+upgrading and setting a new secret together, set another new secret.
 
 Deleting the Worker does not delete a non-empty R2 bucket. To tear down a
 cache, first stop writers, verify the bucket is empty, explicitly delete its
