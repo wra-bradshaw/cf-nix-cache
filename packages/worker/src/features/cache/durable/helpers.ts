@@ -11,5 +11,9 @@ export function toCache(row: SqlRow): CacheConfig {
     encoding_id: String(row.encoding_id) as CacheConfig['encoding_id'],
     created_at: Number(row.created_at),
     lifecycle: String(row.lifecycle) as CacheConfig['lifecycle'],
+    retention_days: Number(row.retention_days ?? 0),
+    upstream_cache_key_names: JSON.parse(
+      String(row.upstream_cache_key_names),
+    ) as string[],
   };
 }

@@ -101,6 +101,8 @@ export function publicCache(cache: CacheState): CacheConfig {
     encoding_id: cache.encoding_id,
     created_at: cache.created_at,
     lifecycle: cache.lifecycle,
+    retention_days: cache.retention_days,
+    upstream_cache_key_names: cache.upstream_cache_key_names,
   };
 }
 
@@ -112,6 +114,20 @@ export async function getPath(
   assertStoreHash(storeHash);
   const shard = indexShard(env, cache.reference.incarnation, storeHash);
   return unwrapRpc(await shard.lookup(storeHash));
+}
+
+/** Records use of a path, which holds off retention. Failure is only logged. */
+export async function touchPath(
+  env: Env,
+  cache: CacheState,
+  storeHash: string,
+): Promise<void> {
+  try {
+    const shard = indexShard(env, cache.reference.incarnation, storeHash);
+    await shard.touch(storeHash);
+  } catch (error) {
+    console.error('cache touch failed', error);
+  }
 }
 
 export function isNotFound(error: unknown): boolean {

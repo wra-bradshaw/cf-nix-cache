@@ -5,6 +5,7 @@ export {
   CacheIndexShard,
   SystemControl,
 } from './features/cache/durable';
+export { GcControl } from './features/gc/durable';
 export { TokenCatalog } from './features/auth/durable';
 export { AuditLog } from './features/audit/durable';
 export { UploadJob } from './features/uploads/durable';

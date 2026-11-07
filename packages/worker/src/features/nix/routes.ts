@@ -5,7 +5,13 @@ import {
   STORE_HASH_PATTERN,
 } from '../domain/validation';
 import type { AppEnv } from '../runtime/http';
-import { assertActive, authFor, getCache, getPath } from '../cache/directory';
+import {
+  assertActive,
+  authFor,
+  getCache,
+  getPath,
+  touchPath,
+} from '../cache/directory';
 import { serveNarObject } from './object';
 
 export const nixRoutes = new Hono<AppEnv>();
@@ -46,7 +52,9 @@ async function nixHandler(c: Context<AppEnv>): Promise<Response> {
   await authFor(request, c.env, cache, 'pull');
   // A missing path surfaces as the shard's not_found / "path not found".
   const record = await getPath(c.env, cache, storeHash);
-  if (narInfo)
+  if (narInfo) {
+    // A client that already holds a NAR still asks for its narinfo.
+    c.executionCtx.waitUntil(touchPath(c.env, cache, storeHash));
     return new Response(request.method === 'HEAD' ? null : record.narinfo, {
       headers: {
         'content-type': 'text/plain; charset=utf-8',
@@ -54,6 +62,7 @@ async function nixHandler(c: Context<AppEnv>): Promise<Response> {
         'cache-control': cacheControl,
       },
     });
+  }
   return serveNarObject(c, cache, storeHash, record);
 }
 

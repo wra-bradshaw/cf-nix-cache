@@ -4,6 +4,7 @@ export {
   CompleteUploadSchema,
   ConfigureCacheSchema,
   CreateCacheSchema,
+  GcRunRequestSchema,
   GrantSchema,
   MissingPathsSchema,
   TokenRequestSchema,

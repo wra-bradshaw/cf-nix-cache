@@ -12,6 +12,7 @@ import {
   getCache,
   getPath,
   isNotFound,
+  touchPath,
 } from '../cache/directory';
 import { unwrapRpc } from '../../rpc';
 import { publicationFor } from '../cache/adapters';
@@ -31,6 +32,8 @@ pathRoutes.post('/api/caches/:name/missing', async (c) => {
   for (const storeHash of input.store_hashes) {
     try {
       await getPath(c.env, cache, storeHash);
+      // A repeated push of a path counts as use, even if nothing downloads it.
+      c.executionCtx.waitUntil(touchPath(c.env, cache, storeHash));
     } catch (caught) {
       if (isNotFound(caught)) missing.push(storeHash);
       else throw caught;

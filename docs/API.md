@@ -32,10 +32,13 @@ GET    /api/audit?limit=&cursor=
 POST   /api/caches
 GET    /api/caches?limit=&cursor=
 GET    /api/caches/{cache}
+GET    /api/caches/{cache}/upstreams
 PATCH  /api/caches/{cache}/config
 DELETE /api/caches/{cache}
 DELETE /api/caches/{cache}/paths/{store-hash}
 POST   /api/caches/{cache}/missing
+POST   /api/gc
+GET    /api/gc
 POST   /api/uploads
 PUT    /api/uploads/{id}/parts/{part-number}
 POST   /api/uploads/{id}/complete
@@ -48,6 +51,22 @@ Global control-plane operations, including cache creation, require an admin
 grant for `*`; a cache-scoped admin grant is limited to that cache. Upload
 cancellation is accepted through `QUEUED`, but returns a transition conflict
 once processing or publication has started.
+
+`POST /api/caches` accepts `upstream_cache_key_names`, the signing key names of
+upstream caches, which defaults to `["cache.nixos.org-1"]`. It is a hint: clients
+should not upload paths signed with these keys, and the server does not enforce
+it. `GET /api/caches/{cache}/upstreams` returns the list to anyone with a push
+grant.
+
+`PATCH /api/caches/{cache}/config` accepts `public`, `retention_days` and
+`upstream_cache_key_names`, and changes only the fields it is given. With `retention_days` above zero, garbage
+collection evicts paths not used for that many days; the default of 0 keeps them
+indefinitely. `POST /api/gc` requires an admin grant for `*` and starts a run,
+accepting optional `dry_run` and `grace_seconds`. It returns `202` with a
+`run_id`. A run does nothing if another is active. `GET /api/gc` reports the
+active run and the last finished one. In a dry-run summary, `deleted_objects`
+and `deleted_bytes` are what would be deleted, not counting objects that the
+reported evictions would also free.
 
 Upload identity is an opaque ID allocated by the cache coordinator. A retry
 with the same key and request fingerprint returns the existing job; reusing

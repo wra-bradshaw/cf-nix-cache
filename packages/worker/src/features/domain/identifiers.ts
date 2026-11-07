@@ -6,6 +6,16 @@ export const STORE_HASH_PATTERN = `[${NIX_BASE32}]{32}`;
 const STORE_HASH = new RegExp(`^${STORE_HASH_PATTERN}$`);
 const CACHE_NAME = /^[a-z0-9_-]{1,64}$/;
 
+/** Most clients of a cache also use cache.nixos.org. */
+export const DEFAULT_UPSTREAM_CACHE_KEY_NAMES = ['cache.nixos.org-1'];
+
+/** Every two-character store hash prefix, and so every index shard of a cache. */
+export function shardPrefixes(): string[] {
+  return [...NIX_BASE32].flatMap((first) =>
+    [...NIX_BASE32].map((second) => `${first}${second}`),
+  );
+}
+
 export function hasControlCharacters(
   value: string,
   includeSlash = false,

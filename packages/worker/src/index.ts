@@ -3,6 +3,7 @@ import {
   AuditLog,
   CacheCoordinator,
   CacheIndexShard,
+  GcControl,
   ObjectStoreProxy,
   ProcessorContainer,
   SystemControl,
@@ -11,6 +12,7 @@ import {
 } from './durable';
 import {
   DeleteCacheWorkflow,
+  GarbageCollectWorkflow,
   ProcessUploadWorkflow,
 } from './features/workflows';
 
@@ -20,11 +22,13 @@ export {
   AuditLog,
   CacheCoordinator,
   CacheIndexShard,
+  GcControl,
   UploadJob,
   ObjectStoreProxy,
   ProcessorContainer,
   ProcessUploadWorkflow,
   DeleteCacheWorkflow,
+  GarbageCollectWorkflow,
 };
 
 export default app;

@@ -14,6 +14,8 @@ import {
 } from '../../../infrastructure/durable/shared';
 import { RpcOnlyDurableObject } from '../../../infrastructure/durable/rpc-only';
 
+const TOUCH_INTERVAL_SECONDS = 60 * 60;
+
 type Mutation = Exclude<CacheMutation, { kind: 'clear' }>;
 type Prepared = Omit<PreparedMutation, 'cache' | 'store_hash'>;
 
@@ -260,12 +262,75 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
   async touch(storeHash: string): Promise<RpcResult<void>> {
     this.ctx.storage.transactionSync(() =>
       this.ctx.storage.sql.exec(
-        'UPDATE paths SET last_accessed = ? WHERE store_hash = ?',
+        // Throttled: this runs on every narinfo and push check, and retention
+        // is measured in days.
+        'UPDATE paths SET last_accessed = ? WHERE store_hash = ? AND last_accessed < ?',
         now(),
         storeHash,
+        now() - TOUCH_INTERVAL_SECONDS,
       ),
     );
     return ok();
+  }
+
+  /** One page of the manifests that this shard's paths depend on. */
+  async manifestKeys(input: {
+    after: string | null;
+    limit: number;
+  }): Promise<RpcResult<{ keys: string[]; next_after: string | null }>> {
+    const rows = [
+      ...this.ctx.storage.sql.exec<{
+        store_hash: string;
+        manifest_key: string | null;
+      }>(
+        "SELECT store_hash, json_extract(record, '$.manifest_key') AS manifest_key FROM paths WHERE store_hash > ? ORDER BY store_hash LIMIT ?",
+        input.after ?? '',
+        input.limit,
+      ),
+    ];
+    const keys: string[] = [];
+    for (const row of rows) {
+      // Garbage collection must not guess at what a path depends on.
+      if (!row.manifest_key)
+        return failure(
+          'corrupt_path',
+          `path ${String(row.store_hash)} has no manifest`,
+          500,
+        );
+      keys.push(String(row.manifest_key));
+    }
+    return ok({
+      keys,
+      next_after:
+        rows.length === input.limit
+          ? String(rows[rows.length - 1]!.store_hash)
+          : null,
+    });
+  }
+
+  /**
+   * One page of paths unused since `before`. Paged by store hash, which never
+   * changes, so a path that cannot be evicted is passed over rather than seen
+   * again, and a concurrent touch cannot make the walk skip anything.
+   */
+  async expiredPaths(input: {
+    before: number;
+    after: string | null;
+    limit: number;
+  }): Promise<RpcResult<{ hashes: string[]; next_after: string | null }>> {
+    const hashes = [
+      ...this.ctx.storage.sql.exec<{ store_hash: string }>(
+        'SELECT store_hash FROM paths WHERE last_accessed < ? AND store_hash > ? ORDER BY store_hash LIMIT ?',
+        input.before,
+        input.after ?? '',
+        input.limit,
+      ),
+    ].map((row) => String(row.store_hash));
+    return ok({
+      hashes,
+      next_after:
+        hashes.length === input.limit ? hashes[hashes.length - 1]! : null,
+    });
   }
 }
 

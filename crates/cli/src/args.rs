@@ -45,6 +45,9 @@ pub(crate) enum CommandKind {
         /// Store paths to upload at the same time.
         #[arg(long, short, default_value = "16")]
         jobs: NonZeroUsize,
+        /// Also upload paths signed by the cache's upstream caches.
+        #[arg(long)]
+        ignore_upstream_cache_filter: bool,
     },
     Token {
         #[command(subcommand)]
@@ -57,6 +60,11 @@ pub(crate) enum CommandKind {
     Upload {
         #[command(subcommand)]
         command: UploadCommand,
+    },
+    /// Inspect or start garbage collection, which otherwise runs on a schedule.
+    Gc {
+        #[command(subcommand)]
+        command: GcCommand,
     },
     ConfigureNix {
         cache: CacheName,
@@ -72,6 +80,10 @@ pub(crate) enum CacheCommand {
         public: bool,
         #[arg(long)]
         quota_bytes: u64,
+        /// The signing key name of an upstream cache. Push skips paths signed
+        /// with this key. Repeat for several; defaults to cache.nixos.org-1.
+        #[arg(long = "upstream-cache-key-name", value_name = "NAME")]
+        upstream_cache_key_names: Vec<String>,
     },
     Info {
         name: CacheName,
@@ -81,9 +93,39 @@ pub(crate) enum CacheCommand {
         #[arg(long)]
         public: bool,
     },
+    /// Evict paths not accessed for this many days during garbage collection.
+    /// 0 keeps paths indefinitely.
+    Retention {
+        name: CacheName,
+        days: u64,
+    },
+    /// Replace the signing key names of upstream caches. Push skips paths
+    /// signed with these keys.
+    Upstreams {
+        name: CacheName,
+        #[arg(value_name = "KEY_NAME", required_unless_present = "none")]
+        key_names: Vec<String>,
+        /// Have no upstream caches, so that push uploads every path.
+        #[arg(long, conflicts_with = "key_names")]
+        none: bool,
+    },
     Delete {
         name: CacheName,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum GcCommand {
+    /// Start a run now. It does nothing if one is already running.
+    Run {
+        /// Report what would be evicted and deleted without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Keep unreferenced objects newer than this. Defaults to one day.
+        #[arg(long)]
+        grace: Option<humantime::Duration>,
+    },
+    Status,
 }
 
 #[derive(Subcommand)]

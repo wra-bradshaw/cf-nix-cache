@@ -1,7 +1,11 @@
 use anyhow::{Context, Result};
 use cf_nix_cache_core::{
-    contracts::api as contract, AuditEvent, CacheConfig, CacheName, CreateTokenResponse,
-    MissingPathsResponse, PageResponse, TokenSummary, ENCODING_ID,
+    contracts::{
+        api as contract,
+        responses::{CacheUpstreamsResponse, GcRunResponse, GcStatusResponse},
+    },
+    AuditEvent, CacheConfig, CacheName, CreateTokenResponse, MissingPathsResponse, PageResponse,
+    TokenSummary, ENCODING_ID,
 };
 use etcetera::BaseStrategy;
 use reqwest::{Method, Url};
@@ -18,8 +22,8 @@ use tokio::task::JoinSet;
 
 use crate::{
     args::{
-        page_path, valid_for_seconds, Args, AuditCommand, CacheCommand, CommandKind, TokenCommand,
-        TokenOutput, UploadCommand,
+        page_path, valid_for_seconds, Args, AuditCommand, CacheCommand, CommandKind, GcCommand,
+        TokenCommand, TokenOutput, UploadCommand,
     },
     client::{api_path, Api},
     config::{config_path, save_config, Config},
@@ -57,11 +61,22 @@ pub(crate) async fn run(args: Args, config: Config) -> Result<()> {
         CommandKind::Token { command } => token(api()?, command).await,
         CommandKind::Audit { command } => audit(api()?, command).await,
         CommandKind::Upload { command } => upload(api()?, command).await,
+        CommandKind::Gc { command } => gc(api()?, command).await,
         CommandKind::Push {
             cache,
             installables,
             jobs,
-        } => push(api()?, cache, installables, jobs).await,
+            ignore_upstream_cache_filter,
+        } => {
+            push(
+                api()?,
+                cache,
+                installables,
+                jobs,
+                ignore_upstream_cache_filter,
+            )
+            .await
+        }
         CommandKind::ConfigureNix { cache } => configure_nix(api()?, cache).await,
     }
 }
@@ -89,6 +104,7 @@ async fn cache(api: Api, command: CacheCommand) -> Result<()> {
             name,
             public,
             quota_bytes,
+            upstream_cache_key_names,
         } => {
             let body = contract::CreateCache {
                 encoding_id: Some(ENCODING_ID.into()),
@@ -96,6 +112,10 @@ async fn cache(api: Api, command: CacheCommand) -> Result<()> {
                 public,
                 quota_bytes: NonZeroU64::new(quota_bytes)
                     .context("--quota-bytes must be positive")?,
+                upstream_cache_key_names: upstream_cache_key_names
+                    .iter()
+                    .map(|name| name.parse())
+                    .collect::<Result<_, _>>()?,
             };
             print_json(
                 &api.request::<CacheConfig, _>(Method::POST, "/api/caches", Some(&body))
@@ -110,7 +130,37 @@ async fn cache(api: Api, command: CacheCommand) -> Result<()> {
             &api.request::<CacheConfig, _>(
                 Method::PATCH,
                 &format!("/api/caches/{name}/config"),
-                Some(&contract::ConfigureCache { public }),
+                Some(&contract::ConfigureCache {
+                    public: Some(public),
+                    retention_days: None,
+                    upstream_cache_key_names: Vec::new(),
+                }),
+            )
+            .await?,
+        ),
+        CacheCommand::Retention { name, days } => print_json(
+            &api.request::<CacheConfig, _>(
+                Method::PATCH,
+                &format!("/api/caches/{name}/config"),
+                Some(&contract::ConfigureCache {
+                    public: None,
+                    retention_days: Some(i64::try_from(days)?),
+                    upstream_cache_key_names: Vec::new(),
+                }),
+            )
+            .await?,
+        ),
+        CacheCommand::Upstreams {
+            name,
+            key_names,
+            none: _,
+        } => print_json(
+            &api.request::<CacheConfig, _>(
+                Method::PATCH,
+                &format!("/api/caches/{name}/config"),
+                // Not the generated DTO, which omits an empty list: clearing
+                // the list would then send an empty, rejected request.
+                Some(&serde_json::json!({ "upstream_cache_key_names": key_names })),
             )
             .await?,
         ),
@@ -118,6 +168,55 @@ async fn cache(api: Api, command: CacheCommand) -> Result<()> {
             api.empty(Method::DELETE, &format!("/api/caches/{name}"))
                 .await
         }
+    }
+}
+
+async fn upstream_key_names(api: &Api, cache: &CacheName) -> Result<Vec<String>> {
+    match api
+        .get::<CacheUpstreamsResponse>(&format!("/api/caches/{cache}/upstreams"))
+        .await
+    {
+        Ok(response) => Ok(response
+            .upstream_cache_key_names
+            .into_iter()
+            .map(String::from)
+            .collect()),
+        // An older server has no such route. Uploading everything is only
+        // wasteful, and a missing cache still fails on the next request.
+        Err(error) if error.to_string().starts_with("API returned 404") => {
+            eprintln!("warning: server did not report upstream caches, so none are skipped");
+            Ok(Vec::new())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether any signature on a `nix path-info` entry uses an upstream key.
+fn signed_by_upstream(info: &Value, upstreams: &[String]) -> bool {
+    info["signatures"].as_array().is_some_and(|signatures| {
+        signatures
+            .iter()
+            .filter_map(|signature| signature.as_str()?.split_once(':'))
+            .any(|(name, _)| upstreams.iter().any(|upstream| upstream == name))
+    })
+}
+
+async fn gc(api: Api, command: GcCommand) -> Result<()> {
+    match command {
+        GcCommand::Run { dry_run, grace } => print_json(
+            &api.request::<GcRunResponse, _>(
+                Method::POST,
+                "/api/gc",
+                Some(&contract::GcRunRequest {
+                    dry_run,
+                    grace_seconds: grace
+                        .map(|grace| i64::try_from(grace.as_secs()))
+                        .transpose()?,
+                }),
+            )
+            .await?,
+        ),
+        GcCommand::Status => print_json(&api.get::<GcStatusResponse>("/api/gc").await?),
     }
 }
 
@@ -174,14 +273,22 @@ async fn push(
     cache: CacheName,
     installables: Vec<String>,
     jobs: NonZeroUsize,
+    ignore_upstream_cache_filter: bool,
 ) -> Result<()> {
     let mut command = Command::new("nix");
     command
         .args(["path-info", "--json", "--recursive"])
         .args(&installables);
-    let Value::Object(map) = command_json(command)? else {
+    let Value::Object(mut map) = command_json(command)? else {
         anyhow::bail!("unexpected nix path-info response");
     };
+    let all_paths = map.len();
+    if !ignore_upstream_cache_filter {
+        let upstreams = upstream_key_names(&api, &cache).await?;
+        map.retain(|_, info| !signed_by_upstream(info, &upstreams));
+    }
+    let in_upstream = all_paths - map.len();
+    let considered = map.len();
     let hashes = map
         .keys()
         .map(|path| store_hash(path))
@@ -212,6 +319,10 @@ async fn push(
         }
     }
     let total = uploads.len();
+    println!(
+        "pushing {total} paths to \"{cache}\" ({} already cached, {in_upstream} in upstream)",
+        considered - total
+    );
     let api = Arc::new(api);
     let cache = Arc::new(cache);
     let failures = run_concurrently(uploads, jobs, move |(path, info)| {
@@ -323,6 +434,43 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    #[test]
+    fn matches_upstream_key_names_exactly() {
+        let upstreams = ["cache.nixos.org-1".to_string()];
+        let info = |signatures: Value| serde_json::json!({ "signatures": signatures });
+        assert!(signed_by_upstream(
+            &info(serde_json::json!(["other-1:a", "cache.nixos.org-1:b"])),
+            &upstreams
+        ));
+        assert!(!signed_by_upstream(
+            &info(serde_json::json!(["other-1:a"])),
+            &upstreams
+        ));
+        assert!(!signed_by_upstream(
+            &info(serde_json::json!(["cache.nixos.org-10:a"])),
+            &upstreams
+        ));
+        assert!(!signed_by_upstream(
+            &info(serde_json::json!(["cache.nixos.org-1"])),
+            &upstreams
+        ));
+        assert!(!signed_by_upstream(
+            &info(serde_json::json!(["cache.nixos.org-1:a"])),
+            &[]
+        ));
+        assert!(!signed_by_upstream(&serde_json::json!({}), &upstreams));
+    }
+
+    #[test]
+    fn generated_configure_dto_cannot_express_an_empty_list() {
+        let body = contract::ConfigureCache {
+            public: None,
+            retention_days: None,
+            upstream_cache_key_names: Vec::new(),
+        };
+        assert_eq!(serde_json::to_value(body).unwrap(), serde_json::json!({}));
+    }
 
     #[tokio::test]
     async fn run_concurrently_uses_but_never_exceeds_the_limit() {

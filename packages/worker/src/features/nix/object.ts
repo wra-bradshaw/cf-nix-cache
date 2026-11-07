@@ -7,7 +7,7 @@ import {
   parseJsonSchema,
 } from '../domain/validation';
 import { planRange, parseRange } from './range';
-import { indexShard } from '../../rpc';
+import { touchPath } from '../cache/directory';
 
 export async function serveNarObject(
   c: Context<AppEnv>,
@@ -55,11 +55,7 @@ export async function serveNarObject(
       'content-range',
       `bytes ${range.start}-${range.end}/${manifest.file_size}`,
     );
-  c.executionCtx.waitUntil(
-    indexShard(c.env, cache.reference.incarnation, storeHash)
-      .touch(storeHash)
-      .catch((error) => console.error('cache touch failed', error)),
-  );
+  c.executionCtx.waitUntil(touchPath(c.env, cache, storeHash));
   if (request.method === 'HEAD') return new Response(null, { status, headers });
 
   let planIndex = 0;

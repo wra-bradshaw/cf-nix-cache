@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../runtime/http';
 import { cacheRoutes } from './caches';
+import { gcRoutes } from './gc';
 import { pathRoutes } from './paths';
 import { tokenRoutes } from './tokens';
 
@@ -22,3 +23,4 @@ controlRoutes.get(
 controlRoutes.route('', tokenRoutes);
 controlRoutes.route('', cacheRoutes);
 controlRoutes.route('', pathRoutes);
+controlRoutes.route('', gcRoutes);

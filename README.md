@@ -141,6 +141,44 @@ The initial encoding profile is
 independent zstd level-3 frame. The Worker concatenates frames while serving
 the Nix URL and never decompresses them.
 
+## Upstream caches
+
+`push` skips paths signed with the key of a cache's upstreams, because clients can
+fetch those from the upstream instead. Every cache starts with
+`cache.nixos.org-1`, and `cache create` takes `--upstream-cache-key-name`,
+which can be repeated, to choose otherwise.
+
+```console
+cf-nix-cache cache upstreams my-cache cache.nixos.org-1 nix-community.cachix.org-1
+cf-nix-cache cache upstreams my-cache --none  # for clients without cache.nixos.org
+cf-nix-cache push --ignore-upstream-cache-filter my-cache .#hello  # upload everything once
+```
+
+List only upstreams that your clients use and that keep their paths. A signature
+shows that a cache signed a path, not that it still has it, and nothing checks.
+If an upstream evicts a skipped path, clients have to build it.
+
+## Garbage collection
+
+A scheduled workflow runs weekly, by default on Sundays at 03:00 UTC, and deletes
+manifests and chunks that no cache references. This reclaims the storage of
+deleted paths and caches. Live paths are never removed unless you opt in to
+retention for a cache:
+
+```console
+cf-nix-cache cache retention my-cache 30  # evict paths unused for 30 days (0 to disable)
+cf-nix-cache gc run --dry-run             # preview a run, changing nothing
+cf-nix-cache gc run                       # run now
+cf-nix-cache gc status                    # the active run and the last result
+```
+
+Use means a narinfo or NAR request, or a push that finds the path already
+present. Retention judges each path on its own, so a path can outlive one of its
+dependencies. If a run has objects to delete, new uploads wait while it finishes,
+usually for minutes; a run with nothing to delete does not affect them. To change
+the schedule, edit `schedules` on the `garbage-collect` workflow. See
+[the design](docs/ARCHITECTURE.md#garbage-collection).
+
 ## Security model
 
 The `/api` control plane uses Ed25519 capability JWTs. Tokens contain exact

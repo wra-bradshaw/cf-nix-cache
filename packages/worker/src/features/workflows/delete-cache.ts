@@ -5,6 +5,7 @@ import {
 } from 'cloudflare:workers';
 import type { CacheReference, CacheWorkflowJob } from '../../types';
 import { indexShard } from '../../rpc';
+import { shardPrefixes } from '../domain/identifiers';
 import { coordinator, system } from '../cache/directory';
 
 export class DeleteCacheWorkflow extends WorkflowEntrypoint<
@@ -25,8 +26,7 @@ export class DeleteCacheWorkflow extends WorkflowEntrypoint<
     };
     const cache = coordinator(this.env, reference);
     let deleted = 0;
-    for (let prefix = 0; prefix < 256; prefix += 1) {
-      const value = prefix.toString(16).padStart(2, '0');
+    for (const value of shardPrefixes()) {
       const count = await step.do(`clear shard ${value}`, async () => {
         const shard = indexShard(this.env, job.incarnation, value);
         const cleared = await shard.clear(

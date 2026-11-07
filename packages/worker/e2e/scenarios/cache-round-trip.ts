@@ -1,7 +1,13 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { expect } from 'vitest';
-import type { Cache, TokenResponse } from '../../src/generated/contracts';
+import type {
+  Cache,
+  GcRunRequest,
+  GcRunResponse,
+  GcStatusResponse,
+  TokenResponse,
+} from '../../src/generated/contracts';
 import {
   clientStorePath,
   debugFixture,
@@ -80,7 +86,10 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
     ]).trim();
     expect(hello).toMatch(/^\/nix\/store\//);
     const cli = path.join(repositoryDirectory, 'target/debug/cf-nix-cache');
-    await runAsync(cli, ['--endpoint', base, 'push', cacheName, hello], {
+    expect(cacheInfo.upstream_cache_key_names).toEqual(['cache.nixos.org-1']);
+    // Whether hello is signed upstream depends on how this machine got it.
+    const pushAll = ['push', '--ignore-upstream-cache-filter'];
+    await runAsync(cli, ['--endpoint', base, ...pushAll, cacheName, hello], {
       env: {
         CF_NIX_CACHE_TOKEN: admin.token,
         XDG_CONFIG_HOME: path.join(fixture.scratch, 'config'),
@@ -168,7 +177,7 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
 
     const secondPush = await runAsync(
       cli,
-      ['--endpoint', base, 'push', cacheName, hello],
+      ['--endpoint', base, ...pushAll, cacheName, hello],
       {
         env: {
           CF_NIX_CACHE_TOKEN: admin.token,
@@ -177,6 +186,163 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
       },
     );
     expect(secondPush).toMatch(/already cached/);
+
+    const retained = await expectJson<Cache>(
+      server,
+      base,
+      `/api/caches/${cacheName}/config`,
+      200,
+      {
+        method: 'PATCH',
+        headers: {
+          ...authHeader,
+          'content-type': 'application/json',
+          'Idempotency-Key': 'e2e-cache-retention',
+        },
+        body: JSON.stringify({ retention_days: 30 }),
+      },
+    );
+    expect(retained.retention_days).toBe(30);
+    expect(retained.public).toBe(true);
+
+    const runGc = async (key: string, body: GcRunRequest) => {
+      const { run_id } = await expectJson<GcRunResponse>(
+        server,
+        base,
+        '/api/gc',
+        202,
+        {
+          method: 'POST',
+          headers: {
+            ...authHeader,
+            'content-type': 'application/json',
+            'Idempotency-Key': key,
+          },
+          body: JSON.stringify(body),
+        },
+      );
+      const deadline = Date.now() + 5 * 60 * 1000;
+      while (Date.now() < deadline) {
+        const status = await expectJson<GcStatusResponse>(
+          server,
+          base,
+          '/api/gc',
+          200,
+          { headers: authHeader },
+        );
+        if (status.last_run?.run_id === run_id) return status.last_run;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      throw new Error(`garbage collection run ${run_id} did not finish`);
+    };
+
+    // Everything pushed is live, so collecting must not remove any of it.
+    const idle = await runGc('e2e-gc-idle', { grace_seconds: 0 });
+    expect(idle).toMatchObject({ outcome: 'success', deleted_objects: 0 });
+    expect(idle.marked_objects).toBeGreaterThan(0);
+    expect((await request(server, base, narPath)).status).toBe(200);
+
+    const deleted = await request(
+      server,
+      base,
+      `/api/caches/${cacheName}/paths/${storeHash}`,
+      {
+        method: 'DELETE',
+        headers: { ...authHeader, 'Idempotency-Key': 'e2e-path-delete' },
+      },
+    );
+    expect(deleted.status).toBe(200);
+
+    const preview = await runGc('e2e-gc-preview', {
+      dry_run: true,
+      grace_seconds: 0,
+    });
+    expect(preview.dry_run).toBe(true);
+    expect(preview.deleted_objects).toBeGreaterThan(0);
+
+    const swept = await runGc('e2e-gc-sweep', { grace_seconds: 0 });
+    expect(swept).toMatchObject({
+      outcome: 'success',
+      dry_run: false,
+      deleted_objects: preview.deleted_objects,
+      missing_manifests: 0,
+    });
+
+    // The manifest and chunks are gone, so a push has to rebuild them rather
+    // than trust what deduplication would have found before.
+    await runAsync(cli, ['--endpoint', base, ...pushAll, cacheName, hello], {
+      env: {
+        CF_NIX_CACHE_TOKEN: admin.token,
+        XDG_CONFIG_HOME: path.join(fixture.scratch, 'config-third'),
+      },
+    });
+    const restored = await request(server, base, narPath);
+    expect(restored.status).toBe(200);
+    expect(
+      execFileSync(zstd, ['-d', '-c'], {
+        input: Buffer.from(await restored.arrayBuffer()),
+        maxBuffer: narBufferBytes,
+      }),
+    ).toEqual(expectedNar);
+
+    // With no upstreams configured, a plain push uploads everything.
+    const secondCache = 'e2e-delete';
+    const createSecondCache = (key: string) =>
+      expectJson<Cache>(server, base, '/api/caches', 201, {
+        method: 'POST',
+        headers: {
+          ...authHeader,
+          'content-type': 'application/json',
+          'Idempotency-Key': key,
+        },
+        body: JSON.stringify({
+          name: secondCache,
+          quota_bytes: 10 * 1024 * 1024 * 1024,
+          upstream_cache_key_names: [],
+        }),
+      });
+    const second = await createSecondCache('e2e-delete-create');
+    expect(second.upstream_cache_key_names).toEqual([]);
+    const upstreams = await expectJson<{
+      upstream_cache_key_names: string[];
+    }>(server, base, `/api/caches/${secondCache}/upstreams`, 200, {
+      headers: authHeader,
+    });
+    expect(upstreams.upstream_cache_key_names).toEqual([]);
+    await runAsync(cli, ['--endpoint', base, 'push', secondCache, hello], {
+      env: {
+        CF_NIX_CACHE_TOKEN: admin.token,
+        XDG_CONFIG_HOME: path.join(fixture.scratch, 'config-fourth'),
+      },
+    });
+    const secondNarInfo = `/cache/${secondCache}/${storeHash}.narinfo`;
+    expect(
+      (await request(server, base, secondNarInfo, { headers: authHeader }))
+        .status,
+    ).toBe(200);
+
+    // Deleting a cache clears all of its shards and finishes. The new cache
+    // gets a new identity, so it must start out empty.
+    const deleting = await request(server, base, `/api/caches/${secondCache}`, {
+      method: 'DELETE',
+      headers: { ...authHeader, 'Idempotency-Key': 'e2e-delete-delete' },
+    });
+    expect(deleting.status).toBe(202);
+    const deleteDeadline = Date.now() + 10 * 60 * 1000;
+    while (true) {
+      const lookup = await request(server, base, `/api/caches/${secondCache}`, {
+        headers: authHeader,
+      });
+      if (lookup.status === 404) break;
+      if (Date.now() > deleteDeadline)
+        throw new Error('cache deletion did not finish');
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    await createSecondCache('e2e-delete-recreate');
+    expect(
+      (await request(server, base, secondNarInfo, { headers: authHeader }))
+        .status,
+    ).toBe(404);
   } catch (error) {
     debugFixture(fixture);
     const message = error instanceof Error ? error.message : String(error);

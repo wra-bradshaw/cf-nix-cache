@@ -14,7 +14,8 @@ export type CfNixCacheAPIContract =
   | TokenResponse
   | TokenSummary
   | AuditEvent
-  | CompleteUpload;
+  | CompleteUpload
+  | GcRunRequest;
 export type Role = 'pull' | 'push' | 'admin';
 export type UploadStatus =
   | 'CREATED'
@@ -32,6 +33,12 @@ export interface CreateCache {
   public?: boolean;
   quota_bytes: number;
   encoding_id?: 'fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1';
+  /**
+   * Signing key names of upstream caches. By default, push skips paths signed with these keys.
+   *
+   * @maxItems 32
+   */
+  upstream_cache_key_names?: string[];
 }
 export interface TokenRequest {
   subject: string;
@@ -79,7 +86,17 @@ export interface UploadState {
   error: string | null;
 }
 export interface ConfigureCache {
-  public: boolean;
+  public?: boolean;
+  /**
+   * Evict paths not accessed for this many days during garbage collection. 0 keeps paths indefinitely.
+   */
+  retention_days?: number;
+  /**
+   * Signing key names of upstream caches. By default, push skips paths signed with these keys.
+   *
+   * @maxItems 32
+   */
+  upstream_cache_key_names?: string[];
 }
 export interface Cache {
   id: string;
@@ -90,6 +107,16 @@ export interface Cache {
   encoding_id: 'fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1';
   created_at: number;
   lifecycle: 'CREATING' | 'ACTIVE' | 'DELETING';
+  /**
+   * Evict paths not accessed for this many days during garbage collection. 0 keeps paths indefinitely.
+   */
+  retention_days: number;
+  /**
+   * Signing key names of upstream caches. By default, push skips paths signed with these keys.
+   *
+   * @maxItems 32
+   */
+  upstream_cache_key_names: string[];
 }
 export interface MissingPaths {
   /**
@@ -126,6 +153,16 @@ export interface CompleteUpload {
     part_number: number;
     etag: string;
   }[];
+}
+export interface GcRunRequest {
+  /**
+   * Report what would be evicted and deleted without changing anything.
+   */
+  dry_run?: boolean;
+  /**
+   * Keep unreferenced objects newer than this. Defaults to one day.
+   */
+  grace_seconds?: number;
 }
 
 // Source: schemas/manifest.json
@@ -177,7 +214,10 @@ export type CfNixCacheAPIResponses =
   | TokenIssueResponse
   | TokenPageResponse
   | AuditPage
-  | MissingPathsResponse;
+  | MissingPathsResponse
+  | GcRunResponse
+  | GcStatusResponse
+  | CacheUpstreamsResponse;
 
 export interface ApiError {
   code: string;
@@ -192,6 +232,16 @@ export interface CacheResponse {
   logical_bytes: number;
   encoding_id: 'fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1';
   created_at: number;
+  /**
+   * Signing key names of upstream caches. By default, push skips paths signed with these keys.
+   *
+   * @maxItems 32
+   */
+  upstream_cache_key_names: string[];
+  /**
+   * Evict paths not accessed for this many days during garbage collection. 0 keeps paths indefinitely.
+   */
+  retention_days: number;
   lifecycle: 'CREATING' | 'ACTIVE' | 'DELETING';
 }
 export interface CachePage {
@@ -267,4 +317,39 @@ export interface AuditPage {
 }
 export interface MissingPathsResponse {
   missing: string[];
+}
+export interface GcRunResponse {
+  run_id: string;
+}
+export interface GcStatusResponse {
+  active_run?: GcActiveRun;
+  last_run?: GcSummary;
+}
+export interface GcActiveRun {
+  run_id: string;
+  phase: 'MARK' | 'DRAIN' | 'SWEEP';
+  started_at: number;
+  dry_run: boolean;
+}
+export interface GcSummary {
+  run_id: string;
+  dry_run: boolean;
+  outcome: 'success' | 'failed';
+  started_at: number;
+  finished_at: number;
+  evicted_paths: number;
+  skipped_paths: number;
+  marked_objects: number;
+  missing_manifests: number;
+  deleted_objects: number;
+  deleted_bytes: number;
+  error?: string;
+}
+export interface CacheUpstreamsResponse {
+  /**
+   * Signing key names of upstream caches. By default, push skips paths signed with these keys.
+   *
+   * @maxItems 32
+   */
+  upstream_cache_key_names: string[];
 }
