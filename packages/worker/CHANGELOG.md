@@ -1,5 +1,11 @@
 # cf-nix-cache
 
+## 0.3.1
+
+### Patch Changes
+
+- 5b8c33d: Fix cache deletion, which always failed with HTTP 500 on Cloudflare because its Workflow instance ID contained a colon. A cache left in `DELETING` finishes when the delete is retried. Log the error stack for unhandled errors, which previously appeared as `{}`.
+
 ## 0.3.0
 
 ### Minor Changes
