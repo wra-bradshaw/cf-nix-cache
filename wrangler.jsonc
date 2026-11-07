@@ -68,7 +68,7 @@
       "class_name": "GarbageCollectWorkflow",
       // Sundays at 03:00 UTC. Remove this line to run garbage collection only
       // on request.
-      "schedules": ["0 3 * * 0"],
+      "schedules": ["0 3 * * SUN"],
       "limits": { "steps": 25000 },
     },
   ],
@@ -129,7 +129,7 @@
           "name": "garbage-collect",
           "binding": "GARBAGE_COLLECT",
           "class_name": "GarbageCollectWorkflow",
-          "schedules": ["0 3 * * 0"],
+          "schedules": ["0 3 * * SUN"],
           "limits": { "steps": 25000 },
         },
       ],
