@@ -9,11 +9,16 @@ import type {
 import { idStub, type RpcResult } from '../../shared/rpc';
 import { indexShard } from './stubs';
 
+export const MUTATION_IN_PROGRESS = 'mutation_in_progress';
+
 function unwrapPublication<T>(result: RpcResult<T>, cache: string): T {
   if (!result.ok)
     throw new PublicationError(
       `${cache}: ${result.error.message}`,
-      result.error.status >= 500,
+      // Another operation holds the path's lock only until it finishes.
+      result.error.status >= 500 || result.error.code === MUTATION_IN_PROGRESS,
+      result.error.code,
+      result.error.status,
     );
   return result.value;
 }

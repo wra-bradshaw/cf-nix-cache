@@ -50,15 +50,22 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify(job),
               });
-            if (response.status === 503)
+            // Only a client error says the input itself is bad. Anything else
+            // is infrastructure, and may be a proxy's response, not the
+            // processor's.
+            if (response.status >= 500)
               throw new Error(
-                `processor temporary failure: ${await response.text()}`,
+                `processor temporary failure (${response.status}): ${await response.text()}`,
               );
             if (!response.ok)
               return {
                 permanent_error: `processor rejected input with ${response.status}: ${await response.text()}`,
               } as const;
-            return { result: await response.json<ProcessResult>() } as const;
+            // The processor also returns the whole manifest, which can exceed
+            // a step's result limit. Publication re-reads it from R2.
+            const { manifest_key, deduplicated } =
+              await response.json<ProcessResult>();
+            return { result: { manifest_key, deduplicated } } as const;
           },
         );
         if ('permanent_error' in processed)

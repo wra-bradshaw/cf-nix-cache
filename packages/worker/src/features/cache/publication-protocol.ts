@@ -43,6 +43,8 @@ export class PublicationError extends Error {
   constructor(
     message: string,
     readonly retryable: boolean,
+    readonly code = 'publication_failed',
+    readonly status = retryable ? 503 : 409,
   ) {
     super(message);
   }

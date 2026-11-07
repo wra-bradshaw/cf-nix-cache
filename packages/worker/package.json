@@ -41,7 +41,6 @@
     "build": "vite build && node scripts/package.mts",
     "prebuild": "pnpm contracts:generate",
     "prepack": "pnpm build",
-    "deploy": "pnpm build && wrangler deploy",
     "test": "vitest run",
     "pretest": "pnpm contracts:generate",
     "contracts:generate": "node scripts/generate-contracts.mts",

@@ -7,7 +7,7 @@ import { PublicationError } from '../../cache/publication-protocol';
 import { getCache } from '../../cache/resolve-cache';
 import type { CacheState, PathRecord } from '../../cache/types';
 import { renderNarInfo } from '../../nix/narinfo';
-import type { ProcessResult } from '../types';
+import type { ChunkManifest, ProcessResult } from '../types';
 import { UploadStorage } from './storage';
 
 export class UploadPublisher {
@@ -52,12 +52,12 @@ export class UploadPublisher {
         'processor manifest is missing',
         503,
       );
-    let manifest: ProcessResult['manifest'];
+    // Outside the try: a failed read is transient, and throwing retries the
+    // step. Only content that was read and is wrong is a permanent failure.
+    const manifestText = await manifestObject.text();
+    let manifest: ChunkManifest;
     try {
-      manifest = parseJsonSchema(
-        ChunkManifestSchema,
-        await manifestObject.json<unknown>(),
-      );
+      manifest = parseJsonSchema(ChunkManifestSchema, JSON.parse(manifestText));
     } catch {
       return failure('invalid_input', 'processor manifest is invalid', 422);
     }
@@ -70,11 +70,12 @@ export class UploadPublisher {
         'processor manifest does not match upload metadata',
         422,
       );
-    this.storage.setResult(
+    const { published_at: publishedAt } = this.storage.setResult(
       row.job_id,
       {
         manifest_key: result.manifest_key,
         deduplicated: result.deduplicated,
+        published_at: now(),
       },
       ['PROCESSING', 'PUBLISHING'],
       'PUBLISHING',
@@ -92,8 +93,10 @@ export class UploadPublisher {
       narinfo: '',
       file_hash: manifest.file_hash,
       file_size: manifest.file_size,
-      last_accessed: now(),
-      created_at: now(),
+      // The index shard rejects a retry whose mutation differs, so nothing in
+      // this record may vary between attempts.
+      last_accessed: publishedAt,
+      created_at: publishedAt,
     };
     record.narinfo = await renderNarInfo(this.env, record, manifest);
     try {

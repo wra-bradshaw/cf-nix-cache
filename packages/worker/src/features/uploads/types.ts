@@ -26,7 +26,6 @@ export interface ChunkRef {
 
 export interface ProcessResult {
   manifest_key: string;
-  manifest: ChunkManifest;
   deduplicated: boolean;
 }
 

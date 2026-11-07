@@ -1,5 +1,8 @@
 import { ChunkManifestSchema, parseJsonSchema } from '../../shared/schemas';
-import { publicationFor } from '../cache/publication-adapters';
+import {
+  MUTATION_IN_PROGRESS,
+  publicationFor,
+} from '../cache/publication-adapters';
 import { PublicationError } from '../cache/publication-protocol';
 import { coordinator, system, indexShard } from '../cache/stubs';
 import { namedStub, unwrapRpc } from '../../shared/rpc';
@@ -97,7 +100,10 @@ export function gcPorts(env: Env, runId: string): GcPorts {
         } catch (error) {
           // A conflicting publication or a cache going away. The next run
           // reconsiders the path; anything else fails this step and retries.
-          if (error instanceof PublicationError && !error.retryable)
+          if (
+            error instanceof PublicationError &&
+            (!error.retryable || error.code === MUTATION_IN_PROGRESS)
+          )
             return false;
           throw error;
         }

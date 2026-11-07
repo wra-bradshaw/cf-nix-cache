@@ -9,6 +9,8 @@ import { ENCODING_ID } from '../../cache/types';
 export interface ProcessReceipt {
   manifest_key: string;
   deduplicated: boolean;
+  /** Set by the first attempt, so that every retry publishes the same record. */
+  published_at: number;
 }
 
 export interface UploadRow {

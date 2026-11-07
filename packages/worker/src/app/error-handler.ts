@@ -32,17 +32,17 @@ export function handleError(caught: unknown, c: RequestContext): Response {
       caught.message,
       caught.code === 'missing_token' ? 401 : 403,
     );
-  if (caught instanceof DomainError)
+  if (caught instanceof DomainError || caught instanceof ApiCallError) {
+    if (caught.status >= 500)
+      console.error({
+        request_id: c.get('requestId'),
+        code: caught.code,
+        error: caught.message,
+      });
     return errorResponse(c, caught.code, caught.message, caught.status);
-  if (caught instanceof ApiCallError)
-    return errorResponse(c, caught.code, caught.message, caught.status);
+  }
   if (caught instanceof PublicationError)
-    return errorResponse(
-      c,
-      'retryable_failure',
-      caught.message,
-      caught.retryable ? 503 : 409,
-    );
+    return errorResponse(c, caught.code, caught.message, caught.status);
   if (caught instanceof RangeRequestError)
     return errorResponse(c, 'range_not_satisfiable', caught.message, 416);
   // Error objects serialize to `{}` in structured Workers logs.

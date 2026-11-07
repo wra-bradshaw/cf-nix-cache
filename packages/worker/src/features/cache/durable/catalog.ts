@@ -1,4 +1,4 @@
-import type { CacheReference } from '../types';
+import type { CacheConfig, CacheReference } from '../types';
 import { type RpcResult, failure, ok } from '../../../shared/rpc';
 import { first, type SqlRow } from '../../../shared/sql';
 import { now } from '../../../shared/clock';
@@ -137,6 +137,35 @@ export class SystemControl extends RpcOnlyDurableObject {
     return row
       ? ok(reference(row))
       : failure('not_found', 'cache not found', 404);
+  }
+
+  /**
+   * The configuration recorded when creation began, for a cache whose
+   * coordinator has not been initialized or has already been removed.
+   */
+  async catalogueConfig(
+    value: CacheReference,
+  ): Promise<RpcResult<CacheConfig>> {
+    const row = first(
+      this.ctx.storage.sql.exec<SqlRow>(
+        'SELECT c.created_at, f.public, f.quota_bytes, f.encoding_id FROM caches c JOIN cache_creation_config f ON f.cache_id = c.cache_id WHERE c.cache_id = ? AND c.incarnation = ?',
+        value.id,
+        value.incarnation,
+      ),
+    );
+    if (!row) return failure('not_found', 'cache not found', 404);
+    return ok({
+      id: value.id,
+      name: value.name,
+      public: Number(row.public) === 1,
+      quota_bytes: Number(row.quota_bytes),
+      logical_bytes: 0,
+      encoding_id: String(row.encoding_id) as CacheConfig['encoding_id'],
+      created_at: Number(row.created_at),
+      lifecycle: value.lifecycle,
+      retention_days: 0,
+      upstream_cache_key_names: [],
+    });
   }
 
   async activateCache(value: CacheReference): Promise<RpcResult<void>> {

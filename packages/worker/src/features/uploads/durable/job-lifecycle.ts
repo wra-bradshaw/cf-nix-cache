@@ -83,12 +83,19 @@ export class UploadJobLifecycle {
   async state(): Promise<RpcResult<UploadStateResponse>> {
     const row = this.storage.row();
     if (!row) return failure('not_found', 'upload not found', 404);
-    if (['QUEUED', 'PROCESSING', 'PUBLISHING'].includes(row.state))
-      await ensureWorkflow(
-        this.env.PROCESS_UPLOAD!,
-        row.job_id,
-        toProcessJob(row),
-      );
+    if (['QUEUED', 'PROCESSING', 'PUBLISHING'].includes(row.state)) {
+      // Reconciliation is opportunistic: a Workflows outage must not make the
+      // stored state unreadable. The client's next poll tries again.
+      try {
+        await ensureWorkflow(
+          this.env.PROCESS_UPLOAD!,
+          row.job_id,
+          toProcessJob(row),
+        );
+      } catch (error) {
+        console.error('upload workflow reconciliation failed', error);
+      }
+    }
     return ok(toStateResponse(this.storage.row()!));
   }
 }

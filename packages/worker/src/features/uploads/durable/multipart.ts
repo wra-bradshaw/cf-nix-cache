@@ -145,6 +145,15 @@ export class UploadMultipart {
         }));
     if (!values.length)
       return failure('missing_parts', 'no uploaded parts were supplied', 400);
+    // Checked against what this object accepted before entering COMPLETING,
+    // which reuses the stored list on every later call. Otherwise one bad
+    // request would leave abort as the only way out.
+    if (values.some((part) => row.parts[part.part_number] !== part.etag))
+      return failure(
+        'invalid_part',
+        'completed parts do not match the uploaded parts',
+        400,
+      );
     const storedParts = Object.fromEntries(
       values.map((part) => [part.part_number, part.etag]),
     );

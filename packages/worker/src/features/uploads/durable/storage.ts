@@ -113,21 +113,27 @@ export class UploadStorage {
     );
   }
 
+  /** Returns the stored receipt, whose `published_at` the first attempt set. */
   setResult(
     jobId: string,
     result: ProcessReceipt,
     from: UploadState[],
     to: UploadState,
-  ): void {
-    this.ctx.storage.transactionSync(() =>
+  ): ProcessReceipt {
+    return this.ctx.storage.transactionSync(() => {
+      const receipt = {
+        ...result,
+        published_at: this.row()?.result?.published_at ?? result.published_at,
+      };
       this.ctx.storage.sql.exec(
         `UPDATE job SET state = ?, result = ? WHERE job_id = ? AND state IN (${from.map(() => '?').join(', ')})`,
         to,
-        JSON.stringify(result),
+        JSON.stringify(receipt),
         jobId,
         ...from,
-      ),
-    );
+      );
+      return receipt;
+    });
   }
 
   setError(jobId: string, message: string, to: UploadState = 'FAILED'): void {

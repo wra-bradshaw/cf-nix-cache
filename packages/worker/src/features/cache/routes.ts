@@ -18,7 +18,13 @@ import {
 } from '../../shared/http';
 import { authFor } from './access';
 import { coordinator, system } from './stubs';
-import { effectiveLifecycle, getCache, publicCache } from './resolve-cache';
+import {
+  effectiveLifecycle,
+  getCache,
+  getCacheForDeletion,
+  publicCache,
+} from './resolve-cache';
+import { assertActive } from './access';
 import { unwrapRpc } from '../../shared/rpc';
 import { auditEvent } from '../audit/event';
 
@@ -80,7 +86,14 @@ cacheRoutes.get('/api/caches', async (c) => {
   const page = unwrapRpc(await system(c.env).listCaches({ after, limit }));
   const items = await Promise.all(
     page.items.map(async (reference) => {
-      const config = unwrapRpc(await coordinator(c.env, reference).getCache());
+      const result = await coordinator(c.env, reference).getCache();
+      // Interrupted creation and the end of teardown both leave a catalogue
+      // row without a coordinator. One such cache must not fail the whole page.
+      if (!result.ok && result.error.code === 'not_found') {
+        const config = await system(c.env).catalogueConfig(reference);
+        return config.ok ? publicCache({ ...config.value, reference }) : null;
+      }
+      const config = unwrapRpc(result);
       return publicCache({
         ...config,
         lifecycle: effectiveLifecycle(reference.lifecycle, config.lifecycle),
@@ -89,7 +102,7 @@ cacheRoutes.get('/api/caches', async (c) => {
     }),
   );
   return c.json({
-    items,
+    items: items.filter((item) => item !== null),
     next_cursor: page.next_after ? encodeCursor(page.next_after) : null,
   });
 });
@@ -115,8 +128,9 @@ cacheRoutes.delete('/api/caches/:name', async (c) => {
   const operationId = idempotency(c.req.raw);
   const name = c.req.param('name');
   assertCacheName(name);
-  const cache = await getCache(c.env, name);
-  const admin = await authenticate(c.req.raw, c.env, cache.name, 'admin');
+  // Before the lookup, which may initialize an interrupted cache's coordinator.
+  const admin = await authenticate(c.req.raw, c.env, name, 'admin');
+  const cache = await getCacheForDeletion(c.env, name);
   const deletion = unwrapRpc(
     await system(c.env).beginDelete({
       reference: cache.reference,
@@ -155,6 +169,8 @@ cacheRoutes.patch('/api/caches/:name/config', async (c) => {
   assertCacheName(name);
   const cache = await getCache(c.env, name);
   const admin = await authenticate(c.req.raw, c.env, cache.name, 'admin');
+  // A change during CREATING would fence off that cache's own recovery.
+  assertActive(cache);
   const input = parseJsonSchema(
     ConfigureCacheSchema,
     await parseJson(c.req.raw),
