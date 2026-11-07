@@ -1,5 +1,9 @@
 import { doctor } from "./doctor.mts";
-import { readConfig, withRenderedConfig } from "./lib/config.mts";
+import {
+  readConfig,
+  signingKeyName,
+  withRenderedConfig,
+} from "./lib/config.mts";
 import { fail } from "./lib/fail.mts";
 import { keyMaterial, nixPublicKey } from "./lib/keys.mts";
 import { bucketName, ensureBucket, ensureLifecycle } from "./lib/r2.mts";
@@ -42,6 +46,7 @@ async function configureSecrets(
   state: "none" | "complete",
   initialUrl: string | undefined,
   rendered: string,
+  keyName: string,
 ): Promise<{
   publicKey: string;
   url: string;
@@ -57,7 +62,7 @@ async function configureSecrets(
     const bootstrapSecret = requireBootstrapSecret();
     const auth = keyMaterial();
     const nix = keyMaterial();
-    publicKey = nixPublicKey("cache.nix-signing", nix.publicJwk);
+    publicKey = nixPublicKey(keyName, nix.publicJwk);
     await putSecrets(
       {
         AUTH_PRIVATE_JWK: JSON.stringify(auth.privateJwk),
@@ -106,6 +111,9 @@ async function setup(): Promise<void> {
           `partial Wrangler secret set detected (missing: ${missingSecrets(existingSecrets).join(", ")}). Refusing to deploy until the missing secrets are restored or an explicit key rotation is performed.`,
         );
       }
+      // Checked before anything is created, so that a first run without the
+      // secret can't leave a live Worker that has no secrets.
+      if (state === "none") requireBootstrapSecret();
       const bucket = bucketName(config);
       await ensureBucket(bucket, rendered);
       await ensureLifecycle(bucket, rendered);
@@ -113,8 +121,14 @@ async function setup(): Promise<void> {
       // A first deploy creates the Worker, Durable Objects, Workflows, and
       // Container binding before the bulk secret operation targets the Worker.
       const initialUrl = await deployWorker(rendered);
-      const configured = await configureSecrets(state, initialUrl, rendered);
-      await deployWorker(rendered);
+      const configured = await configureSecrets(
+        state,
+        initialUrl,
+        rendered,
+        signingKeyName(config),
+      );
+      // Only a first deploy has just installed secrets to start up with.
+      if (state === "none") await deployWorker(rendered);
       return configured;
     },
   );

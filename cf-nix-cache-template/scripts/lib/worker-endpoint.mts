@@ -19,5 +19,7 @@ export function bootstrapCommand(url: string): string {
   return `curl -fsS '${url.replace(/\/$/, "")}/api/bootstrap' \\
   -H 'content-type: application/json' \\
   -H "Idempotency-Key: first-admin-$(date +%s)" \\
-  --data '{"subject":"admin","valid_for_seconds":31536000,"grants":[{"cache":"*","role":"admin"}],"secret":"'"$CF_NIX_CACHE_BOOTSTRAP_SECRET"'"}'`;
+  --data @- <<EOF
+{"subject":"admin","valid_for_seconds":31536000,"grants":[{"cache":"*","role":"admin"}],"secret":"$CF_NIX_CACHE_BOOTSTRAP_SECRET"}
+EOF`;
 }

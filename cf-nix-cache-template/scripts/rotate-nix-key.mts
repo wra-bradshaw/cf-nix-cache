@@ -1,3 +1,4 @@
+import { readConfig, signingKeyName } from "./lib/config.mts";
 import { fail } from "./lib/fail.mts";
 import { keyMaterial, nixPublicKey } from "./lib/keys.mts";
 import { configPath } from "./lib/paths.mts";
@@ -15,7 +16,7 @@ if (missing.length)
   );
 
 const nix = keyMaterial();
-const publicKey = nixPublicKey("cache.nix-signing", nix.publicJwk);
+const publicKey = nixPublicKey(signingKeyName(await readConfig()), nix.publicJwk);
 await putSecrets(
   {
     NIX_PRIVATE_JWK: JSON.stringify(nix.privateJwk),

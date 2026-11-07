@@ -23,6 +23,11 @@ type Container = {
   };
   [key: string]: unknown;
 };
+/** The name the Worker signs narinfo with, which clients must trust. */
+export function signingKeyName(config: TemplateConfig): string {
+  return config.vars?.NIX_SIGNING_KEY_NAME ?? "cache.nix-signing";
+}
+
 export type TemplateConfig = {
   name?: string;
   r2_buckets?: Array<{ binding?: string; bucket_name?: string }>;
