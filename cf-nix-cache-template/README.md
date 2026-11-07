@@ -117,6 +117,13 @@ The first request after upgrading from a release without re-arming treats the
 secret configured at that moment as used. If bootstrap returns 409 after
 upgrading and setting a new secret together, set another new secret.
 
+Garbage collection needs configuration that older deployments lack. When
+upgrading from a release without it, copy these from this template's
+`wrangler.jsonc` to yours: the `GC_CONTROL` binding, the `v2` migration, the
+`garbage-collect` workflow, and `limits`. Deploys fail until the binding and
+workflow are present. The first scheduled run deletes objects left unreferenced
+by earlier path and cache deletions; preview it with `cf-nix-cache gc run --dry-run`.
+
 Deleting the Worker does not delete a non-empty R2 bucket. To tear down a
 cache, first stop writers, verify the bucket is empty, explicitly delete its
 objects, and then remove the bucket using Wrangler. This is intentionally not

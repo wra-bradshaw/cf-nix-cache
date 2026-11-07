@@ -37,6 +37,10 @@ pub struct CacheConfig {
     pub encoding_id: String,
     pub created_at: u64,
     pub lifecycle: CacheLifecycle,
+    #[serde(default)]
+    pub retention_days: u64,
+    #[serde(default)]
+    pub upstream_cache_key_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

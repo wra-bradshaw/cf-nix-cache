@@ -43,10 +43,9 @@ charge until finalization. Cache teardown first fences every index shard and
 aborts prepared mutations, preventing a publication already in flight from
 recreating paths after the shard is cleared. Already-reserved publications
 are reconciled and finalized during deletion before their shard delta is
-applied, so a response loss cannot strand teardown. There is no live-object
-eviction or manifest/chunk garbage-collection workflow for infrastructure
-failures; R2 lifecycle rules clean abandoned staging data. Because a path can
-be replaced, public NAR responses use a bounded cache lifetime rather than an
+applied, so a response loss cannot strand teardown. R2 lifecycle rules clean
+abandoned staging data, and garbage collection (below) reclaims manifests and
+chunks. Because a path can be replaced, public NAR responses use a bounded cache lifetime rather than an
 immutable year-long cache directive.
 
 The processor is split into HTTP bootstrap, processing service, NAR
@@ -66,6 +65,44 @@ idempotency key that the retry middleware reuses for transient failures, and
 uses the same `/api` routes as the documented API. Request and response
 schemas are generated for both Worker and Rust contract tooling; domain types
 remain separate where they add semantic validation or application policy.
+
+## Garbage collection
+
+Deleting a path or a cache only removes index rows. Manifests and chunks are
+shared by content across every cache, so nothing can tell locally that an
+object has become unused. `GarbageCollectWorkflow` finds this out with
+installation-wide mark-and-sweep, weekly by default:
+
+1. **Evict.** Caches with `retention_days` set drop paths not used for that
+   long, through the normal publication protocol. Use means a narinfo request,
+   a NAR request, or a push that finds the path already present. A path's
+   references are not considered, so a retained path can outlive a dependency;
+   Nix then builds or fetches that dependency elsewhere.
+2. **Mark.** Walk all 1024 index shards of every live cache, then read each
+   referenced manifest to mark its chunks. Marks live in the `GcControl`
+   Durable Object, because they can outgrow a Worker's memory.
+3. **List.** List the bucket, keeping unmarked objects older than the grace
+   period as candidates. Uploads continue throughout steps 1-3, and a run with
+   no candidates ends here without ever delaying one.
+4. **Drain.** Close the upload gate and wait for active uploads to finish.
+5. **Sweep.** Mark the manifests those uploads published, then delete the
+   remaining candidates, manifests before chunks. Then reopen the gate.
+
+An object's age cannot show that deleting it is safe, because the processor's
+conditional writes deduplicate: an old unreferenced chunk can become referenced
+by a new upload with no write to it, and an existing manifest is taken as proof
+that its chunks exist. Upload leases close that race. An upload holds a lease
+from before processing until after publication, and records its manifest before
+publishing, so the run marks it even if the walk has passed that shard. Deletion
+requires a closed gate and no live leases. A lease that expires is fenced at
+publication, and that upload is processed again.
+
+Failures stop before deleting. Any error while marking fails the run, as does a
+manifest that exists but cannot be parsed. A run must keep calling in to the
+ledger or it loses the gate, so a dead run blocks uploads for at most 30 minutes.
+Every step is idempotent, and deleting manifests first means an interrupted
+sweep cannot leave a manifest whose chunks are gone.
+
 ## Worker structure
 
 The worker is organized by feature first. `src/features` owns the application

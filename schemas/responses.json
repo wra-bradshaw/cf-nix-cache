@@ -11,7 +11,10 @@
     { "$ref": "#/$defs/token_issue_response" },
     { "$ref": "#/$defs/token_page_response" },
     { "$ref": "#/$defs/audit_page" },
-    { "$ref": "#/$defs/missing_paths_response" }
+    { "$ref": "#/$defs/missing_paths_response" },
+    { "$ref": "#/$defs/gc_run_response" },
+    { "$ref": "#/$defs/gc_status_response" },
+    { "$ref": "#/$defs/cache_upstreams_response" }
   ],
   "$defs": {
     "api_error": {
@@ -27,7 +30,7 @@
     "cache_response": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "name", "public", "quota_bytes", "logical_bytes", "encoding_id", "created_at", "lifecycle"],
+      "required": ["id", "name", "public", "quota_bytes", "logical_bytes", "encoding_id", "created_at", "lifecycle", "retention_days", "upstream_cache_key_names"],
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "name": { "type": "string", "pattern": "^[a-z0-9_-]{1,64}$" },
@@ -36,6 +39,8 @@
         "logical_bytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "encoding_id": { "const": "fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1" },
         "created_at": { "type": "integer", "minimum": 1 },
+        "upstream_cache_key_names": { "type": "array", "maxItems": 32, "items": { "type": "string", "pattern": "^[^:\\s]{1,128}$" }, "description": "Signing key names of upstream caches. By default, push skips paths signed with these keys." },
+        "retention_days": { "type": "integer", "minimum": 0, "maximum": 36500, "description": "Evict paths not accessed for this many days during garbage collection. 0 keeps paths indefinitely." },
         "lifecycle": { "enum": ["CREATING", "ACTIVE", "DELETING"] }
       }
     },
@@ -120,6 +125,56 @@
       "properties": {
         "items": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "timestamp", "actor", "action", "resource", "outcome", "metadata"], "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 256 }, "timestamp": { "type": "integer", "minimum": 1 }, "actor": { "type": "string", "minLength": 1, "maxLength": 256 }, "action": { "type": "string", "minLength": 1, "maxLength": 128 }, "resource": { "type": "string", "minLength": 1, "maxLength": 512 }, "outcome": { "enum": ["success", "accepted", "failure"] }, "metadata": { "type": "object", "additionalProperties": { "type": "string" } } } } },
         "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "cache_upstreams_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upstream_cache_key_names"],
+      "properties": { "upstream_cache_key_names": { "type": "array", "maxItems": 32, "items": { "type": "string", "pattern": "^[^:\\s]{1,128}$" }, "description": "Signing key names of upstream caches. By default, push skips paths signed with these keys." } }
+    },
+    "gc_run_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id"],
+      "properties": { "run_id": { "type": "string", "minLength": 1, "maxLength": 100 } }
+    },
+    "gc_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "dry_run", "outcome", "started_at", "finished_at", "evicted_paths", "skipped_paths", "marked_objects", "missing_manifests", "deleted_objects", "deleted_bytes"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "dry_run": { "type": "boolean" },
+        "outcome": { "enum": ["success", "failed"] },
+        "started_at": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "finished_at": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "evicted_paths": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "skipped_paths": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "marked_objects": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "missing_manifests": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "deleted_objects": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "deleted_bytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "error": { "type": "string" }
+      }
+    },
+    "gc_active_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "phase", "started_at", "dry_run"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "phase": { "enum": ["MARK", "DRAIN", "SWEEP"] },
+        "started_at": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "dry_run": { "type": "boolean" }
+      }
+    },
+    "gc_status_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "active_run": { "$ref": "#/$defs/gc_active_run" },
+        "last_run": { "$ref": "#/$defs/gc_summary" }
       }
     },
     "missing_paths_response": {

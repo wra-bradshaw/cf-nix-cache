@@ -265,13 +265,14 @@ export function validateConfig(config: TemplateConfig, image: string): void {
     "CACHE_INDEX",
     "UPLOAD_JOB",
     "PROCESSOR",
+    "GC_CONTROL",
   ]) {
     if (!durableNames.has(required))
       fail(`missing Durable Object binding ${required}`);
   }
-  if ((config.workflows ?? []).length < 2)
+  if ((config.workflows ?? []).length < 3)
     fail(
-      "wrangler.jsonc must define process-upload and delete-cache workflows",
+      "wrangler.jsonc must define process-upload, delete-cache and garbage-collect workflows",
     );
 }
 

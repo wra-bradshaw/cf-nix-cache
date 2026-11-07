@@ -27,6 +27,8 @@ const exportedClasses = [
   'CacheIndexShard',
   'ContainerProxy',
   'DeleteCacheWorkflow',
+  'GarbageCollectWorkflow',
+  'GcControl',
   'ProcessorContainer',
   'ProcessUploadWorkflow',
   'SystemControl',

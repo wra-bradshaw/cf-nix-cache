@@ -9,6 +9,7 @@ import {
   AUDIT_OUTBOX_SCHEMA,
   AuditOutbox,
 } from '../../../infrastructure/durable/audit-outbox';
+import { DEFAULT_UPSTREAM_CACHE_KEY_NAMES } from '../../domain/identifiers';
 import { failure, ok } from '../../../infrastructure/durable/shared';
 import { CoordinatorQuota } from './quota';
 import { CoordinatorState } from './state';
@@ -31,6 +32,24 @@ CREATE TABLE IF NOT EXISTS clear_operations (
 );
 ${AUDIT_OUTBOX_SCHEMA}`;
 
+const ADDED_COLUMNS: Record<string, string> = {
+  retention_days: 'INTEGER NOT NULL DEFAULT 0',
+  upstream_cache_key_names: `TEXT NOT NULL DEFAULT '${JSON.stringify(DEFAULT_UPSTREAM_CACHE_KEY_NAMES)}'`,
+};
+
+function addMissingColumns(ctx: DurableObjectState): void {
+  const present = new Set(
+    [...ctx.storage.sql.exec<{ name: string }>('PRAGMA table_info(cache)')].map(
+      (column) => column.name,
+    ),
+  );
+  for (const [name, definition] of Object.entries(ADDED_COLUMNS))
+    if (!present.has(name))
+      ctx.storage.sql.exec(
+        `ALTER TABLE cache ADD COLUMN ${name} ${definition}`,
+      );
+}
+
 export class CacheCoordinator extends RpcOnlyDurableObject {
   private readonly state: CoordinatorState;
   private readonly uploads: CoordinatorUploads;
@@ -40,6 +59,7 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(schema);
+    addMissingColumns(ctx);
     this.state = new CoordinatorState(ctx);
     this.uploads = new CoordinatorUploads(ctx, env);
     this.quota = new CoordinatorQuota(ctx);
@@ -52,6 +72,7 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
     quota_bytes: number;
     encoding_id: string;
     created_at: number;
+    upstream_cache_key_names: string[];
   }): Promise<RpcResult<CacheConfig>> {
     return this.state.initialize(input);
   }
@@ -60,7 +81,11 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
     return this.state.getCache();
   }
 
-  configure(input: { public: boolean }): Promise<RpcResult<CacheConfig>> {
+  configure(input: {
+    public?: boolean;
+    retention_days?: number;
+    upstream_cache_key_names?: string[];
+  }): Promise<RpcResult<CacheConfig>> {
     return this.state.configure(input);
   }
 

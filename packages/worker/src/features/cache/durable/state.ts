@@ -23,7 +23,9 @@ export class CoordinatorState {
     quota_bytes: number;
     encoding_id: string;
     created_at: number;
+    upstream_cache_key_names: string[];
   }): Promise<RpcResult<CacheConfig>> {
+    const upstreams = JSON.stringify(input.upstream_cache_key_names);
     return this.ctx.storage.transactionSync(() => {
       const existing = this.row();
       if (existing) {
@@ -32,7 +34,8 @@ export class CoordinatorState {
           String(existing.incarnation) !== input.reference.incarnation ||
           Number(existing.quota_bytes) !== input.quota_bytes ||
           Number(existing.public) !== (input.public ? 1 : 0) ||
-          String(existing.encoding_id) !== input.encoding_id
+          String(existing.encoding_id) !== input.encoding_id ||
+          String(existing.upstream_cache_key_names) !== upstreams
         ) {
           return failure(
             'coordinator_conflict',
@@ -43,7 +46,7 @@ export class CoordinatorState {
         return ok(toCache(existing));
       }
       this.ctx.storage.sql.exec(
-        "INSERT INTO cache (cache_id, name, incarnation, public, quota_bytes, encoding_id, created_at, lifecycle) VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATING')",
+        "INSERT INTO cache (cache_id, name, incarnation, public, quota_bytes, encoding_id, created_at, lifecycle, upstream_cache_key_names) VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATING', ?)",
         input.reference.id,
         input.reference.name,
         input.reference.incarnation,
@@ -51,6 +54,7 @@ export class CoordinatorState {
         input.quota_bytes,
         input.encoding_id,
         input.created_at,
+        upstreams,
       );
       return ok({
         id: input.reference.id,
@@ -61,6 +65,8 @@ export class CoordinatorState {
         encoding_id: input.encoding_id as CacheConfig['encoding_id'],
         created_at: input.created_at,
         lifecycle: 'CREATING',
+        retention_days: 0,
+        upstream_cache_key_names: input.upstream_cache_key_names,
       });
     });
   }
@@ -72,17 +78,31 @@ export class CoordinatorState {
       : failure('not_found', 'cache not found', 404);
   }
 
-  async configure(input: { public: boolean }): Promise<RpcResult<CacheConfig>> {
+  async configure(input: {
+    public?: boolean;
+    retention_days?: number;
+    upstream_cache_key_names?: string[];
+  }): Promise<RpcResult<CacheConfig>> {
     return this.ctx.storage.transactionSync(() => {
       const row = this.row();
       if (!row) return failure('not_found', 'cache not found', 404);
       if (String(row.lifecycle) === 'DELETING')
         return failure('cache_deleting', 'cache is being deleted', 410);
+      const next = {
+        ...row,
+        public: input.public === undefined ? row.public : input.public ? 1 : 0,
+        retention_days: input.retention_days ?? row.retention_days,
+        upstream_cache_key_names: input.upstream_cache_key_names
+          ? JSON.stringify(input.upstream_cache_key_names)
+          : row.upstream_cache_key_names,
+      };
       this.ctx.storage.sql.exec(
-        'UPDATE cache SET public = ?',
-        input.public ? 1 : 0,
+        'UPDATE cache SET public = ?, retention_days = ?, upstream_cache_key_names = ?',
+        next.public,
+        next.retention_days,
+        next.upstream_cache_key_names,
       );
-      return ok(toCache({ ...row, public: input.public ? 1 : 0 }));
+      return ok(toCache(next));
     });
   }
 

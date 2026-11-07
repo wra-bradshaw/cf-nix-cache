@@ -5,12 +5,14 @@ import {
   ConfigureCacheSchema,
   CreateCacheSchema,
   decodeCursor,
+  DEFAULT_UPSTREAM_CACHE_KEY_NAMES,
   encodeCursor,
   parseJsonSchema,
 } from '../domain/validation';
 import { deleteCacheWorkflowId, ensureWorkflow } from '../workflows/enqueue';
 import { idempotency, parseJson, type AppEnv } from '../runtime/http';
 import {
+  authFor,
   coordinator,
   effectiveLifecycle,
   getCache,
@@ -47,6 +49,8 @@ cacheRoutes.post('/api/caches', async (c) => {
       quota_bytes: input.quota_bytes,
       encoding_id: input.encoding_id ?? ENCODING_ID,
       created_at: Math.floor(Date.now() / 1000),
+      upstream_cache_key_names:
+        input.upstream_cache_key_names ?? DEFAULT_UPSTREAM_CACHE_KEY_NAMES,
     }),
   );
   // Activate the serving authority first. The catalogue remains CREATING
@@ -98,6 +102,15 @@ cacheRoutes.get('/api/caches/:name', async (c) => {
   const cache = await getCache(c.env, name);
   await authenticateGlobal(c.req.raw, c.env, 'admin');
   return c.json(publicCache(cache));
+});
+
+// Pushers read this without the admin grant that the full configuration needs.
+cacheRoutes.get('/api/caches/:name/upstreams', async (c) => {
+  const name = c.req.param('name');
+  assertCacheName(name);
+  const cache = await getCache(c.env, name);
+  await authFor(c.req.raw, c.env, cache, 'push');
+  return c.json({ upstream_cache_key_names: cache.upstream_cache_key_names });
 });
 
 cacheRoutes.delete('/api/caches/:name', async (c) => {

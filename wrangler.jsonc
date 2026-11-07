@@ -28,6 +28,7 @@
       { "name": "CACHE_INDEX", "class_name": "CacheIndexShard" },
       { "name": "UPLOAD_JOB", "class_name": "UploadJob" },
       { "name": "PROCESSOR", "class_name": "ProcessorContainer" },
+      { "name": "GC_CONTROL", "class_name": "GcControl" },
     ],
   },
   "exports": {
@@ -38,6 +39,7 @@
     "CacheIndexShard": { "type": "durable-object", "storage": "sqlite" },
     "UploadJob": { "type": "durable-object", "storage": "sqlite" },
     "ProcessorContainer": { "type": "durable-object", "storage": "sqlite" },
+    "GcControl": { "type": "durable-object", "storage": "sqlite" },
   },
   "containers": [
     {
@@ -60,6 +62,15 @@
       "binding": "DELETE_CACHE",
       "class_name": "DeleteCacheWorkflow",
     },
+    {
+      "name": "garbage-collect",
+      "binding": "GARBAGE_COLLECT",
+      "class_name": "GarbageCollectWorkflow",
+      // Sundays at 03:00 UTC. Remove this line to run garbage collection only
+      // on request.
+      "schedules": ["0 3 * * 0"],
+      "limits": { "steps": 25000 },
+    },
   ],
   "vars": {
     "TOKEN_ISSUER": "cf-nix-cache",
@@ -70,9 +81,12 @@
   // name collides with the secret. Local development reads it from .dev.vars
   // (see .dev.vars.example).
   "observability": { "enabled": true },
+  // A garbage collection run makes one request per index shard and manifest.
+  "limits": { "subrequests": 10000000 },
   "env": {
     "production": {
       "name": "cf-nix-cache",
+      "limits": { "subrequests": 10000000 },
       "r2_buckets": [
         { "binding": "CACHE_BUCKET", "bucket_name": "cf-nix-cache-prod" },
       ],
@@ -85,6 +99,7 @@
           { "name": "CACHE_INDEX", "class_name": "CacheIndexShard" },
           { "name": "UPLOAD_JOB", "class_name": "UploadJob" },
           { "name": "PROCESSOR", "class_name": "ProcessorContainer" },
+          { "name": "GC_CONTROL", "class_name": "GcControl" },
         ],
       },
       "vars": {
@@ -109,6 +124,13 @@
           "name": "delete-cache",
           "binding": "DELETE_CACHE",
           "class_name": "DeleteCacheWorkflow",
+        },
+        {
+          "name": "garbage-collect",
+          "binding": "GARBAGE_COLLECT",
+          "class_name": "GarbageCollectWorkflow",
+          "schedules": ["0 3 * * 0"],
+          "limits": { "steps": 25000 },
         },
       ],
     },

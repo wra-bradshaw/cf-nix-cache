@@ -19,6 +19,7 @@
       { "name": "CACHE_INDEX", "class_name": "CacheIndexShard" },
       { "name": "UPLOAD_JOB", "class_name": "UploadJob" },
       { "name": "PROCESSOR", "class_name": "ProcessorContainer" },
+      { "name": "GC_CONTROL", "class_name": "GcControl" },
     ],
   },
   "migrations": [
@@ -34,6 +35,7 @@
         "ProcessorContainer",
       ],
     },
+    { "tag": "v2", "new_sqlite_classes": ["GcControl"] },
   ],
   "containers": [
     {
@@ -64,6 +66,15 @@
       "binding": "DELETE_CACHE",
       "class_name": "DeleteCacheWorkflow",
     },
+    {
+      "name": "garbage-collect",
+      "binding": "GARBAGE_COLLECT",
+      "class_name": "GarbageCollectWorkflow",
+      // Sundays at 03:00 UTC. Remove this line to run garbage collection only
+      // on request.
+      "schedules": ["0 3 * * 0"],
+      "limits": { "steps": 25000 },
+    },
   ],
   "vars": {
     "CF_NIX_CACHE_CONFIG_SCHEMA": "1",
@@ -72,4 +83,6 @@
     "NIX_SIGNING_KEY_NAME": "cache.nix-signing",
   },
   "observability": { "enabled": true },
+  // A garbage collection run makes one request per index shard and manifest.
+  "limits": { "subrequests": 10000000 },
 }
