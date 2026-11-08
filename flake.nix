@@ -36,7 +36,7 @@
     {
       formatter = forEachSupportedSystem ({ pkgs, ... }: pkgs.nixfmt);
       devShells = import ./nix/dev-shells.nix {
-        inherit lib forEachSupportedSystem;
+        inherit inputs lib forEachSupportedSystem;
       };
       apps = import ./nix/apps.nix {
         inherit forEachSupportedSystem;

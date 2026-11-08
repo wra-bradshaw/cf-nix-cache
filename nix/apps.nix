@@ -13,11 +13,11 @@ forEachSupportedSystem (
         pkgs.pnpm
       ];
       text = ''
-        # `pnpm build` compiles crates/verify to wasm32 with the dev shell's
-        # toolchain, so run inside it, with the caller's own `nix`. Like the
-        # rest of this app, this expects the repository root as the working
-        # directory.
-        if [ -z "''${CC_wasm32_unknown_unknown:-}" ]; then
+        # `pnpm build` needs the dev shell's node, pnpm and nix (generating the
+        # sources fetches the verifier wasm with `nix build .#verifier`), so
+        # run inside it, with the caller's own `nix`. Like the rest of this
+        # app, this expects the repository root as the working directory.
+        if [ -z "''${CF_NIX_CACHE_DEV_SHELL:-}" ]; then
           exec nix develop --command "$0" "$@"
         fi
         action="''${1:-plan}"
@@ -110,11 +110,11 @@ forEachSupportedSystem (
         pkgs.pnpm
       ];
       text = ''
-        # `pnpm build` compiles crates/verify to wasm32 with the dev shell's
-        # toolchain, so run inside it, with the caller's own `nix`. Like the
-        # rest of this app, this expects the repository root as the working
-        # directory.
-        if [ -z "''${CC_wasm32_unknown_unknown:-}" ]; then
+        # `pnpm build` needs the dev shell's node, pnpm and nix (generating the
+        # sources fetches the verifier wasm with `nix build .#verifier`), so
+        # run inside it, with the caller's own `nix`. Like the rest of this
+        # app, this expects the repository root as the working directory.
+        if [ -z "''${CF_NIX_CACHE_DEV_SHELL:-}" ]; then
           exec nix develop --command "$0" "$@"
         fi
         exec pnpm --dir packages/worker dev "$@"

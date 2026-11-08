@@ -52,10 +52,13 @@ integration tests; it is not the customer upgrade path.
 
 ## Local checks
 
-Run these in `nix develop`: generating the Worker's sources compiles
-`crates/verify` for wasm32, which needs the dev shell's `lld` and clang.
+Run these in `nix develop`. `nix flake check` runs the Rust fmt, clippy and
+test checks with crane; the dev shell's cargo is the same toolchain. Generating
+the Worker's sources copies the verifier wasm from the flake's `verifier`
+package.
 
 ```console
+nix flake check
 cargo fmt --check
 cargo test --workspace
 pnpm --dir packages/worker install

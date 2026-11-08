@@ -26,7 +26,8 @@ let
   workspaceVersion = (builtins.fromTOML (builtins.readFile ../Cargo.toml)).workspace.package.version;
 
   # Fenix must provide every binary crane invokes (cargo, rustc, clippy,
-  # rustfmt) so checks and builds share one toolchain.
+  # rustfmt) so checks and builds share one toolchain. The dev shell uses the
+  # same toolchain (plus rust-src/rust-analyzer) so local cargo agrees with CI.
   toolchain = inputs.fenix.packages.${system}.stable.withComponents [
     "cargo"
     "rustc"
@@ -34,6 +35,18 @@ let
     "rustfmt"
   ];
   craneLib = (inputs.crane.mkLib pkgs).overrideToolchain toolchain;
+
+  # The dev shell uses this directly so local cargo matches the checks. The
+  # extra components are for in-shell use only and must stay out of `toolchain`
+  # so the build derivations don't change.
+  devToolchain = inputs.fenix.packages.${system}.stable.withComponents [
+    "cargo"
+    "rustc"
+    "clippy"
+    "rustfmt"
+    "rust-src"
+    "rust-analyzer"
+  ];
 
   commonArgs = {
     src = workspaceSrc;
@@ -85,6 +98,7 @@ in
     hakariSrc
     workspaceVersion
     toolchain
+    devToolchain
     craneLib
     commonArgs
     cargoArtifacts
