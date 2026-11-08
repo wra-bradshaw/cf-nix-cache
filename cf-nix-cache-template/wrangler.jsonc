@@ -49,7 +49,7 @@
         "processor": {
           "dockerfile": "./Dockerfile",
           "build_vars": {
-            "PROCESSOR_IMAGE": "docker.io/willlol/cf-nix-cache@sha256:2060fd6c78f6b7a0dd5de18b7878d50c27b5aa0e566135dc105e455fbb05e2bc",
+            "PROCESSOR_IMAGE": "docker.io/willlol/cf-nix-cache@sha256:5b09a54ec73c2843f0bc42d8c0e637f4ff61c7f0752faf0c8e325ba2411fb3e6",
           },
         },
       },
