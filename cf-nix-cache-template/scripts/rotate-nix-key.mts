@@ -1,14 +1,13 @@
 import { readConfig, signingKeyName } from "./lib/config.mts";
 import { fail } from "./lib/fail.mts";
 import { keyMaterial, nixPublicKey } from "./lib/keys.mts";
-import { configPath } from "./lib/paths.mts";
 import {
   missingSecrets,
   putSecrets,
   secretNamesFromWrangler,
 } from "./lib/secrets.mts";
 
-const configured = await secretNamesFromWrangler(configPath);
+const configured = await secretNamesFromWrangler();
 const missing = missingSecrets(configured);
 if (missing.length)
   fail(
@@ -17,13 +16,10 @@ if (missing.length)
 
 const nix = keyMaterial();
 const publicKey = nixPublicKey(signingKeyName(await readConfig()), nix.publicJwk);
-await putSecrets(
-  {
-    NIX_PRIVATE_JWK: JSON.stringify(nix.privateJwk),
-    NIX_PUBLIC_KEYS: publicKey,
-  },
-  configPath,
-);
+await putSecrets({
+  NIX_PRIVATE_JWK: JSON.stringify(nix.privateJwk),
+  NIX_PUBLIC_KEYS: publicKey,
+});
 console.log(
   "Rotated the Nix signing key. Existing narinfo signatures will no longer verify.",
 );

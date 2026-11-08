@@ -3,24 +3,38 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fail } from "./fail.mts";
 
-type ReleaseManifest = {
-  schemaVersion: number;
+export type ReleaseManifest = {
+  schemaVersion: 2;
+  releaseReady: boolean;
   version: string;
-  processorImage: string;
-  platform: string;
 };
 
-async function readReleaseManifest(): Promise<ReleaseManifest> {
+export async function releaseManifest(): Promise<ReleaseManifest> {
   const require = createRequire(import.meta.url);
   const manifestPath = require.resolve("cf-nix-cache/release-manifest.json");
-  const manifest = JSON.parse(
-    await readFile(manifestPath, "utf8"),
-  ) as ReleaseManifest;
-  if (manifest.schemaVersion !== 1)
-    fail(`unsupported release manifest schema ${manifest.schemaVersion}`);
-  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version))
-    fail(`invalid package version in release manifest: ${manifest.version}`);
-  return manifest;
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+    schemaVersion?: unknown;
+    releaseReady?: unknown;
+    version?: unknown;
+  };
+  if (manifest.schemaVersion !== 2)
+    fail(
+      `unsupported cf-nix-cache release manifest schema ${String(manifest.schemaVersion)}; this template needs schema 2. Upgrade this template and the cf-nix-cache package together.`,
+    );
+  if (manifest.releaseReady !== true)
+    fail("the installed cf-nix-cache release is not marked release-ready");
+  if (
+    typeof manifest.version !== "string" ||
+    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version)
+  )
+    fail(
+      `invalid package version in release manifest: ${String(manifest.version)}`,
+    );
+  return {
+    schemaVersion: 2,
+    releaseReady: true,
+    version: manifest.version,
+  };
 }
 
 export async function installedPackageVersion(): Promise<string> {
@@ -31,28 +45,4 @@ export async function installedPackageVersion(): Promise<string> {
     version?: string;
   };
   return packageJson.version ?? fail("installed Worker package has no version");
-}
-
-export function validateImageReference(image: string): void {
-  if (!/@sha256:[0-9a-f]{64}$/.test(image)) {
-    fail(
-      `processor image must be immutable (expected a digest ending in @sha256:<64 hex characters>): ${image}`,
-    );
-  }
-}
-
-export async function releaseImage(): Promise<{
-  manifest: ReleaseManifest;
-  image: string;
-}> {
-  const manifest = await readReleaseManifest();
-  validateImageReference(manifest.processorImage);
-  if (manifest.platform !== "linux/amd64")
-    fail(
-      `processor release platform must be linux/amd64, got ${manifest.platform}`,
-    );
-  const image =
-    process.env.CF_NIX_CACHE_PROCESSOR_IMAGE ?? manifest.processorImage;
-  validateImageReference(image);
-  return { manifest, image };
 }

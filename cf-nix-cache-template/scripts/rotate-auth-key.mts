@@ -1,13 +1,12 @@
 import { fail } from "./lib/fail.mts";
 import { keyMaterial } from "./lib/keys.mts";
-import { configPath } from "./lib/paths.mts";
 import {
   missingSecrets,
   putSecrets,
   secretNamesFromWrangler,
 } from "./lib/secrets.mts";
 
-const configured = await secretNamesFromWrangler(configPath);
+const configured = await secretNamesFromWrangler();
 const missing = missingSecrets(configured);
 if (missing.length)
   fail(
@@ -15,13 +14,10 @@ if (missing.length)
   );
 
 const auth = keyMaterial();
-await putSecrets(
-  {
-    AUTH_PRIVATE_JWK: JSON.stringify(auth.privateJwk),
-    AUTH_PUBLIC_JWKS: JSON.stringify([{ kid: "current", jwk: auth.publicJwk }]),
-  },
-  configPath,
-);
+await putSecrets({
+  AUTH_PRIVATE_JWK: JSON.stringify(auth.privateJwk),
+  AUTH_PUBLIC_JWKS: JSON.stringify([{ kid: "current", jwk: auth.publicJwk }]),
+});
 console.log(
   "Rotated the authentication key. Existing capability tokens are invalid and must be reissued.",
 );

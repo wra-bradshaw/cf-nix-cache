@@ -3,11 +3,62 @@ import type { TemplateConfig } from "./config.mts";
 import { fail } from "./fail.mts";
 import { wrangler } from "./wrangler.mts";
 
-export function bucketName(config: TemplateConfig): string {
-  const bucket = (config.r2_buckets ?? []).find(
-    (entry) => entry.binding === "CACHE_BUCKET",
+/**
+ * Every configured CACHE_BUCKET that `doctor` live-checks: the top level
+ * plus any environment that overrides `r2_buckets` with its own bucket.
+ * Environments without their own `r2_buckets` inherit the top level and need
+ * no extra check. Buckets with the same name are returned once; the top
+ * level (envName null) is pushed first so its finding keeps the unprefixed
+ * message.
+ */
+export type CacheBucketRef = { envName: string | null; bucket: string };
+
+export function cacheBuckets(config: TemplateConfig): CacheBucketRef[] {
+  // Never throws on malformed JSON: non-array `r2_buckets` and non-string
+  // `bucket_name` values are ignored here and reported as problems by
+  // `configProblems`. Only non-empty string bucket names become live checks.
+  const refs: CacheBucketRef[] = [];
+  const rawTop: unknown = (config as Record<string, unknown> | null | undefined)
+    ?.r2_buckets;
+  const top = (
+    Array.isArray(rawTop)
+      ? rawTop.find(
+          (entry) =>
+            typeof entry === "object" &&
+            entry !== null &&
+            !Array.isArray(entry) &&
+            (entry as { binding?: unknown }).binding === "CACHE_BUCKET",
+        ) as { bucket_name?: unknown } | undefined
+      : undefined
   )?.bucket_name;
-  return bucket ?? fail("CACHE_BUCKET is not configured");
+  if (typeof top === "string" && top !== "")
+    refs.push({ envName: null, bucket: top });
+  const envRecord: unknown = (
+    config as Record<string, unknown> | null | undefined
+  )?.env;
+  if (typeof envRecord !== "object" || envRecord === null || Array.isArray(envRecord))
+    return refs;
+  for (const [envName, env] of Object.entries(
+    envRecord as Record<string, unknown>,
+  )) {
+    if (typeof env !== "object" || env === null || Array.isArray(env))
+      continue;
+    const raw: unknown = (env as { r2_buckets?: unknown }).r2_buckets;
+    if (raw === undefined) continue;
+    if (!Array.isArray(raw)) continue;
+    const found = raw.find(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        !Array.isArray(entry) &&
+        (entry as { binding?: unknown }).binding === "CACHE_BUCKET",
+    ) as { bucket_name?: unknown } | undefined;
+    const name = found?.bucket_name;
+    if (typeof name !== "string" || name === "") continue;
+    if (refs.some((ref) => ref.bucket === name)) continue;
+    refs.push({ envName, bucket: name });
+  }
+  return refs;
 }
 
 // `wrangler r2 bucket list` has no JSON output. Each bucket is printed as a
@@ -19,28 +70,16 @@ function bucketListed(output: string, name: string): boolean {
     .some((line) => /^\s*name:\s+(\S+)\s*$/.exec(line)?.[1] === name);
 }
 
-export async function bucketExists(
-  name: string,
-  config: string,
-): Promise<boolean> {
-  const listed = await wrangler(
-    ["r2", "bucket", "list"],
-    { quiet: true },
-    config,
-  );
+export async function bucketExists(name: string): Promise<boolean> {
+  const listed = await wrangler(["r2", "bucket", "list"], { quiet: true });
   return bucketListed(listed.stdout, name);
 }
 
-export async function ensureBucket(
-  name: string,
-  config: string,
-): Promise<void> {
-  if (await bucketExists(name, config)) return;
-  const created = await wrangler(
-    ["r2", "bucket", "create", name],
-    { allowFailure: true },
-    config,
-  );
+export async function ensureBucket(name: string): Promise<void> {
+  if (await bucketExists(name)) return;
+  const created = await wrangler(["r2", "bucket", "create", name], {
+    allowFailure: true,
+  });
   // Tolerate a concurrent creation of the same bucket by this account.
   if (
     created.status !== 0 &&
@@ -49,15 +88,10 @@ export async function ensureBucket(
     fail(`could not create R2 bucket ${name}`);
 }
 
-export async function ensureLifecycle(
-  bucket: string,
-  config: string,
-): Promise<void> {
-  const listed = await wrangler(
-    ["r2", "bucket", "lifecycle", "list", bucket],
-    { quiet: true },
-    config,
-  );
+export async function ensureLifecycle(bucket: string): Promise<void> {
+  const listed = await wrangler(["r2", "bucket", "lifecycle", "list", bucket], {
+    quiet: true,
+  });
   const output = `${listed.stdout}\n${listed.stderr}`;
   if (!output.includes("abandoned-staging"))
     await wrangler(
@@ -72,21 +106,16 @@ export async function ensureLifecycle(
         "--expire-days",
         "1",
         "--force",
-      ],
-      {},
-      config,
-    );
+      ]);
 }
 
 export async function lifecycleIsConfigured(
   bucket: string,
-  config: string,
 ): Promise<boolean | undefined> {
-  const listed = await wrangler(
-    ["r2", "bucket", "lifecycle", "list", bucket],
-    { allowFailure: true, quiet: true },
-    config,
-  );
+  const listed = await wrangler(["r2", "bucket", "lifecycle", "list", bucket], {
+    allowFailure: true,
+    quiet: true,
+  });
   if (listed.status !== 0) return undefined;
   const output = `${listed.stdout}\n${listed.stderr}`;
   return output.includes("abandoned-staging");

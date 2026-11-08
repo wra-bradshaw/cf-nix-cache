@@ -1,13 +1,9 @@
 import { doctor } from "./doctor.mts";
-import {
-  readConfig,
-  signingKeyName,
-  withRenderedConfig,
-} from "./lib/config.mts";
+import { readValidConfig, signingKeyName } from "./lib/config.mts";
 import { fail } from "./lib/fail.mts";
 import { keyMaterial, nixPublicKey } from "./lib/keys.mts";
-import { bucketName, ensureBucket, ensureLifecycle } from "./lib/r2.mts";
-import { releaseImage } from "./lib/release.mts";
+import { cacheBuckets, ensureBucket, ensureLifecycle } from "./lib/r2.mts";
+import { releaseManifest } from "./lib/release.mts";
 import {
   hashSecret,
   missingSecrets,
@@ -37,15 +33,14 @@ function requireBootstrapSecret(): string {
   return secret;
 }
 
-async function deployWorker(rendered: string): Promise<string | undefined> {
-  const output = await wrangler(["deploy"], {}, rendered);
+async function deployWorker(): Promise<string | undefined> {
+  const output = await wrangler(["deploy"]);
   return workerUrl(`${output.stdout}\n${output.stderr}`);
 }
 
 async function configureSecrets(
   state: "none" | "complete",
   initialUrl: string | undefined,
-  rendered: string,
   keyName: string,
 ): Promise<{
   publicKey: string;
@@ -63,18 +58,15 @@ async function configureSecrets(
     const auth = keyMaterial();
     const nix = keyMaterial();
     publicKey = nixPublicKey(keyName, nix.publicJwk);
-    await putSecrets(
-      {
-        AUTH_PRIVATE_JWK: JSON.stringify(auth.privateJwk),
-        AUTH_PUBLIC_JWKS: JSON.stringify([
-          { kid: "current", jwk: auth.publicJwk },
-        ]),
-        NIX_PRIVATE_JWK: JSON.stringify(nix.privateJwk),
-        NIX_PUBLIC_KEYS: publicKey,
-        BOOTSTRAP_SECRET_HASH: hashSecret(bootstrapSecret),
-      },
-      rendered,
-    );
+    await putSecrets({
+      AUTH_PRIVATE_JWK: JSON.stringify(auth.privateJwk),
+      AUTH_PUBLIC_JWKS: JSON.stringify([
+        { kid: "current", jwk: auth.publicJwk },
+      ]),
+      NIX_PRIVATE_JWK: JSON.stringify(nix.privateJwk),
+      NIX_PUBLIC_KEYS: publicKey,
+      BOOTSTRAP_SECRET_HASH: hashSecret(bootstrapSecret),
+    });
     console.log(
       "Installed the initial Worker secret set. Private key material was kept in memory only.",
     );
@@ -94,44 +86,42 @@ async function configureSecrets(
 }
 
 async function setup(): Promise<void> {
-  const config = await readConfig();
-  const { image } = await releaseImage();
-  const { url, publicKey: installedPublicKey } = await withRenderedConfig(
-    image,
-    async (rendered) => {
-      // This is the only point where a missing Worker may be read as "no
-      // secrets": the Worker has not been deployed yet. Every other Wrangler
-      // failure aborts instead of regenerating keys.
-      const existingSecrets = await secretNamesFromWrangler(rendered, {
-        allowMissingWorker: true,
-      });
-      const state = secretState(existingSecrets);
-      if (state === "partial") {
-        fail(
-          `partial Wrangler secret set detected (missing: ${missingSecrets(existingSecrets).join(", ")}). Refusing to deploy until the missing secrets are restored or an explicit key rotation is performed.`,
-        );
-      }
-      // Checked before anything is created, so that a first run without the
-      // secret can't leave a live Worker that has no secrets.
-      if (state === "none") requireBootstrapSecret();
-      const bucket = bucketName(config);
-      await ensureBucket(bucket, rendered);
-      await ensureLifecycle(bucket, rendered);
+  const config = await readValidConfig();
+  await releaseManifest();
+  // This is the only point where a missing Worker may be read as "no
+  // secrets": the Worker has not been deployed yet. Every other Wrangler
+  // failure aborts instead of regenerating keys.
+  const existingSecrets = await secretNamesFromWrangler({
+    allowMissingWorker: true,
+  });
+  const state = secretState(existingSecrets);
+  if (state === "partial") {
+    fail(
+      `partial Wrangler secret set detected (missing: ${missingSecrets(existingSecrets).join(", ")}). Refusing to deploy until the missing secrets are restored or an explicit key rotation is performed.`,
+    );
+  }
+  // Checked before anything is created, so that a first run without the
+  // secret can't leave a live Worker that has no secrets.
+  if (state === "none") requireBootstrapSecret();
+  // Provision every configured CACHE_BUCKET, not just the top level: an
+  // environment that overrides `r2_buckets` gets its own bucket, and
+  // validation (`readValidConfig`) plus `doctor` enforce per-env bindings, so
+  // deploy must create them and their lifecycle rules too.
+  for (const { bucket } of cacheBuckets(config)) {
+    await ensureBucket(bucket);
+    await ensureLifecycle(bucket);
+  }
 
-      // A first deploy creates the Worker, Durable Objects, Workflows, and
-      // Container binding before the bulk secret operation targets the Worker.
-      const initialUrl = await deployWorker(rendered);
-      const configured = await configureSecrets(
-        state,
-        initialUrl,
-        rendered,
-        signingKeyName(config),
-      );
-      // Only a first deploy has just installed secrets to start up with.
-      if (state === "none") await deployWorker(rendered);
-      return configured;
-    },
+  // A first deploy creates the Worker, Durable Objects, and Workflows before
+  // the bulk secret operation targets the Worker.
+  const initialUrl = await deployWorker();
+  const { url, publicKey: installedPublicKey } = await configureSecrets(
+    state,
+    initialUrl,
+    signingKeyName(config),
   );
+  // Only a first deploy has just installed secrets to start up with.
+  if (state === "none") await deployWorker();
   await healthCheck(url);
 
   const publicKey =
