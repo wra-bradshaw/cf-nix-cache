@@ -8,25 +8,38 @@
 forEachSupportedSystem (
   { pkgs, system }:
   let
-    workspaceSrc = lib.fileset.toSource {
-      root = ../.;
-      fileset = lib.fileset.unions [
-        ../Cargo.toml
-        ../Cargo.lock
-        ../crates
-        ../schemas
-      ];
+    rust = (import ./rust.nix { inherit inputs lib; }) {
+      inherit pkgs system;
     };
-    rustToolchain = inputs.fenix.packages.${system}.stable.withComponents [ "cargo" ];
-    craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
-    cargoVendorDir = craneLib.vendorCargoDeps { src = workspaceSrc; };
+    cargoVendorDir = rust.craneLib.vendorCargoDeps { src = rust.workspaceSrc; };
   in
   {
     cli = packages.${system}.cli;
+    fmt = rust.craneLib.cargoFmt {
+      src = rust.workspaceSrc;
+      pname = "cf-nix-cache";
+      version = rust.workspaceVersion;
+    };
+    clippy = rust.craneLib.cargoClippy {
+      src = rust.workspaceSrc;
+      strictDeps = true;
+      pname = "cf-nix-cache";
+      version = rust.workspaceVersion;
+      cargoArtifacts = rust.cargoArtifacts;
+      cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+    };
+    test = rust.craneLib.cargoTest {
+      src = rust.workspaceSrc;
+      strictDeps = true;
+      pname = "cf-nix-cache";
+      version = rust.workspaceVersion;
+      cargoArtifacts = rust.cargoArtifacts;
+      cargoTestExtraArgs = "--workspace";
+    };
     hakari =
       pkgs.runCommand "cf-nix-cache-hakari"
         {
-          src = ../.;
+          src = rust.hakariSrc;
           nativeBuildInputs = [
             pkgs.cargo-hakari
             pkgs.cargo
