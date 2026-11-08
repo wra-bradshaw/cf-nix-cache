@@ -1,9 +1,12 @@
 # Cost and performance plan
 
 Status: Stages 0, 1 and 3 are implemented; Stage 2 and the pool of 1c were
-not built as such (see [Implementation](#implementation)). The benchmarks were
-run on a throwaway installation, and their results are under
-[Results](#results).
+not built as such (see [Implementation](#implementation)). Since then the
+processor container has been removed: NARs above the inline limit are verified
+in the Worker too, in a Workflow step
+([Verification in the Worker](#verification-in-the-worker)), so there is no
+container time or container egress left. The benchmarks were run on a
+throwaway installation, and their results are under [Results](#results).
 
 The goal is to make pushes as cheap and as fast as possible without weakening
 the guarantees in [ARCHITECTURE.md](ARCHITECTURE.md): garbage-collection
@@ -281,9 +284,10 @@ Estimates from the measured run, not measurements:
 
 ## What to watch
 
-- Container GiB-s, GB-s, vCPU-s, and egress, per billing period and per
-  rebuild.
-- Peak live container instances.
+- Worker CPU time per billing period and per rebuild, including the
+  `process NAR` Workflow steps that verify large NARs. (This list first named
+  container GiB-s, GB-s, vCPU-s, egress, and peak instances; the container is
+  gone.)
 - Workflow instances per uploaded path.
 - Push time for a full rebuild, and p50 and p95 per-path upload time.
 - Bytes uploaded compared with unique compressed bytes.
@@ -334,12 +338,12 @@ queue stays empty.
   for anything else, so the byte-identical requirement, per-chunk compressed
   hash metadata, B4 and B5 stopped being prerequisites.
 - Verification (open question 1): always L1; L2 and L3 inline for NARs up to
-  256 MiB (`INLINE_VERIFY_MAX_NAR_SIZE`, from B1); above it the processor
+  256 MiB (`INLINE_VERIFY_MAX_NAR_SIZE`, from B1); above it the process-upload
   workflow verifies the stored chunks (`chunks_key` in the process job) and
-  writes only the manifest. The container reads chunks but writes no chunks,
-  so this path has no chunk egress.
+  writes only the manifest. That workflow first called the container, and now
+  verifies in the Worker (below).
 - An upload whose NAR already has a manifest needs no chunks and no
-  verification, as in the processor's own deduplication.
+  verification, as in the worker's own deduplication.
 - Quota: opening an upload only checks that the claimed size fits; publication
   still reserves through `PublicationProtocol`. Reserving at open would
   double-count against the publication's own reservation.
@@ -352,6 +356,27 @@ queue stays empty.
 
 The upload state lives in the existing `UploadJob` Durable Object (new
 `session` and `session_chunks` tables), so no Wrangler migration is needed.
+
+**Verification in the Worker.** The processor container is gone. The
+`process NAR` step of `ProcessUploadWorkflow` now runs the same L2 and L3
+checks as inline completion: `crates/verify`, compiled to wasm32, decodes each
+chunk with the C zstd library and validates the NAR structure as the chunks
+stream past, while SHA-256 of the raw and compressed bytes stays on native
+`crypto.subtle`. [Workflows compute time per step](https://developers.cloudflare.com/workflows/reference/limits/)
+is the Worker's configured CPU limit, so `limits.cpu_ms` is 300000
+(5 minutes, which needs Workers Paid), and the worst case measured is about
+6.4 ms of CPU per MiB, so a 10 GiB NAR is roughly extrapolated as ~66 s in
+one step (linear extrapolation from that rate, about ~6.6 s at 1 GiB;
+neither is a measured bound). 10 GiB
+is the largest NAR accepted, enforced by the `nar_size` maximum in
+[`schemas/process-job.json`](../schemas/process-job.json). This is the
+first option of the recommendation under [Verification](#verification) without
+the resumable state: one step is enough. It removes the container time, the
+container egress, the Docker image, and its release pipeline.
+
+A first build used the pure-Rust `ruzstd` decoder and SHA-256 in WebAssembly.
+It was slower than JavaScript on rustc (26 s), because WebAssembly has no SHA
+instructions; hence native hashing and the C decoder.
 
 While measuring, two latency problems unrelated to the plan came up and were
 fixed: `missing` looked paths up one index shard at a time (8 s for 20 paths),
@@ -380,15 +405,26 @@ End-to-end pushes after the fixes above:
 | --- | --- | --- |
 | 20 fresh paths of 30 to 400 KB | 23.0 s | 11.6 s |
 | One 21 MB path | 14.2 s | 10.2 s (inline verification) |
-| One 105 to 108 MB path | 78 s | 71 s (processor verification; both limited by upload bandwidth) |
+| One 105 to 108 MB path | 78 s | 71 s (container verification, since removed; both limited by upload bandwidth) |
 | 20 paths already cached | | 2.7 s |
 
 Two concurrent pushes of the same 8 fresh paths uploaded each once: the second
 reported all 8 as already being uploaded and waited for them.
 
-Not measured yet: container time and egress for a full system rebuild, which is
-the test of "Done when" for each stage. Watch the numbers under
-[What to watch](#what-to-watch) on the next rebuild after deploying. With the
-current CLI, a rebuild should start no containers unless it has NARs over
-256 MiB.
+Large NARs, verified in a Workflow step on Cloudflare (Workers Paid,
+`cpu_ms` 300000). Each run verifies every chunk of one NAR: decoding, SHA-256
+of the raw and compressed bytes, and NAR structural validation. CPU time is
+from `wrangler tail`; the harness is `bench/verify-worker/`.
+
+| NAR | Raw size | zstd ratio | Old JS verifier (`fzstd`) | New WASM verifier (C zstd) | ms CPU per MiB |
+| --- | --- | --- | --- | --- | --- |
+| Synthetic, ~70k small text files | 276 MiB | 58:1 | 8.5 s | 1.1 s | 4.1 |
+| Synthetic, ~70k small files, low ratio | 278 MiB | 2.6:1 | 7.1 s | 1.8 s | 6.4 |
+| rustc 1.99.0 store path | 966 MiB | 3.3:1 | 17.2 s | 5.0 s | 5.1 |
+| Synthetic, ~1.1M small files | 4,400 MiB | 41:1 | 85.1 s | 13.8 s | 3.1 |
+
+Not measured yet: Worker CPU and Workflow usage for a full system rebuild,
+which is the test of "Done when" for each stage. Container time and egress no
+longer exist to measure. Watch the remaining numbers under
+[What to watch](#what-to-watch) on the next rebuild after deploying.
 
