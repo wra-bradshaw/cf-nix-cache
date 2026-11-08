@@ -265,11 +265,13 @@ export class SystemControl extends RpcOnlyDurableObject {
   async activateCache(value: CacheReference): Promise<RpcResult<void>> {
     const result = this.ctx.storage.transactionSync(() => {
       const changed =
-        (this.ctx.storage.sql.exec(
-          "UPDATE caches SET lifecycle = 'ACTIVE' WHERE cache_id = ? AND incarnation = ? AND lifecycle = 'CREATING'",
-          value.id,
-          value.incarnation,
-        ) as unknown as { rowsWritten?: unknown }).rowsWritten ?? 0;
+        (
+          this.ctx.storage.sql.exec(
+            "UPDATE caches SET lifecycle = 'ACTIVE' WHERE cache_id = ? AND incarnation = ? AND lifecycle = 'CREATING'",
+            value.id,
+            value.incarnation,
+          ) as unknown as { rowsWritten?: unknown }
+        ).rowsWritten ?? 0;
       const row = first(
         this.ctx.storage.sql.exec<SqlRow>(
           'SELECT lifecycle FROM caches WHERE cache_id = ? AND incarnation = ?',

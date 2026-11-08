@@ -30,6 +30,8 @@ async function directoryReference(
     const cached = await caches.default.match(key);
     if (cached) return (await cached.json()) as CacheReference;
   } catch {
+    // The Cache API is unavailable in some local/unit runtimes; the Durable
+    // Object remains the authoritative fallback.
   }
 
   const reference = unwrapRpc(await system(env).getCache(name));
@@ -43,6 +45,7 @@ async function directoryReference(
       )
       .catch(() => undefined);
   } catch {
+    // Best-effort acceleration only; never make routing depend on the cache.
   }
   return reference;
 }

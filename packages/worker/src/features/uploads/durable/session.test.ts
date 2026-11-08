@@ -4,6 +4,7 @@ import { env } from 'cloudflare:workers';
 import { chunkKey, sha256Nix } from '../encoding';
 import { verifyStoredNar, storeManifest } from '../verify-stored';
 import { narOfFile } from '../test-helpers';
+import type { CacheCoordinator } from '../../cache/durable/coordinator';
 
 const encoder = new TextEncoder();
 
@@ -44,7 +45,7 @@ async function setupCache(name: string, tag: string) {
 async function openUpload(
   cache: string,
   reference: { id: string; incarnation: string },
-  coordinator: any,
+  coordinator: DurableObjectStub<CacheCoordinator>,
   tag: string,
 ) {
   const nar = narOfFile(encoder.encode(`hello ${tag}`));
@@ -216,7 +217,9 @@ describe('upload session flow through real DOs', () => {
     expect(unknown.error.code).toBe('unknown_chunk');
     await env.CACHE_BUCKET.put(
       chunkKey(rawHash),
-      new Uint8Array(zstdCompressSync(narOfFile(encoder.encode('hello unknown1')))),
+      new Uint8Array(
+        zstdCompressSync(narOfFile(encoder.encode('hello unknown1'))),
+      ),
     );
     expect((await job.chunkStored(rawHash)).ok).toBe(true);
   }, 60000);
@@ -243,10 +246,14 @@ describe('upload session flow through real DOs', () => {
       'flow-reject',
       'reject1',
     );
-    const { job } = await openUpload('flow-reject', reference, coordinator, 'reject1');
+    const { job } = await openUpload(
+      'flow-reject',
+      reference,
+      coordinator,
+      'reject1',
+    );
     const rejected = await job.reject('bad chunk');
-    if (!rejected.ok)
-      throw new Error('reject: ' + JSON.stringify(rejected));
+    if (!rejected.ok) throw new Error('reject: ' + JSON.stringify(rejected));
     expect(rejected.value.status).toBe('FAILED');
     expect(rejected.value.error).toContain('bad chunk');
   }, 60000);

@@ -37,17 +37,21 @@ function invalid(message: string): DomainError {
 export const MAX_CHUNKS_PER_UPLOAD = 16384;
 
 function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (value === null || typeof value !== 'object')
+    return JSON.stringify(value) ?? 'null';
   if (Array.isArray(value))
     return `[${value
       .map((item) =>
-        item === undefined || typeof item === 'function' || typeof item === 'symbol'
+        item === undefined ||
+        typeof item === 'function' ||
+        typeof item === 'symbol'
           ? 'null'
           : (stableStringify(item) ?? 'null'),
       )
       .join(',')}]`;
   const entries = Object.entries(value as Record<string, unknown>).filter(
-    ([, v]) => v !== undefined && typeof v !== 'function' && typeof v !== 'symbol',
+    ([, v]) =>
+      v !== undefined && typeof v !== 'function' && typeof v !== 'symbol',
   );
   entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return `{${entries
@@ -55,7 +59,7 @@ function stableStringify(value: unknown): string {
     .join(',')}}`;
 }
 
-export async function fingerprintForEncodedUpload(
+async function fingerprintForEncodedUpload(
   input: EncodedUploadRequest,
 ): Promise<string> {
   const bytes = new TextEncoder().encode(stableStringify({ encoded: input }));

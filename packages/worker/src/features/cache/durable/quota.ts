@@ -124,10 +124,7 @@ export class CoordinatorQuota {
       );
       if (!pendingRow) throw new Error('quota pending total is missing');
       const pending = integer(pendingRow, 'value');
-      if (
-        integer(cache, 'logical_bytes') + pending + input.delta >
-          quotaBytes
-      )
+      if (integer(cache, 'logical_bytes') + pending + input.delta > quotaBytes)
         return failure('quota_exceeded', 'cache quota exceeded', 409);
       if (integer(cache, 'logical_bytes') + input.delta < 0)
         return failure('quota_invariant', 'quota would become negative', 409);

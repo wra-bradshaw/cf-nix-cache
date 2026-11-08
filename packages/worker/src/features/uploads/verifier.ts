@@ -52,7 +52,7 @@ export function assertValidRawHash(hash: unknown): asserts hash is string {
     throw new InvalidEncodingError(`chunk hash ${String(hash)} is invalid`);
 }
 
-export function nullInputMessage(length: number): string {
+function nullInputMessage(length: number): string {
   return length === 0 ? 'chunk is empty' : 'chunk is too large';
 }
 

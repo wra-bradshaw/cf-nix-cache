@@ -45,7 +45,7 @@ export class AuditOutbox {
       );
     try {
       return integer(row, 'count');
-    } catch (error) {
+    } catch {
       throw new DomainError(
         'audit_unavailable',
         'audit outbox is unavailable',
@@ -75,9 +75,7 @@ export class AuditOutbox {
             message: 'dropping audit outbox row with corrupt rowid',
             error: error instanceof Error ? error.message : error,
             rowid_error:
-              rowidError instanceof Error
-                ? rowidError.message
-                : rowidError,
+              rowidError instanceof Error ? rowidError.message : rowidError,
           });
           const raw = (row as Record<string, unknown>)['rowid'];
           if (typeof raw === 'number' || typeof raw === 'string') {
@@ -100,8 +98,7 @@ export class AuditOutbox {
             } catch (deleteError) {
               unremovableCorruptRows += 1;
               console.error({
-                message:
-                  'dropping audit outbox row with corrupt event_id',
+                message: 'dropping audit outbox row with corrupt event_id',
                 error: error instanceof Error ? error.message : error,
                 delete_error:
                   deleteError instanceof Error
@@ -163,9 +160,7 @@ export class AuditOutbox {
             message: 'audit outbox delete of corrupt event failed',
             error: error instanceof Error ? error.message : error,
             delete_error:
-              deleteError instanceof Error
-                ? deleteError.message
-                : deleteError,
+              deleteError instanceof Error ? deleteError.message : deleteError,
           });
           return false;
         }

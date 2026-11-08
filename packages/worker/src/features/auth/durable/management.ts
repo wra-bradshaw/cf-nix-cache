@@ -31,8 +31,8 @@ export class TokenManagement {
       return ok({
         active: Boolean(
           !revokedFlag(integer(row, 'revoked')) &&
-            integer(row, 'expires_at') >= now() &&
-            integer(row, 'expires_at') === input.exp,
+          integer(row, 'expires_at') >= now() &&
+          integer(row, 'expires_at') === input.exp,
         ),
       });
     } catch {

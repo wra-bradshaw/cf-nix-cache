@@ -570,7 +570,7 @@ export class GcLedger {
         return undefined;
       }
     })();
-    let lastRun: GcSummary | undefined = lastRow;
+    const lastRun: GcSummary | undefined = lastRow;
     let activeRun: GcActiveRun | undefined;
     if (run) {
       try {

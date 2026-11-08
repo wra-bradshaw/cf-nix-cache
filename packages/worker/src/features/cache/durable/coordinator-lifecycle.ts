@@ -224,11 +224,12 @@ export class CoordinatorLifecycle {
       } catch {
         return failure('corrupt_cache', 'cache record is corrupt', 500);
       }
-      const changed = (
-        this.ctx.storage.sql.exec(
-          "UPDATE cache SET lifecycle = 'ACTIVE' WHERE lifecycle = 'CREATING'",
-        ) as unknown as { rowsWritten?: unknown }
-      ).rowsWritten ?? 0;
+      const changed =
+        (
+          this.ctx.storage.sql.exec(
+            "UPDATE cache SET lifecycle = 'ACTIVE' WHERE lifecycle = 'CREATING'",
+          ) as unknown as { rowsWritten?: unknown }
+        ).rowsWritten ?? 0;
       if (lifecycle === 'CREATING' && changed === 0)
         return failure('corrupt_cache', 'cache record is corrupt', 500);
       return toCacheResult({ ...row, lifecycle: 'ACTIVE' });

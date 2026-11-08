@@ -66,7 +66,9 @@ export class UploadJobLifecycle {
         409,
       );
     if (['UPLOADING', 'QUEUED'].includes(row.state)) {
-      if (this.storage.setState(row.job_id, ['UPLOADING', 'QUEUED'], 'ABORTED')) {
+      if (
+        this.storage.setState(row.job_id, ['UPLOADING', 'QUEUED'], 'ABORTED')
+      ) {
         const wrote = this.storage.row();
         if (!wrote) return failure('not_found', 'upload not found', 404);
         return ok(toStateResponse(wrote));

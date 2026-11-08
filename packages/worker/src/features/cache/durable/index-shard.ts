@@ -430,7 +430,11 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
     if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 1000)
       return failure('invalid_limit', 'limit must be between 1 and 1000', 400);
     if (typeof input.before !== 'number' || !Number.isFinite(input.before))
-      return failure('invalid_before', 'before must be a finite timestamp', 400);
+      return failure(
+        'invalid_before',
+        'before must be a finite timestamp',
+        400,
+      );
     if (input.after !== null && typeof input.after !== 'string')
       return failure('invalid_after', 'after must be a string or null', 400);
     const limit = input.limit;
