@@ -3,9 +3,11 @@
 Cloudflare-native, stock-Nix-compatible binary cache.
 
 The data plane is a TypeScript Cloudflare Worker. SQLite-backed Durable
-Objects own mutable state and serialization, R2 stores staged uploads and
-immutable content-addressed chunks, Workflows drive retryable processing, and
-a native Rust Container validates NARs and produces deterministic zstd frames.
+Objects own mutable state and serialization, R2 stores immutable
+content-addressed chunks, and the CLI chunks and compresses each NAR itself, so
+a push sends only the chunks the installation lacks and the Worker checks them
+before publishing. A native Rust Container verifies NARs too large to check in
+a Worker request, in retryable Workflows.
 
 ## Layout
 
@@ -16,15 +18,16 @@ a native Rust Container validates NARs and produces deterministic zstd frames.
 - `crates/core`: Rust protocol values, encoding parameters, and manifest
   validation.
 - `crates/contracts`: generated Rust wire DTOs from the JSON Schemas.
-- `crates/processor`: native Container service for zstd/NAR validation,
-  FastCDC v2020 chunking, deterministic compression, and R2 writes.
-- `crates/cli`: Nix publisher and administration client.
+- `crates/processor`: native Container service that verifies large uploads:
+  their stored chunks decode to their keys and make up a valid NAR.
+- `crates/cli`: Nix publisher (including the client-side encoder) and
+  administration client.
 - `schemas`: JSON contracts shared by Worker and Rust.
 - `cf-nix-cache-template`: the isolated public Deploy-to-Cloudflare template.
 
 `wrangler.jsonc` is the source of truth for the Worker, its bindings, and
-routes. The deploy app ensures the R2 bucket and its staging/multipart
-lifecycle rules via the Wrangler CLI before deploying; custom hostnames are a
+routes. The deploy app ensures the R2 bucket and its staging lifecycle
+rule via the Wrangler CLI before deploying; custom hostnames are a
 `routes` entry in `wrangler.jsonc`.
 
 ## Cloudflare distribution
@@ -131,7 +134,7 @@ pnpm --dir packages/worker exec wrangler secret put BOOTSTRAP_SECRET_HASH --conf
 R2 keys are installation-global for deduplication:
 
 ```text
-staging/{upload-id}.nar.zst
+staging/{upload-id}.chunks.json
 chunks/{encoding-id}/{raw-sha256}.zst
 manifests/{encoding-id}/{nar-sha256}.json
 ```
@@ -139,7 +142,14 @@ manifests/{encoding-id}/{nar-sha256}.json
 The initial encoding profile is
 `fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1`. Each raw chunk is an
 independent zstd level-3 frame. The Worker concatenates frames while serving
-the Nix URL and never decompresses them.
+the Nix URL and never decompresses them. Only the CLI compresses; the server never
+depends on how a frame was compressed, because each manifest is built from the
+stored bytes.
+
+Chunks are shared by every cache of an installation, so a push token holder can
+tell from the chunks a push reports missing whether content exists in any cache,
+not only in theirs. That is no concern when one owner runs the installation;
+give push tokens to others only if that is acceptable.
 
 ## Upstream caches
 

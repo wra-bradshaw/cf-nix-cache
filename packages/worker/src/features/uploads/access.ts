@@ -14,7 +14,7 @@ export async function uploadAccess(c: {
   const access = unwrapRpc(await job.access());
   const cache = await getCache(c.env, access.cache);
   await authFor(c.req.raw, c.env, cache, 'push');
-  return { id, cache, job };
+  return { id, cache, job, access };
 }
 
 export function stateResponse(value: UploadStateResponse): Response {

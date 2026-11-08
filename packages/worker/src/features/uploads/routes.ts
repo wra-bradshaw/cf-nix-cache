@@ -1,97 +1,28 @@
 import { Hono } from 'hono';
-import {
-  CompleteUploadSchema,
-  parseJsonSchema,
-  UploadRequestSchema,
-} from '../../shared/schemas';
-import {
-  partsFor,
-  requestFingerprint,
-  validateUploadManifest,
-} from './manifest';
-import {
-  parseContentLength,
-  idempotency,
-  parseJson,
-  type AppEnv,
-} from '../../shared/http';
-import { type InitiateUploadResponse, MULTIPART_PART_SIZE } from './types';
-import { authFor } from '../cache/access';
-import { coordinator } from '../cache/stubs';
-import { getCache } from '../cache/resolve-cache';
-import { idStub, unwrapRpc } from '../../shared/rpc';
+import { DomainError } from '../../shared/errors';
+import { idempotency, type AppEnv } from '../../shared/http';
+import { unwrapRpc } from '../../shared/rpc';
 import { uploadAccess, stateResponse } from './access';
+import { completeEncoded } from './encoded';
 
 export const uploadRoutes = new Hono<AppEnv>();
 
-uploadRoutes.post('/api/uploads', async (c) => {
-  const key = idempotency(c.req.raw);
-  const input = parseJsonSchema(
-    UploadRequestSchema,
-    await parseJson(c.req.raw),
+/** What CLIs from before client-encoded uploads call. */
+const stagingRemoved = () => {
+  throw new DomainError(
+    'staging_upload_removed',
+    'this server only accepts client-encoded uploads; upgrade cf-nix-cache',
+    410,
   );
-  validateUploadManifest(input.manifest);
-  const cache = await getCache(c.env, input.manifest.cache);
-  await authFor(c.req.raw, c.env, cache, 'push');
-  const fingerprint = requestFingerprint(input);
-  const allocation = unwrapRpc(
-    await coordinator(c.env, cache.reference).allocateUpload({
-      operation_id: key,
-      fingerprint,
-    }),
-  );
-  const job = idStub(c.env.UPLOAD_JOB, allocation.id);
-  const state = unwrapRpc(
-    await job.init({
-      job_id: allocation.id,
-      cache: cache.name,
-      cache_id: cache.reference.id,
-      incarnation: cache.reference.incarnation,
-      staging_key: allocation.staging_key,
-      manifest: input.manifest,
-      compressed_size: input.compressed_size,
-      idempotency_key: key,
-      fingerprint,
-    }),
-  );
-  const parts = partsFor(input.compressed_size, MULTIPART_PART_SIZE);
-  const result: InitiateUploadResponse = {
-    id: allocation.id,
-    status: state.state,
-    error: null,
-    parts: Array.from({ length: parts }, (_, index) => ({
-      part_number: index + 1,
-      url: `${new URL(c.req.url).origin}/api/uploads/${allocation.id}/parts/${index + 1}`,
-    })),
-  };
-  return c.json(result, allocation.repeated ? 200 : 201);
-});
-
-uploadRoutes.put('/api/uploads/:id/parts/:number', async (c) => {
-  const { job } = await uploadAccess(c);
-  idempotency(c.req.raw);
-  const number = Number(c.req.param('number'));
-  const result = unwrapRpc(
-    await job.putPart({
-      number,
-      length: parseContentLength(c.req.raw),
-      body: c.req.raw.body,
-    }),
-  );
-  return new Response(null, {
-    status: 200,
-    headers: { etag: result.etag, 'cache-control': 'no-store' },
-  });
-});
+};
+uploadRoutes.post('/api/uploads', stagingRemoved);
+uploadRoutes.put('/api/uploads/:id/parts/:number', stagingRemoved);
 
 uploadRoutes.post('/api/uploads/:id/complete', async (c) => {
-  const { job } = await uploadAccess(c);
+  const { job, access } = await uploadAccess(c);
   idempotency(c.req.raw);
-  const input = parseJsonSchema(
-    CompleteUploadSchema,
-    await parseJson(c.req.raw),
-  );
-  return stateResponse(unwrapRpc(await job.complete(input)));
+  if (!access.encoded) return stateResponse(unwrapRpc(await job.state()));
+  return stateResponse(await completeEncoded(c.env, job));
 });
 
 uploadRoutes.get('/api/uploads/:id/state', async (c) => {

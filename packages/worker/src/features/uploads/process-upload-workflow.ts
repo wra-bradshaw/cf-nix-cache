@@ -6,6 +6,7 @@ import {
 import type { ProcessJob, ProcessResult } from './types';
 import { idStub } from '../../shared/rpc';
 import { gcControl } from '../gc/gc-adapters';
+import { processorFor } from '../processing/durable/container';
 
 class PermanentWorkflowError extends Error {}
 
@@ -41,15 +42,22 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
           `process NAR${suffix}`,
           {
             retries: { limit: 4, delay: '30 seconds', backoff: 'exponential' },
+            // Containers are pooled, so a job may queue behind others.
+            timeout: '30 minutes',
           },
           async () => {
-            const response = await this.env
-              .PROCESSOR!.getByName(job.job_id)
-              .fetch('https://processor/process', {
+            const processor = await processorFor(
+              this.env.PROCESSOR!,
+              job.job_id,
+            );
+            const response = await processor.fetch(
+              'https://processor/process',
+              {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify(job),
-              });
+              },
+            );
             // Only a client error says the input itself is bad. Anything else
             // is infrastructure, and may be a proxy's response, not the
             // processor's.

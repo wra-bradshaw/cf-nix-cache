@@ -21,7 +21,7 @@ function invalid(message: string): DomainError {
 }
 
 /**
- * Upload metadata rules that UploadRequestSchema cannot express: UTF-8 byte
+ * Upload metadata rules that EncodedUploadRequestSchema cannot express: UTF-8 byte
  * limits, control characters, the store path/hash relation, and the total
  * metadata size. The manifest must already match the schema.
  */
@@ -45,18 +45,4 @@ export function validateUploadManifest(manifest: UploadManifest): void {
       (utf8Bytes(manifest.ca) > 512 || hasControlCharacters(manifest.ca)))
   )
     throw invalid('store metadata contains invalid characters');
-}
-
-export function requestFingerprint(input: {
-  manifest: UploadManifest;
-  compressed_size: number;
-}): string {
-  return JSON.stringify({
-    compressed_size: input.compressed_size,
-    manifest: input.manifest,
-  });
-}
-
-export function partsFor(size: number, partSize: number): number {
-  return Math.ceil(size / partSize);
 }

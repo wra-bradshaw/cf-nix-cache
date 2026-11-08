@@ -56,9 +56,6 @@ export class UploadJobLifecycle {
         'upload cannot be aborted after processing has started',
         409,
       );
-    // Fence the job before awaiting R2. Otherwise completion/processing can
-    // advance the job while the multipart abort is in flight, after which the
-    // stale abort would overwrite PROCESSING or PUBLISHING with ABORTED.
     this.ctx.storage.transactionSync(() => {
       const current = this.storage.row();
       if (
@@ -70,19 +67,21 @@ export class UploadJobLifecycle {
           current.job_id,
         );
     });
-    if (row.upload_id && ['UPLOADING', 'COMPLETING'].includes(row.state))
-      await this.env.CACHE_BUCKET.resumeMultipartUpload(
-        row.staging_key,
-        row.upload_id,
-      )
-        .abort()
-        .catch(() => undefined);
     return ok(toStateResponse(this.storage.row()!));
   }
 
   async state(): Promise<RpcResult<UploadStateResponse>> {
     const row = this.storage.row();
     if (!row) return failure('not_found', 'upload not found', 404);
+    // Left over from a version that still had staging uploads; there is
+    // nothing left that could process it.
+    if (!row.encoded && !['READY', 'FAILED', 'ABORTED'].includes(row.state)) {
+      this.storage.setError(
+        row.job_id,
+        'staging uploads are no longer supported; push again with a current cf-nix-cache',
+      );
+      return ok(toStateResponse(this.storage.row()!));
+    }
     if (['QUEUED', 'PROCESSING', 'PUBLISHING'].includes(row.state)) {
       // Reconciliation is opportunistic: a Workflows outage must not make the
       // stored state unreadable. The client's next poll tries again.

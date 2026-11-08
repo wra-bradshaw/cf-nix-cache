@@ -34,12 +34,13 @@ export function parseJsonSchema<T>(
 export {
   BootstrapRequestSchema,
   ChunkManifestSchema,
-  CompleteUploadSchema,
   ConfigureCacheSchema,
   CreateCacheSchema,
+  EncodedCompleteBatchSchema,
+  EncodedUploadBatchSchema,
+  EncodedUploadRequestSchema,
   GcRunRequestSchema,
   GrantSchema,
   MissingPathsSchema,
   TokenRequestSchema,
-  UploadRequestSchema,
 } from '../generated/json-contracts';

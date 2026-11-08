@@ -6,7 +6,6 @@ export type CfNixCacheAPIContract =
   | CreateCache
   | TokenRequest
   | BootstrapRequest
-  | UploadRequest
   | UploadState
   | ConfigureCache
   | Cache
@@ -14,8 +13,10 @@ export type CfNixCacheAPIContract =
   | TokenResponse
   | TokenSummary
   | AuditEvent
-  | CompleteUpload
-  | GcRunRequest;
+  | GcRunRequest
+  | EncodedUploadRequest
+  | EncodedUploadBatch
+  | EncodedCompleteBatch;
 export type Role = 'pull' | 'push' | 'admin';
 export type UploadStatus =
   | 'CREATED'
@@ -62,23 +63,6 @@ export interface BootstrapRequest {
    */
   grants: [Grant, ...Grant[]];
   secret: string;
-}
-export interface UploadRequest {
-  manifest: Manifest;
-  compressed_size: number;
-}
-export interface Manifest {
-  cache: string;
-  store_hash: string;
-  store_path: string;
-  nar_hash: string;
-  nar_size: number;
-  /**
-   * @maxItems 1024
-   */
-  references: string[];
-  deriver?: string | null;
-  ca?: string | null;
 }
 export interface UploadState {
   id: string;
@@ -148,12 +132,6 @@ export interface AuditEvent {
     [k: string]: string;
   };
 }
-export interface CompleteUpload {
-  parts?: {
-    part_number: number;
-    etag: string;
-  }[];
-}
 export interface GcRunRequest {
   /**
    * Report what would be evicted and deleted without changing anything.
@@ -163,6 +141,51 @@ export interface GcRunRequest {
    * Keep unreferenced objects newer than this. Defaults to one day.
    */
   grace_seconds?: number;
+}
+/**
+ * A NAR the client has already chunked and compressed with encoding_id.
+ */
+export interface EncodedUploadRequest {
+  manifest: Manifest;
+  encoding_id: 'fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1';
+  /**
+   * @minItems 1
+   * @maxItems 16384
+   */
+  chunks: [EncodedChunk, ...EncodedChunk[]];
+}
+export interface Manifest {
+  cache: string;
+  store_hash: string;
+  store_path: string;
+  nar_hash: string;
+  nar_size: number;
+  /**
+   * @maxItems 1024
+   */
+  references: string[];
+  deriver?: string | null;
+  ca?: string | null;
+}
+export interface EncodedChunk {
+  raw_hash: string;
+  raw_size: number;
+  compressed_hash: string;
+  compressed_size: number;
+}
+export interface EncodedUploadBatch {
+  /**
+   * @minItems 1
+   * @maxItems 64
+   */
+  uploads: [EncodedUploadRequest, ...EncodedUploadRequest[]];
+}
+export interface EncodedCompleteBatch {
+  /**
+   * @minItems 1
+   * @maxItems 64
+   */
+  ids: [string, ...string[]];
 }
 
 // Source: schemas/manifest.json
@@ -198,10 +221,13 @@ export interface CfNixCacheChunkManifest {
 // Source: schemas/process-job.json
 export interface CfNixCacheProcessorJob {
   job_id: string;
-  staging_key: string;
   nar_hash: string;
   nar_size: number;
   encoding_id: 'fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1';
+  /**
+   * The chunk list of a client-encoded upload, whose chunks are already stored.
+   */
+  chunks_key: string;
 }
 
 // Source: schemas/responses.json
@@ -210,14 +236,16 @@ export type CfNixCacheAPIResponses =
   | CacheResponse
   | CachePage
   | UploadStateResponse
-  | InitiateUploadResponse
   | TokenIssueResponse
   | TokenPageResponse
   | AuditPage
   | MissingPathsResponse
   | GcRunResponse
   | GcStatusResponse
-  | CacheUpstreamsResponse;
+  | CacheUpstreamsResponse
+  | EncodedUploadResponse
+  | EncodedUploadBatchResponse
+  | EncodedCompleteBatchResponse;
 
 export interface ApiError {
   code: string;
@@ -262,24 +290,6 @@ export interface UploadStateResponse {
     | 'ABORTED';
   error: string | null;
 }
-export interface InitiateUploadResponse {
-  id: string;
-  status:
-    | 'CREATED'
-    | 'UPLOADING'
-    | 'COMPLETING'
-    | 'QUEUED'
-    | 'PROCESSING'
-    | 'PUBLISHING'
-    | 'READY'
-    | 'FAILED'
-    | 'ABORTED';
-  error: string | null;
-  parts: {
-    part_number: number;
-    url: string;
-  }[];
-}
 export interface TokenIssueResponse {
   id: string;
   token: string;
@@ -317,6 +327,13 @@ export interface AuditPage {
 }
 export interface MissingPathsResponse {
   missing: string[];
+  /**
+   * Paths another push is uploading right now. They are not in missing; wait for the upload instead of starting another.
+   */
+  pending?: {
+    store_hash: string;
+    upload_id: string;
+  }[];
 }
 export interface GcRunResponse {
   run_id: string;
@@ -352,4 +369,32 @@ export interface CacheUpstreamsResponse {
    * @maxItems 32
    */
   upstream_cache_key_names: string[];
+}
+export interface EncodedUploadResponse {
+  id: string;
+  status:
+    | 'CREATED'
+    | 'UPLOADING'
+    | 'COMPLETING'
+    | 'QUEUED'
+    | 'PROCESSING'
+    | 'PUBLISHING'
+    | 'READY'
+    | 'FAILED'
+    | 'ABORTED';
+  error: string | null;
+  /**
+   * The upload belongs to another push of the same NAR. Wait for it; do not send chunks.
+   */
+  merged: boolean;
+  /**
+   * Raw hashes of the chunks the server needs. Send each once.
+   */
+  missing_chunks: string[];
+}
+export interface EncodedUploadBatchResponse {
+  uploads: EncodedUploadResponse[];
+}
+export interface EncodedCompleteBatchResponse {
+  uploads: UploadStateResponse[];
 }

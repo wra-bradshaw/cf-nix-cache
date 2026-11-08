@@ -28,9 +28,11 @@ to the account's Cloudflare container registry.
 3. Review `wrangler.jsonc` and edit the Worker name, R2 bucket name,
    placement, routes, and observability to suit the account. Running processor
    containers count toward the account's Container limits; the
-   `durable_object` policy has no `max_instances` setting.
+   `durable_object` policy has no `max_instances` setting, so the Worker runs
+   at most 16 `lite` processor containers. They verify NARs over 256 MiB and
+   finish a publication that an interrupted completion request left behind.
    The `CACHE_BUCKET` binding is the supported cache bucket. The helper creates
-   it if it does not exist and applies the staging/multipart lifecycle rules.
+   it if it does not exist and applies the staging lifecycle rule.
 4. Trigger the build. The first run deploys the Worker and bindings, creates
    authentication and Nix Ed25519 keys in memory, uploads the five required
    Worker secrets in one bulk operation, applies lifecycle rules, redeploys,

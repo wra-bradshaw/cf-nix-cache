@@ -9,8 +9,12 @@ import { isNotFound, unwrapRpc } from '../../shared/rpc';
 import { publicationFor } from './publication-adapters';
 import { authenticate } from '../auth/authentication';
 import { auditEvent } from '../audit/event';
+import { now } from '../../shared/clock';
+import { mapLimit } from '../../shared/concurrency';
 
 export const pathRoutes = new Hono<AppEnv>();
+
+const LOOKUP_CONCURRENCY = 25;
 
 pathRoutes.post('/api/caches/:name/missing', async (c) => {
   const name = c.req.param('name');
@@ -19,18 +23,38 @@ pathRoutes.post('/api/caches/:name/missing', async (c) => {
   idempotency(c.req.raw);
   await authFor(c.req.raw, c.env, cache, 'push');
   const input = parseJsonSchema(MissingPathsSchema, await parseJson(c.req.raw));
-  const missing: string[] = [];
-  for (const storeHash of input.store_hashes) {
-    try {
-      await getPath(c.env, cache, storeHash);
-      // A repeated push of a path counts as use, even if nothing downloads it.
-      c.executionCtx.waitUntil(touchPath(c.env, cache, storeHash));
-    } catch (caught) {
-      if (isNotFound(caught)) missing.push(storeHash);
-      else throw caught;
-    }
-  }
-  return c.json({ missing });
+  // Each hash lives in its own index shard, so the lookups run in parallel.
+  const found = await mapLimit(
+    input.store_hashes,
+    LOOKUP_CONCURRENCY,
+    async (storeHash) => {
+      try {
+        await getPath(c.env, cache, storeHash);
+        // A repeated push of a path counts as use, even if nothing downloads it.
+        c.executionCtx.waitUntil(touchPath(c.env, cache, storeHash));
+        return true;
+      } catch (caught) {
+        if (isNotFound(caught)) return false;
+        throw caught;
+      }
+    },
+  );
+  const missing = input.store_hashes.filter((_, index) => !found[index]);
+  // Paths another push is uploading are not missing: uploading them again
+  // would only repeat that work. The caller can wait for those uploads.
+  const pending = missing.length
+    ? unwrapRpc(
+        await coordinator(c.env, cache.reference).pendingUploads({
+          store_hashes: missing,
+          now: now(),
+        }),
+      )
+    : [];
+  const inFlight = new Set(pending.map((upload) => upload.store_hash));
+  return c.json({
+    missing: missing.filter((storeHash) => !inFlight.has(storeHash)),
+    pending,
+  });
 });
 
 pathRoutes.delete('/api/caches/:name/paths/:storeHash', async (c) => {

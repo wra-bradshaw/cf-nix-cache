@@ -3,7 +3,7 @@ import {
   parseJsonSchema,
   BootstrapRequestSchema,
   TokenRequestSchema,
-  UploadRequestSchema,
+  EncodedUploadRequestSchema,
 } from './schemas';
 import { DomainError } from './errors';
 import { manifest } from './test-fixtures';
@@ -19,9 +19,17 @@ describe('wire contract parsing', () => {
       }),
     ).toThrow(DomainError);
     expect(() =>
-      parseJsonSchema(UploadRequestSchema, {
+      parseJsonSchema(EncodedUploadRequestSchema, {
         manifest,
-        compressed_size: 1,
+        encoding_id: 'fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1',
+        chunks: [
+          {
+            raw_hash: `sha256:${'0'.repeat(52)}`,
+            raw_size: 1,
+            compressed_hash: `sha256:${'0'.repeat(52)}`,
+            compressed_size: 1,
+          },
+        ],
         extra: true,
       }),
     ).toThrow(DomainError);

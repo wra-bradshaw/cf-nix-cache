@@ -50,12 +50,38 @@ abandoned staging data, and garbage collection (below) reclaims manifests and
 chunks. Because a path can be replaced, public NAR responses use a bounded cache lifetime rather than an
 immutable year-long cache directive.
 
-The processor is split into HTTP bootstrap, processing service, NAR
-validation, chunking/compression, and an injected object-store adapter. It
-performs a validation pass before the permanent content-addressed write pass,
-so malformed input cannot leave chunks behind. Invalid input is a permanent
+Uploads are encoded by the CLI, which already reads every byte of the NAR: it
+splits it with FastCDC, compresses each chunk as its own zstd frame, and sends
+only the chunks the bucket lacks. The server never encodes. The upload's
+`UploadJob` Durable Object keeps the chunk list and a garbage collection lease,
+taken before it looks for existing chunks (see below). A chunk is decoded and
+hashed against its claim before it is written to its content-addressed key,
+because the first writer of a key wins for good (verification level 1).
+Completion reads the stored chunks back and checks that they concatenate to a
+structurally valid NAR with the declared hash (levels 2 and 3); the manifest,
+and so the narinfo `FileHash`, is built from the stored bytes, whichever zstd
+build wrote them. NARs up to 256 MiB are checked in the completing Worker
+request, which benchmarks put at well under the 30-second CPU limit; larger ones
+go to the processor workflow, which reads the same chunks and writes only the
+manifest. The chunk list is written before publication, so a completion
+interrupted while publishing is finished by the workflow from the chunks
+already in the bucket: a retryable failure enqueues it immediately, and a later
+state poll or push enqueues it if the request died without a response. The
+client never re-sends the NAR.
+
+The cache coordinator tracks each path's in-flight upload by store hash and
+NAR hash, so concurrent pushes of a path join one upload instead of processing
+it twice. Entries end when the upload does, and expire after an hour.
+
+The processor is split into HTTP bootstrap, verification of a chunk list, NAR
+validation, and an injected object-store adapter. It writes nothing but the
+manifest, so rejected input leaves nothing behind. Invalid input is a permanent
 422; object-store and other infrastructure failures are retryable 503
-responses. The Container accesses `CACHE_BUCKET` through the
+responses. Jobs share a pool of 16 `lite` containers, chosen by
+a hash of the job ID so that retries land on the same one; the `durable_object`
+scheduling policy has no `max_instances`, so the pool is the cap. Each
+container runs one job at a time and stops 10 seconds after its last request.
+The Container accesses `CACHE_BUCKET` through the
 Worker's `cache.r2` `outboundByHost` handler, so the same binding targets local
 Miniflare R2 under `wrangler dev` and deployed R2 in production.
 Content-addressed writes are conditional.
@@ -133,9 +159,10 @@ are split under `e2e/support` and `e2e/scenarios`.
 
 The Rust crates are small, so their module layouts stay nearly flat. `core/src`
 owns shared protocol semantics (`identifiers`, `processing`, `wire`, `error`).
-The processor splits into `main` (HTTP bootstrap), `pipeline` (processing),
+The processor splits into `main` (HTTP bootstrap), `pipeline` (verification),
 `nar` (NAR validation), and `object_store` (storage adapter). The CLI splits
 into `args` (command definitions), `commands` (dispatch, with `admin`, `gc`,
 `push`, and `configure_nix` command flows), `nix` and `upload` (local Nix and
-multipart upload helpers), `client` (HTTP client), and `config` (credential
-storage).
+shared upload helpers), `encode` and `encoded_upload` (client-side chunking
+and the upload flow), `client` (HTTP client), and `config`
+(credential storage).

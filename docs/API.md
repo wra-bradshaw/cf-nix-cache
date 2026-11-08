@@ -39,8 +39,10 @@ DELETE /api/caches/{cache}/paths/{store-hash}
 POST   /api/caches/{cache}/missing
 POST   /api/gc
 GET    /api/gc
-POST   /api/uploads
-PUT    /api/uploads/{id}/parts/{part-number}
+POST   /api/uploads/encoded
+POST   /api/uploads/encoded/batch
+PUT    /api/uploads/{id}/chunks/{raw-hash}
+POST   /api/uploads/encoded/batch/complete
 POST   /api/uploads/{id}/complete
 GET    /api/uploads/{id}
 DELETE /api/uploads/{id}
@@ -67,6 +69,52 @@ accepting optional `dry_run` and `grace_seconds`. It returns `202` with a
 active run and the last finished one. In a dry-run summary, `deleted_objects`
 and `deleted_bytes` are what would be deleted, not counting objects that the
 reported evictions would also free.
+
+## Uploads
+
+A path is uploaded already split and compressed with the cache's
+`encoding_id`: FastCDC v2020 chunks of 1, 4 and 16 MiB minimum, average and
+maximum, each one zstd level-3 frame. `POST /api/uploads/encoded` takes the
+path's metadata and the ordered chunk list (raw and compressed hash and size of
+each chunk) and answers with the raw hashes of the chunks the server lacks, in
+`missing_chunks`. The client sends each one with `PUT
+/api/uploads/{id}/chunks/{raw-hash}`, then calls `POST
+/api/uploads/{id}/complete` with no body. A chunk is checked against its
+claimed hashes and sizes before it is stored, and a chunk that fails is answered
+with `invalid_chunk` (422) and fails the upload. Completion checks that the
+stored chunks concatenate to a valid NAR with the declared hash, and publishes
+the path, in the same request for NARs up to 256 MiB. Larger ones are queued for
+the processor and complete as `QUEUED`; poll `GET /api/uploads/{id}` until
+`READY`. An upload whose NAR the installation already has needs no chunks at
+all.
+
+Completion stores the upload's chunk list before publishing, so an interrupted
+publication is finished by the processor workflow from the chunks already in
+the bucket. A retryable failure starts that workflow before the response; if a
+request dies without a response, the next `GET /api/uploads/{id}` (or a push of
+the same path) starts it. Recovery never asks the client to send the NAR again.
+
+Small paths, which are one chunk each, can be opened in batches of up to 64 with
+`POST /api/uploads/encoded/batch` (`{uploads: [...]}`, answered in order).
+`POST /api/uploads/encoded/batch/complete` then sends their missing chunks and
+completes them together, as `multipart/form-data` with a `request` field holding
+`{ids: [...]}` and one file field per chunk, named by its raw hash.
+
+While garbage collection is deleting objects, opening an upload returns
+`gc_in_progress` (503); retry with the same `Idempotency-Key`.
+
+The whole-NAR staging upload of earlier versions is gone: `POST /api/uploads`
+and `PUT /api/uploads/{id}/parts/{part-number}` answer `staging_upload_removed`
+(410), and an unfinished staging upload left from before the upgrade is marked
+FAILED when it is next looked at.
+
+Two pushes of the same path never process it twice. `POST
+/api/caches/{cache}/missing` reports a path that another upload is publishing in
+`pending`, with that upload's ID, rather than in `missing`. Opening an upload of
+a NAR that is already in flight returns that upload with `merged: true`; wait
+for it instead of sending anything. A different NAR hash for the same store hash
+is a replacement and gets its own upload, and an in-flight upload that fails is
+replaced by the next push.
 
 Upload identity is an opaque ID allocated by the cache coordinator. A retry
 with the same key and request fingerprint returns the existing job; reusing

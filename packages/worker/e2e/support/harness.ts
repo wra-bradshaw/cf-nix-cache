@@ -46,6 +46,9 @@ export async function createFixture(): Promise<E2eFixture> {
     BOOTSTRAP_SECRET_HASH: hashSecret(bootstrapSecret),
     TOKEN_ISSUER: 'cf-nix-cache-e2e',
     TOKEN_AUDIENCE: 'cf-nix-cache-e2e',
+    // Paths over 1 MiB (libiconv, in the hello closure) are verified by the
+    // processor container, the rest inline.
+    INLINE_VERIFY_MAX_NAR_SIZE: String(1024 * 1024),
   };
   const server = createTestHarness({
     root: repositoryDirectory,

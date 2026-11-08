@@ -66,7 +66,9 @@ impl ChunkManifest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessJob {
     pub job_id: String,
-    pub staging_key: String,
+    /// The upload's chunk list. The chunks are already stored; processing
+    /// verifies them and writes the manifest.
+    pub chunks_key: String,
     pub nar_hash: String,
     pub nar_size: u64,
     pub encoding_id: String,
@@ -83,7 +85,7 @@ impl TryFrom<CfNixCacheProcessorJob> for ProcessJob {
         }
         Ok(Self {
             job_id: job.job_id.into(),
-            staging_key: job.staging_key.into(),
+            chunks_key: job.chunks_key.into(),
             nar_hash: job.nar_hash.into(),
             nar_size: job.nar_size.get(),
             encoding_id: ENCODING_ID.into(),
@@ -137,7 +139,7 @@ mod tests {
         let contract = |encoding_id: &str| {
             serde_json::from_value::<CfNixCacheProcessorJob>(serde_json::json!({
                 "job_id": "job",
-                "staging_key": "staging/job.nar.zst",
+                "chunks_key": "staging/job.chunks.json",
                 "nar_hash": format!("sha256:{}", "0".repeat(52)),
                 "nar_size": 9,
                 "encoding_id": encoding_id,
@@ -148,7 +150,7 @@ mod tests {
             ProcessJob::try_from(contract(ENCODING_ID)),
             Ok(ProcessJob {
                 job_id: "job".into(),
-                staging_key: "staging/job.nar.zst".into(),
+                chunks_key: "staging/job.chunks.json".into(),
                 nar_hash: format!("sha256:{}", "0".repeat(52)),
                 nar_size: 9,
                 encoding_id: ENCODING_ID.into(),

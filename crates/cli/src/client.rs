@@ -85,6 +85,64 @@ impl Api {
         Ok(send_checked(request).await?.json().await?)
     }
 
+    /// Like [`Api::request`], with an idempotency key the caller keeps, so
+    /// that it can repeat the operation after a failure the client does not
+    /// retry by itself.
+    pub(crate) async fn request_with_key<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        key: &str,
+        body: &B,
+    ) -> Result<T> {
+        let request = self
+            .retry_client
+            .post(format!("{}{path}", self.endpoint))
+            .bearer_auth(self.token()?)
+            .header("Idempotency-Key", key)
+            .json(body);
+        Ok(send_checked(request).await?.json().await?)
+    }
+
+    /// Sends one compressed chunk of a client-encoded upload.
+    pub(crate) async fn put_chunk(
+        &self,
+        upload: &str,
+        raw_hash: &str,
+        bytes: Vec<u8>,
+    ) -> Result<()> {
+        let request = self
+            .builder(
+                Method::PUT,
+                &api_path(&["uploads", upload, "chunks", raw_hash]),
+            )
+            .bearer_auth(self.token()?)
+            .header(reqwest::header::CONTENT_TYPE, "application/zstd")
+            .body(bytes);
+        send_checked(request).await?;
+        Ok(())
+    }
+
+    /// Posts a multipart/form-data body: a JSON `request` field, then one
+    /// file field per `(name, bytes)`.
+    pub(crate) async fn post_form<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        request: &B,
+        files: Vec<(String, Vec<u8>)>,
+    ) -> Result<T> {
+        let boundary = format!("cf-nix-cache-{}", new_idempotency_key());
+        let body = form_body(&boundary, &serde_json::to_vec(request)?, files);
+        let request = self
+            .builder(Method::POST, path)
+            .bearer_auth(self.token()?)
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(body);
+        Ok(send_checked(request).await?.json().await?)
+    }
+
     pub(crate) async fn empty(&self, method: Method, path: &str) -> Result<()> {
         send_checked(self.builder(method, path).bearer_auth(self.token()?)).await?;
         Ok(())
@@ -105,23 +163,6 @@ impl Api {
         let request = self.builder(Method::POST, "/api/bootstrap").json(body);
         Ok(send_checked(request).await?.json().await?)
     }
-
-    /// Uploads one multipart part to its presigned `url`, returning its ETag.
-    pub(crate) async fn upload_part(&self, url: &str, bytes: Vec<u8>) -> Result<String> {
-        let request = self
-            .retry_client
-            .put(url)
-            .bearer_auth(self.token()?)
-            .header("Idempotency-Key", new_idempotency_key())
-            .body(bytes);
-        send_checked(request)
-            .await?
-            .headers()
-            .get("etag")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned)
-            .context("S3 response omitted ETag")
-    }
 }
 
 /// Sends `request`, turning a non-success status into an error that
@@ -134,6 +175,26 @@ async fn send_checked(request: RequestBuilder) -> Result<Response> {
     }
     let body = response.text().await.unwrap_or_default();
     bail!("API returned {status}: {body}")
+}
+
+fn form_body(boundary: &str, request: &[u8], files: Vec<(String, Vec<u8>)>) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend(
+        format!("--{boundary}\r\ncontent-disposition: form-data; name=\"request\"\r\ncontent-type: application/json\r\n\r\n")
+            .as_bytes(),
+    );
+    body.extend(request);
+    for (name, bytes) in files {
+        body.extend(
+            format!(
+                "\r\n--{boundary}\r\ncontent-disposition: form-data; name=\"{name}\"; filename=\"chunk\"\r\ncontent-type: application/zstd\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend(bytes);
+    }
+    body.extend(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
 }
 
 /// `/api/{segments}`, percent-encoding each segment (for server- or
@@ -195,6 +256,15 @@ mod tests {
         assert!(retry_safe(&Method::POST, "/api/bootstrap"));
         assert!(!retry_safe(&Method::POST, "/api/caches"));
         assert!(!retry_safe(&Method::POST, "/api/tokens"));
+    }
+
+    #[test]
+    fn form_bodies_frame_each_field() {
+        let body = form_body("b", b"{}", vec![("sha256:x".into(), vec![1, 2])]);
+        assert_eq!(
+            body,
+            b"--b\r\ncontent-disposition: form-data; name=\"request\"\r\ncontent-type: application/json\r\n\r\n{}\r\n--b\r\ncontent-disposition: form-data; name=\"sha256:x\"; filename=\"chunk\"\r\ncontent-type: application/zstd\r\n\r\n\x01\x02\r\n--b--\r\n"
+        );
     }
 
     #[test]

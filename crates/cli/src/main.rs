@@ -5,6 +5,8 @@ mod args;
 mod client;
 mod commands;
 mod config;
+mod encode;
+mod encoded_upload;
 mod nix;
 mod upload;
 

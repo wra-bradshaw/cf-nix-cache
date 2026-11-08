@@ -89,13 +89,19 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
     expect(cacheInfo.upstream_cache_key_names).toEqual(['cache.nixos.org-1']);
     // Whether hello is signed upstream depends on how this machine got it.
     const pushAll = ['push', '--ignore-upstream-cache-filter'];
-    await runAsync(cli, ['--endpoint', base, ...pushAll, cacheName, hello], {
-      env: {
-        CF_NIX_CACHE_TOKEN: admin.token,
-        XDG_CONFIG_HOME: path.join(fixture.scratch, 'config'),
+    // The client encodes the NAR and sends its chunks; nothing is cached yet.
+    const firstPush = await runAsync(
+      cli,
+      ['--endpoint', base, ...pushAll, cacheName, hello],
+      {
+        env: {
+          CF_NIX_CACHE_TOKEN: admin.token,
+          XDG_CONFIG_HOME: path.join(fixture.scratch, 'config'),
+        },
+        stdio: 'inherit',
       },
-      stdio: 'inherit',
-    });
+    );
+    expect(firstPush).toMatch(/new chunks?\)/);
 
     const pathInfo = JSON.parse(
       run('nix', ['path-info', '--json', hello]),
@@ -309,17 +315,76 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
       headers: authHeader,
     });
     expect(upstreams.upstream_cache_key_names).toEqual([]);
-    await runAsync(cli, ['--endpoint', base, 'push', secondCache, hello], {
-      env: {
-        CF_NIX_CACHE_TOKEN: admin.token,
-        XDG_CONFIG_HOME: path.join(fixture.scratch, 'config-fourth'),
+    // Its chunks and manifest already exist for the first cache, so nothing
+    // but metadata is sent.
+    const crossCache = await runAsync(
+      cli,
+      ['--endpoint', base, 'push', secondCache, hello],
+      {
+        env: {
+          CF_NIX_CACHE_TOKEN: admin.token,
+          XDG_CONFIG_HOME: path.join(fixture.scratch, 'config-fourth'),
+        },
       },
-    });
+    );
+    expect(crossCache).toMatch(/no new chunks/);
     const secondNarInfo = `/cache/${secondCache}/${storeHash}.narinfo`;
     expect(
       (await request(server, base, secondNarInfo, { headers: authHeader }))
         .status,
     ).toBe(200);
+
+    // Two pushes of the same closure at once share each path's upload.
+    const concurrentCache = 'e2e-concurrent';
+    await expectJson<Cache>(server, base, '/api/caches', 201, {
+      method: 'POST',
+      headers: {
+        ...authHeader,
+        'content-type': 'application/json',
+        'Idempotency-Key': 'e2e-concurrent-create',
+      },
+      body: JSON.stringify({
+        name: concurrentCache,
+        public: true,
+        quota_bytes: 10 * 1024 * 1024 * 1024,
+        upstream_cache_key_names: [],
+      }),
+    });
+    const concurrentPushes = await Promise.all(
+      ['a', 'b'].map((suffix) =>
+        runAsync(cli, ['--endpoint', base, 'push', concurrentCache, hello], {
+          env: {
+            CF_NIX_CACHE_TOKEN: admin.token,
+            XDG_CONFIG_HOME: path.join(fixture.scratch, `config-${suffix}`),
+          },
+        }),
+      ),
+    );
+    expect(concurrentPushes.join('\n')).toMatch(/uploaded/);
+    const concurrentNar = await request(
+      server,
+      base,
+      `/cache/${concurrentCache}/nar/${storeHash}.nar.zst`,
+    );
+    expect(concurrentNar.status).toBe(200);
+    expect(
+      execFileSync(zstd, ['-d', '-c'], {
+        input: Buffer.from(await concurrentNar.arrayBuffer()),
+        maxBuffer: narBufferBytes,
+      }),
+    ).toEqual(expectedNar);
+
+    // CLIs from before client encoding are told to upgrade.
+    const stagingUpload = await request(server, base, '/api/uploads', {
+      method: 'POST',
+      headers: {
+        ...authHeader,
+        'content-type': 'application/json',
+        'Idempotency-Key': 'e2e-legacy-upload',
+      },
+      body: '{}',
+    });
+    expect(stagingUpload.status).toBe(410);
 
     // Deleting a cache clears all of its shards and finishes. The new cache
     // gets a new identity, so it must start out empty.

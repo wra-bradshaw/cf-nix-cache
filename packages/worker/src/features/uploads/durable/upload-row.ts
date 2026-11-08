@@ -18,14 +18,18 @@ export interface UploadRow {
   cache: string;
   cache_id: string;
   incarnation: string;
-  staging_key: string;
-  upload_id: string | null;
+  /** The chunk list, which lets the processor finish or verify the upload. */
+  chunks_key: string;
+  /**
+   * False for a staging upload left from before they were removed. Those can
+   * no longer be processed.
+   */
+  encoded: boolean;
   state: UploadState;
   manifest: UploadManifest;
   compressed_size: number;
   idempotency_key: string;
   fingerprint: string;
-  parts: Record<string, string>;
   error: string | null;
   result: ProcessReceipt | null;
 }
@@ -38,7 +42,7 @@ export const toStateResponse = (row: UploadRow): UploadStateResponse => ({
 
 export const toProcessJob = (row: UploadRow): ProcessJob => ({
   job_id: row.job_id,
-  staging_key: row.staging_key,
+  chunks_key: row.chunks_key,
   nar_hash: row.manifest.nar_hash,
   nar_size: row.manifest.nar_size,
   encoding_id: ENCODING_ID,

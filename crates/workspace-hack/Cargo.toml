@@ -10,7 +10,6 @@ publish = false
 
 ### BEGIN HAKARI SECTION
 [dependencies]
-futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 memchr = { version = "2" }
 percent-encoding = { version = "2" }

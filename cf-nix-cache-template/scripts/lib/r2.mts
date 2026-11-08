@@ -76,23 +76,6 @@ export async function ensureLifecycle(
       {},
       config,
     );
-  if (!output.includes("abort-multipart"))
-    await wrangler(
-      [
-        "r2",
-        "bucket",
-        "lifecycle",
-        "add",
-        bucket,
-        "abort-multipart",
-        "",
-        "--abort-multipart-days",
-        "1",
-        "--force",
-      ],
-      {},
-      config,
-    );
 }
 
 export async function lifecycleIsConfigured(
@@ -106,7 +89,5 @@ export async function lifecycleIsConfigured(
   );
   if (listed.status !== 0) return undefined;
   const output = `${listed.stdout}\n${listed.stderr}`;
-  return (
-    output.includes("abandoned-staging") && output.includes("abort-multipart")
-  );
+  return output.includes("abandoned-staging");
 }
