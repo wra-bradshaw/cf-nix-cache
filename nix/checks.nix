@@ -15,6 +15,7 @@ forEachSupportedSystem (
   in
   {
     cli = packages.${system}.cli;
+    verifier = packages.${system}.verifier;
     fmt = rust.craneLib.cargoFmt {
       src = rust.workspaceSrc;
       pname = "cf-nix-cache";

@@ -11,7 +11,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# The C library, built for wasm32 with clang (see nix/dev-shells.nix).
+# The C library, built for wasm32 with clang (see nix/rust.nix).
 zstd-safe = { version = "8", default-features = false }
 
 [dev-dependencies]
