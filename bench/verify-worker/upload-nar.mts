@@ -1,15 +1,11 @@
 /**
- * Encodes a NAR into chunks and uploads them to the bench Worker's bucket, for
- * timing `/verify` and the `VerifyWorkflow`.
+ * Uploads a NAR to the bench Worker for timing `/verify`.
  *
  *   node upload-nar.mts <worker-url> <name> /nix/store/<path>
  *   node upload-nar.mts <worker-url> <name> synthetic:<MiB>
  *   node upload-nar.mts <worker-url> <name> repetitive:<MiB>
  *
- * The token in BENCH_TOKEN must match the Worker's secret. Chunks are cut at a
- * fixed 4 MiB rather than by FastCDC: verification never checks where chunks
- * were cut, so the cost is the same. `synthetic:` builds the worst case the
- * earlier benchmarks found: many small, compressible files.
+ * Chunks are cut at fixed 4 MiB; verification cost is the same.
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -20,25 +16,14 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
-// `--check-drift` is the single cross-crate gate run by CI
-// (`check-encoding-constants`): it re-reads the canonical encoding files
-// below and fails on any drift, so a joint drift of the hardcoded literals
-// in `crates/cli/src/protocol/mod.rs` and `crates/verify/src/lib.rs`
-// cannot pass CI even though each crate's own test would. Local `pnpm test`
-// does not run it, so run `node bench/verify-worker/upload-nar.mts
-// --check-drift` from the repo root when touching these values.
+// Single cross-crate gate: fails on joint drift that per-crate tests miss.
 const isDriftCheck = args.includes('--check-drift');
-// Strip the flag before parsing positionals: without this a trailing flag
-// would shift `base`/`name`/`source`, and a mixed invocation such as
-// `upload-nar.mts <url> <name> <src> --check-drift` would silently run
-// drift-only and exit 0 without uploading.
 const positional = args.filter((arg) => arg !== '--check-drift');
 const [base, name, source] = positional;
 const token = process.env.BENCH_TOKEN;
 if (isDriftCheck && positional.length > 0)
   throw new Error('--check-drift takes no other arguments');
 if (isDriftCheck) {
-  // Drift checks run below; no upload arguments or token needed.
 } else if (!base || !name || !source || !token)
   throw new Error(
     'usage: BENCH_TOKEN=... node upload-nar.mts <url> <name> <path|synthetic:MiB>',
@@ -49,18 +34,8 @@ setDefaultAutoSelectFamily(false);
 
 const ENCODING_ID = 'fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1';
 const CHUNK = 4 * 1024 * 1024;
-// zstd level of each chunk frame; must match ZSTD_LEVEL in
-// crates/cli/src/protocol/mod.rs.
 const ZSTD_LEVEL = 3;
-// Canonical encoding parameters live in crates/cli/src/protocol/mod.rs
-// (ENCODING_ID, CHUNK_MIN_SIZE, CHUNK_AVG_SIZE, CHUNK_MAX_SIZE, ZSTD_LEVEL)
-// and crates/verify/src/lib.rs + packages/worker/src/features/uploads/
-// encoding.ts + packages/worker/src/features/uploads/verifier.ts
-// (CHUNK_MAX_RAW_SIZE, CHUNK_MAX_COMPRESSED_SIZE). This script
-// runs standalone (node upload-nar.mts) so it cannot import them; it
-// duplicates them instead and cross-checks the copy against the canonical
-// files at startup, so a drift in either side fails here rather than
-// silently uploading with the wrong parameters.
+// Standalone copy of the canonical encoding parameters; drift-checked below.
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const protocol = readFileSync(
   join(repoRoot, 'crates/cli/src/protocol/mod.rs'),
@@ -82,11 +57,6 @@ const cacheTypes = readFileSync(
   join(repoRoot, 'packages/worker/src/features/cache/types.ts'),
   'utf8',
 );
-// Whitespace-tolerant pins: match the shape, not the exact spacing, so a
-// `cargo fmt` or prettier reflow does not read as parameter drift. Numeric
-// parameters capture their factors and compare the product to the local
-// constant (rather than substring-matching the literal), so a changed number
-// fails even when the surrounding shape still matches.
 const matchOne = (source: string, pattern: RegExp, label: string) => {
   const found = source.match(pattern);
   if (!found) throw new Error(`${label} drifted: ${pattern}`);
@@ -204,7 +174,6 @@ if (isDriftCheck) {
   console.log('encoding constants in sync');
   process.exit(0);
 }
-// Reachable only when not a drift check, so upload arguments are required.
 if (!base || !name || !source || !token)
   throw new Error(
     'usage: BENCH_TOKEN=... node upload-nar.mts <url> <name> <path|synthetic:MiB>',
@@ -238,14 +207,12 @@ function str(value: string | Buffer): Buffer[] {
   return [u64(bytes.length), bytes, Buffer.alloc((8 - (bytes.length % 8)) % 8)];
 }
 
-/** A directory of `dirs` directories of `files` text files of 0.5 to 4 KiB. */
 function* syntheticNar(mib: number, repetitive = false): Generator<Buffer> {
   const words =
     'the of and to in is was for on that with as by at from this be are or an have not which it'.split(
       ' ',
     );
   let seed = 0x9e3779b9;
-  // xorshift32: deterministic, and cheap enough not to dominate generation.
   const random = () => {
     seed ^= seed << 13;
     seed ^= seed >>> 17;

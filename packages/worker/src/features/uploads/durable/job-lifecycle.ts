@@ -22,12 +22,6 @@ export class UploadJobLifecycle {
     private readonly storage: UploadStorage,
   ) {}
 
-  /**
-   * Claims a QUEUED upload for the workflow. The read and the conditional
-   * write race with `fail`: `setState` applies only when the row is still
-   * QUEUED and reports whether it did, so a lost race is re-read and
-   * reported instead of returning success for a FAILED upload.
-   */
   async processing(): Promise<RpcResult<void>> {
     const row = this.storage.row();
     if (!row) return failure('not_found', 'upload not found', 404);
@@ -42,7 +36,6 @@ export class UploadJobLifecycle {
       return ok();
     const current = this.storage.row();
     if (!current) return failure('not_found', 'upload not found', 404);
-    // Another claimant already moved it forward; retries are idempotent.
     if (['READY', 'PROCESSING', 'PUBLISHING'].includes(current.state))
       return ok();
     return failure(
@@ -55,26 +48,13 @@ export class UploadJobLifecycle {
   async fail(message: string): Promise<RpcResult<void>> {
     const row = this.storage.row();
     if (!row || ['READY', 'ABORTED'].includes(row.state)) return ok();
-    // Conditional: a concurrent publish may have reached READY since the
-    // read. A false return means the terminal state won; this still reports
-    // ok either way, so the return is dropped instead of re-reading a row
-    // nobody uses.
     this.storage.setError(row.job_id, message);
     return ok();
   }
 
-  /**
-   * Aborts an upload that has not started processing. Like `processing`, the
-   * conditional `setState` reports a lost race with `processing`/`fail`, which
-   * is re-read so an upload that already moved to PROCESSING reports a
-   * conflict instead of a silent no-op.
-   */
   async abort(): Promise<RpcResult<UploadStateResponse>> {
     const row = this.storage.row();
     if (!row) return failure('not_found', 'upload not found', 404);
-    // Once processing has started, publication may be in flight outside this
-    // Durable Object. Allowing an abort here would race that publication and
-    // could leave an ABORTED job with a live path in the cache.
     if (
       row.state === 'PROCESSING' ||
       row.state === 'PUBLISHING' ||
@@ -131,8 +111,6 @@ export class UploadJobLifecycle {
         409,
       );
     if (['QUEUED', 'PROCESSING', 'PUBLISHING'].includes(row.state)) {
-      // Reconciliation is opportunistic: a Workflows outage must not make the
-      // stored state unreadable. The client's next poll tries again.
       try {
         await ensureWorkflow(
           this.env.PROCESS_UPLOAD!,

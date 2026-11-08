@@ -7,7 +7,6 @@ import type { CacheReference, CacheWorkflowJob } from './types';
 import { indexShard, coordinator, system } from './stubs';
 import { shardPrefixes } from './shards';
 
-/** Workflow instance ids may only contain letters, digits, `-` and `_`. */
 export function deleteCacheWorkflowId(incarnation: string): string {
   return `delete-${incarnation}`;
 }

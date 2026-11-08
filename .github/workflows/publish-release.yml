@@ -8,8 +8,6 @@ on:
       - "packages/worker/release-manifest.json"
       - "cf-nix-cache-template/package.json"
       - "cf-nix-cache-template/wrangler.jsonc"
-  # Normal releases start from the push above. This retries a failed publication:
-  # the job skips what is already on npm.
   workflow_dispatch:
 
 concurrency:
@@ -31,8 +29,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      # Building the package compiles crates/verify to wasm32 with the dev
-      # shell's toolchain.
       - uses: cachix/install-nix-action@v31
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
@@ -94,8 +90,6 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           npm install --global npm@11
-          # Publishes the dist/ built and tested above. prepack would rebuild
-          # it outside the dev shell, which lacks the wasm32 toolchain.
           npm publish ./packages/worker --access public --ignore-scripts
 
       - name: Create the GitHub release
@@ -141,7 +135,6 @@ jobs:
           TEMPLATE_REPO_TOKEN: ${{ secrets.TEMPLATE_REPO_TOKEN }}
         run: |
           rsync -a --delete --exclude .git source/cf-nix-cache-template/ template/
-          # npm accepts a publish before its registry serves the version.
           for attempt in $(seq 30); do
             npm view "cf-nix-cache@$VERSION" version >/dev/null 2>&1 && break
             [ "$attempt" = 30 ] && { echo "cf-nix-cache@$VERSION never appeared on npm" >&2; exit 1; }
@@ -160,9 +153,6 @@ jobs:
           git switch -C "$branch"
           git add --all
           git commit -m "Update cf-nix-cache to v$VERSION"
-          # The branch is generated entirely by this job, so a leftover branch
-          # from an earlier (possibly failed) run is safely replaced. This also
-          # refreshes an already-open PR.
           git push --force origin "$branch"
           open_pr="$(gh pr list \
             --repo "$TEMPLATE_REPOSITORY" \
@@ -173,8 +163,6 @@ jobs:
           if [ -n "$open_pr" ]; then
             echo "Updated the existing template PR #$open_pr."
           else
-            # Any failure here fails the job (bash -e), so a release cannot end
-            # with a pushed branch and no PR.
             gh pr create \
               --repo "$TEMPLATE_REPOSITORY" \
               --base main \
@@ -182,6 +170,4 @@ jobs:
               --title "Update cf-nix-cache to v$VERSION" \
               --body "Updates the deployment template and lockfile for cf-nix-cache v$VERSION."
           fi
-          # The template repository requires its `config` validation check on
-          # main, so auto-merge lands the PR only once validation passes.
           gh pr merge "$branch" --repo "$TEMPLATE_REPOSITORY" --auto --squash

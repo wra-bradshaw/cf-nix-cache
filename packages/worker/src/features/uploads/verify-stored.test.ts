@@ -24,7 +24,6 @@ import { MAX_CHUNKS_PER_UPLOAD } from './encoded';
 import { UploadJobLifecycle } from './durable/job-lifecycle';
 import { narOfFile } from './test-helpers';
 
-/** workerd's streaming digest, which Node lacks. */
 class DigestStream extends WritableStream<Uint8Array> {
   readonly digest: Promise<ArrayBuffer>;
   constructor(algorithm: string) {
@@ -255,7 +254,6 @@ describe('processing an upload from its chunk list', () => {
       chunks,
     });
     expect(text.length).toBeLessThanOrEqual(CHUNK_LIST_MAX_BYTES);
-    // The realistic worst case (10 GiB NAR of 1 MiB chunks) fits too.
     const realistic = JSON.stringify({
       encoding_id: ENCODING_ID,
       nar_hash: rawHash,
@@ -288,10 +286,6 @@ describe('processing an upload from its chunk list', () => {
   it('maps a truncated wasm size output to a permanent error', async () => {
     const nar = narOfFile(encoder.encode('hello'));
     const { objects, nar: claim } = await stored(nar, []);
-    // The RangeError→InvalidEncodingError mapping lives in
-    // `ChunkVerifier.finish()` (see verifier.test.ts); here the finished
-    // verifier reports the permanent error and `verifyStoredNar` propagates
-    // it rather than mapping a raw RangeError itself.
     const finish = vi
       .spyOn(ChunkVerifier.prototype, 'finish')
       .mockImplementation(() => {

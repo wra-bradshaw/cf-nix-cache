@@ -22,9 +22,7 @@
     ],
   },
   "migrations": [
-    // v1/v2 are historical: v1 created the original classes (including the
-    // since-removed ProcessorContainer) and v2 added GcControl. Never edit a
-    // past migration; Wrangler validates the history on `deploy --dry-run`.
+    // Never edit a past migration; Wrangler validates the history on `deploy --dry-run`.
     {
       "tag": "v1",
       "new_sqlite_classes": [
@@ -38,8 +36,6 @@
       ],
     },
     { "tag": "v2", "new_sqlite_classes": ["GcControl"] },
-    // Uploads are now verified in the Worker, so the processor container's
-    // Durable Object class is removed. It held no durable data.
     { "tag": "v3", "deleted_classes": ["ProcessorContainer"] },
   ],
   "workflows": [
@@ -65,26 +61,13 @@
   ],
   "vars": {
     "CF_NIX_CACHE_CONFIG_SCHEMA": "1",
-    // Issuer/audience for minted tokens. Only presence is required for
-    // deploy; a changed value still deploys and fails at runtime (old tokens
-    // stop verifying), so `check`/`doctor` do not validate the values.
-    // `doctor` live-checks secrets, bucket, and lifecycle, not these vars.
     "TOKEN_ISSUER": "cf-nix-cache",
     "TOKEN_AUDIENCE": "cf-nix-cache",
     "NIX_SIGNING_KEY_NAME": "cache.nix-signing",
   },
   "observability": { "enabled": true },
   "limits": {
-    // A garbage collection run makes one request per index shard and manifest.
-    // A lowered budget still deploys and fails at runtime rather than at
-    // config time, so `check` does not validate it.
     "subrequests": 10000000,
-    // The upload workflow verifies NARs of up to 10 GiB in one step, roughly
-    // extrapolated as ~66 s of CPU at worst from the measured worst case of
-    // about 6.4 ms per MiB (~6.6 s at 1 GiB; linear extrapolation, not a
-    // measured bound). Workflow steps run under this Worker CPU limit (see
-    // https://developers.cloudflare.com/workflows/reference/limits/), so it
-    // is 300000 (5 minutes, which needs Workers Paid).
     "cpu_ms": 300000,
   },
 }

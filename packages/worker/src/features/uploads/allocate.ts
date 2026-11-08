@@ -8,10 +8,6 @@ import type { UploadManifest, UploadState } from './types';
 
 const FINISHED_BADLY: UploadState[] = ['FAILED', 'ABORTED'];
 
-/**
- * Allocates an upload, joining another push's upload of the same NAR while it
- * is in flight.
- */
 export async function allocateUpload(
   env: Env,
   cache: CacheState,
@@ -45,7 +41,6 @@ export async function allocateUpload(
       !FINISHED_BADLY.includes(access.value.state)
     )
       return { allocation, state: access.value.state };
-    // A failed upload is replaced, so the next push of the path joins this one.
     allocation = unwrapRpc(
       await stub.allocateUpload({
         ...base,

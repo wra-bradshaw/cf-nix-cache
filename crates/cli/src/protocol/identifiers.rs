@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-/// The Nix base32 alphabet (no `e`, `o`, `u`, or `t`).
 const NIX32_ALPHABET: &[u8] = b"0123456789abcdfghijklmnpqrsvwxyz";
 
 fn is_nix32(value: &str, len: usize) -> bool {

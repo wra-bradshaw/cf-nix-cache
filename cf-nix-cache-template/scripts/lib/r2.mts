@@ -3,20 +3,9 @@ import type { TemplateConfig } from "./config.mts";
 import { fail } from "./fail.mts";
 import { wrangler } from "./wrangler.mts";
 
-/**
- * Every configured CACHE_BUCKET that `doctor` live-checks: the top level
- * plus any environment that overrides `r2_buckets` with its own bucket.
- * Environments without their own `r2_buckets` inherit the top level and need
- * no extra check. Buckets with the same name are returned once; the top
- * level (envName null) is pushed first so its finding keeps the unprefixed
- * message.
- */
 export type CacheBucketRef = { envName: string | null; bucket: string };
 
 export function cacheBuckets(config: TemplateConfig): CacheBucketRef[] {
-  // Never throws on malformed JSON: non-array `r2_buckets` and non-string
-  // `bucket_name` values are ignored here and reported as problems by
-  // `configProblems`. Only non-empty string bucket names become live checks.
   const refs: CacheBucketRef[] = [];
   const rawTop: unknown = (config as Record<string, unknown> | null | undefined)
     ?.r2_buckets;
@@ -80,7 +69,6 @@ export async function ensureBucket(name: string): Promise<void> {
   const created = await wrangler(["r2", "bucket", "create", name], {
     allowFailure: true,
   });
-  // Tolerate a concurrent creation of the same bucket by this account.
   if (
     created.status !== 0 &&
     !/already exists/i.test(`${created.stdout}\n${created.stderr}`)

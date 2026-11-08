@@ -17,7 +17,6 @@ import { NAR_HASH } from './encoded-routes';
 
 const encoder = new TextEncoder();
 
-/** Serializes NAR tokens; each is length-prefixed and padded to 8 bytes. */
 function nar(...fields: string[]): Uint8Array {
   const parts: number[] = [];
   for (const field of fields) {
@@ -57,7 +56,6 @@ const tree = nar(
 
 const compress = (raw: Uint8Array) => new Uint8Array(zstdCompressSync(raw));
 
-/** Verifies `bytes` as one NAR cut into chunks at `splits`. */
 function verify(bytes: Uint8Array, splits: number[] = []): number {
   const verifier = new ChunkVerifier();
   try {
@@ -142,7 +140,6 @@ describe('the WebAssembly chunk verifier', () => {
       const rest = tree.slice(64);
       expect(verifier.chunk(compress(rest), rest.length)).toEqual(rest);
       expect(verifier.finish()).toBe(tree.length);
-      // Both paths through the FFI-sealed handle report "already finished".
       expect(() => verifier.finish()).toThrow(/already finished/);
       const extra = compress(tree.slice(0, 16));
       expect(() => verifier.chunk(extra, 16)).toThrow(/already finished/);
@@ -154,12 +151,9 @@ describe('the WebAssembly chunk verifier', () => {
   it('does not seal the verifier after a failed finish', () => {
     const verifier = new ChunkVerifier();
     try {
-      // Pushed without `wholeNar`, so the NAR is still truncated.
       const raw = tree.slice(0, 64);
       expect(verifier.chunk(compress(raw), raw.length, false)).toEqual(raw);
       expect(() => verifier.finish()).toThrow(/truncated/);
-      // The handle must still accept the NAR (the FFI `finish` restores the
-      // verifier on error to match `Verifier::finish` semantics).
       const head = tree.slice(0, 64);
       const tail = tree.slice(64);
       expect(verifier.chunk(compress(head), head.length)).toEqual(head);
@@ -171,9 +165,6 @@ describe('the WebAssembly chunk verifier', () => {
   });
 
   it('stays in sync with the encoding limits', () => {
-    // Canonical values duplicated from crates/verify/src/lib.rs to avoid a
-    // module cycle (encoding.ts imports decodeChunk from verifier.ts). A
-    // drift in either copy fails here rather than at the wasm boundary.
     expect(VERIFIER_MAX_RAW).toBe(ENCODING_MAX_RAW);
     expect(VERIFIER_MAX_COMPRESSED).toBe(ENCODING_MAX_COMPRESSED);
     expect(VERIFIER_MAX_RAW).toBe(16 * 1024 * 1024);
@@ -181,11 +172,6 @@ describe('the WebAssembly chunk verifier', () => {
   });
 
   it('pins the chunk-hash shape shared with the upload routes', () => {
-    // `RAW_HASH`'s only remaining duplicate is the exported `NAR_HASH` in
-    // `encoded-routes.ts` (`encoded.ts` imports this copy, so there is no
-    // `CHUNK_HASH` copy). A change to the accepted hash shape must update
-    // both copies; this pins them equal plus the shape and the rejection
-    // behavior of the canonical one.
     expect(NAR_HASH.source).toBe(RAW_HASH.source);
     expect(RAW_HASH.source).toBe('^sha256:[0-9abcdfghijklmnpqrsvwxyz]{52}$');
     expect(() => assertValidRawHash(`sha256:${'a'.repeat(52)}`)).not.toThrow();
@@ -202,8 +188,6 @@ describe('the WebAssembly chunk verifier', () => {
   });
 
   it('rejects a symlink target containing NUL', () => {
-    // Mirrors the `invalid symlink target` case in `crates/verify/src/nar.rs`:
-    // NUL bytes can never appear in a symlink target.
     const bad = nar(
       'nix-archive-1',
       '(',
@@ -217,9 +201,6 @@ describe('the WebAssembly chunk verifier', () => {
   });
 
   it('maps a truncated size output to a permanent error', () => {
-    // `finish()` reads an 8-byte little-endian size; a short output throws
-    // RangeError on the DataView read, which must surface as a permanent
-    // InvalidEncodingError rather than leaking the raw RangeError.
     const verifier = new ChunkVerifier();
     try {
       vi.spyOn(
@@ -234,11 +215,6 @@ describe('the WebAssembly chunk verifier', () => {
   });
 
   it('pins the null-handle guard (fails on stale verify.wasm)', () => {
-    // A stale `verify.wasm` predating the `ffi.rs` null-handle guards still
-    // exports the same names, so the constructor's export assert cannot catch
-    // it; this behavioral pin can. It drives the raw exports with a null
-    // handle, which the current `ffi.rs` rejects with status 1 and a
-    // distinct "not initialized" message via a static buffer.
     const exports = new WebAssembly.Instance(verifierModule, {})
       .exports as unknown as {
       memory: WebAssembly.Memory;

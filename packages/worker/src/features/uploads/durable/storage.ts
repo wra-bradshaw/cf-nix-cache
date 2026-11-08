@@ -3,25 +3,13 @@ import type { ChunkClaim } from '../encoding';
 import type { ProcessReceipt, UploadRow } from './upload-row';
 import { first, type SqlRow, text, integer, json } from '../../../shared/sql';
 
-/**
- * What `setResult` reports: the stored receipt plus whether it wrote. `wrote`
- * is false when the row had already left `from` (a concurrent fail/abort
- * won) and the caller must re-read instead of assuming the receipt landed.
- */
 export type SetResultOutcome = ProcessReceipt & { wrote: boolean };
 
-/**
- * Rows changed by a conditional write. `rowsWritten` is a number in workerd;
- * the node test fake returns a bare array, so an explicit undefined reads as
- * 0 (no row updated) rather than failing open. Without this a lost race with
- * undefined `rowsWritten` would skip the miss below and report success.
- */
 function rowsUpdated(cursor: unknown): number {
   const rowsWritten = (cursor as { rowsWritten?: unknown }).rowsWritten;
   return typeof rowsWritten === 'number' ? rowsWritten : 0;
 }
 
-// `chunks_key` holds the upload's chunk list key.
 const schema = `CREATE TABLE IF NOT EXISTS job (
   job_id TEXT PRIMARY KEY, cache TEXT NOT NULL, cache_id TEXT NOT NULL, incarnation TEXT NOT NULL,
   chunks_key TEXT NOT NULL, state TEXT NOT NULL, manifest TEXT NOT NULL,
@@ -73,17 +61,6 @@ export class UploadStorage {
     };
   }
 
-  /**
-   * Atomically records a newly opened session: the job row, its lease, and
-   * every chunk's presence in one `transactionSync`. This is the only writer
-   * of new sessions (there is no separate bare insert); a crash between
-   * separate writes would leave a job row with no session. Returns false when
-   * the job row already exists. Callers hold the serialized queue across the
-   * pre-check and this insert with no awaits between, so false is unexpected;
-   * callers treat it defensively as a lost open race and report the winner's
-   * row instead of throwing (see `open`). Only a future writer bypassing the
-   * queue could produce it.
-   */
   insertOpen(
     input: {
       job_id: string;
@@ -163,12 +140,6 @@ export class UploadStorage {
     });
   }
 
-  /**
-   * Records the publish receipt, keeping the first `published_at` across
-   * retries. Reports whether it wrote via `wrote`: false means the row had
-   * already left `from` (a concurrent fail/abort won) and the caller must
-   * re-read instead of assuming the receipt was recorded.
-   */
   setResult(
     jobId: string,
     result: ProcessReceipt,
@@ -209,11 +180,6 @@ export class UploadStorage {
     return this.ctx.storage.transactionSync(() => {
       const row = this.row();
       if (!row) return false;
-      // Conditional like setState: a late fail() racing a concurrent
-      // publish must not clobber READY (or ABORTED) back to FAILED and
-      // leave a live index record. Only states that can reach `to` may
-      // write; a false return means the row moved on and the caller must
-      // re-read instead of assuming the failure was recorded.
       const allowed = (Object.keys(TRANSITIONS) as UploadState[]).filter(
         (from) => TRANSITIONS[from].includes(to),
       );
@@ -232,15 +198,6 @@ export class UploadStorage {
   }
 }
 
-/**
- * Every legal upload state change. The helpers above check the row they
- * actually update and assert the move, so an illegal transition throws
- * instead of silently stranding an upload in a state nothing reads, or
- * resurrecting a terminal one. Self-moves exist only where a retry
- * legitimately re-runs a step: the publish step re-runs setResult when it
- * finds the row already PUBLISHING, keeping the first published_at, and
- * concurrent failure paths may re-mark an already FAILED upload.
- */
 const TRANSITIONS: Record<string, readonly string[]> = {
   UPLOADING: ['COMPLETING', 'ABORTED', 'FAILED'],
   COMPLETING: ['QUEUED', 'PROCESSING', 'ABORTED', 'FAILED'],

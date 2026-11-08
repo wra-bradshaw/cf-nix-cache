@@ -20,11 +20,6 @@ function invalid(message: string): DomainError {
   return new DomainError('validation_failed', message, 422);
 }
 
-/**
- * Upload metadata rules that EncodedUploadRequestSchema cannot express: UTF-8 byte
- * limits, control characters, the store path/hash relation, and the total
- * metadata size. The manifest must already match the schema.
- */
 export function validateUploadManifest(manifest: UploadManifest): void {
   if (
     utf8Bytes(manifest.store_path) > 512 ||

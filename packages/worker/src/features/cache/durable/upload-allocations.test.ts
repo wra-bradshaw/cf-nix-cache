@@ -96,7 +96,6 @@ describe('in-flight uploads', () => {
     expect(
       value(await ledger.allocate({ ...request('b'), merge: false })),
     ).toMatchObject({ id: 'job1', merged: false });
-    // The first upload is still the one others join.
     expect(value(await ledger.allocate(request('c')))).toMatchObject({
       id: 'job0',
       merged: true,

@@ -129,7 +129,6 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
     return this.allocations.release(input);
   }
 
-  /** An early, non-binding quota check; publication reserves for real. */
   checkQuota(input: { delta: number }): Promise<RpcResult<void>> {
     return this.quota.check(input);
   }
@@ -165,7 +164,6 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
     return ok();
   }
 
-  /** Delivers every pending audit event; cache removal waits on this. */
   async flushAudit(): Promise<RpcResult<void>> {
     for (;;) {
       let depth: number;
@@ -183,9 +181,6 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
       try {
         drained = await this.audit.drain();
       } catch {
-        // drain's SELECT, DELETE, or alarm scheduling threw (storage error
-        // or poison-pill cleanup failure): fail closed so removal retries
-        // rather than trusting an unknown backlog as drained.
         return failure(
           'audit_unavailable',
           'audit log is unavailable; retry before removing the cache',

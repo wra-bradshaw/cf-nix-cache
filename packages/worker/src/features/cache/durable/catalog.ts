@@ -11,18 +11,12 @@ import { now } from '../../../shared/clock';
 import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
 
 function encodingId(value: string): CacheConfig['encoding_id'] {
-  // Allow-list from schemas/api.json (`encoding_id` const) and ENCODING_ID:
-  // only one chunking/compression scheme is deployed, so any other stored
-  // value is a corrupt catalog row, not a migration to preserve.
   if (value !== ENCODING_ID)
     throw new Error(`cache encoding ${value} is not a known encoding`);
   return value;
 }
 
 function publicFlag(value: number): boolean {
-  // SQLite has no boolean type: `public` is stored as 0/1. An allow-list
-  // keeps a corrupt 2/-1 from coercing to false via `=== 1`; any other
-  // integer throws so callers map it to `corrupt_catalog` 500.
   if (value === 1) return true;
   if (value === 0) return false;
   throw new Error(`cache public flag ${value} is not 0 or 1`);
@@ -64,10 +58,6 @@ export class SystemControl extends RpcOnlyDurableObject {
         'encoding_id is not a supported encoding',
         400,
       );
-    // Defense in depth: the HTTP schema already constrains quota_bytes, but
-    // direct RPC callers (workflows, tests) bypass it. A zero/negative quota
-    // would make every reservation fail, and an unsafe integer would corrupt
-    // the quota arithmetic, so reject here before any row is written.
     if (
       !Number.isSafeInteger(input.quota_bytes) ||
       input.quota_bytes < 1 ||
@@ -132,10 +122,6 @@ export class SystemControl extends RpcOnlyDurableObject {
         ),
       );
       if (existing) {
-        // A request can be lost after the catalogue row is committed but
-        // before the coordinator is initialized/activated. Treat a new
-        // request for the same name as a recovery attempt, while fencing it
-        // to the original creation configuration.
         let lifecycle: string;
         let existingId: string;
         try {
@@ -156,10 +142,6 @@ export class SystemControl extends RpcOnlyDurableObject {
             ),
           );
           try {
-            // The catalogue row and its creation config are written in one
-            // transaction, so a missing config row means the record is
-            // corrupt rather than a match: returning repeated:true here
-            // would let recovery proceed with unknown configuration.
             if (!config)
               return failure(
                 'corrupt_catalog',
@@ -244,10 +226,6 @@ export class SystemControl extends RpcOnlyDurableObject {
     }
   }
 
-  /**
-   * The configuration recorded when creation began, for a cache whose
-   * coordinator has not been initialized or has already been removed.
-   */
   async catalogueConfig(
     value: CacheReference,
   ): Promise<RpcResult<CacheConfig>> {
@@ -269,9 +247,6 @@ export class SystemControl extends RpcOnlyDurableObject {
         throw new Error('catalog lifecycle is not a known lifecycle');
       return ok({
         id: value.id,
-        // Authoritative: the stored name, not the caller-supplied
-        // `value.name`, so a stale or forged reference cannot rename the
-        // recovered config used by getCacheForDeletion.
         name: text(row, 'name'),
         public: publicFlag(integer(row, 'public')),
         quota_bytes: integer(row, 'quota_bytes'),
@@ -289,10 +264,6 @@ export class SystemControl extends RpcOnlyDurableObject {
 
   async activateCache(value: CacheReference): Promise<RpcResult<void>> {
     const result = this.ctx.storage.transactionSync(() => {
-      // rowsWritten is a number in workerd; the node test fake returns a bare
-      // array, so an explicit undefined reads as 0 (no row updated) rather
-      // than failing open. Without this a DELETING row with undefined
-      // rowsWritten would skip the 410 below and report success.
       const changed =
         (this.ctx.storage.sql.exec(
           "UPDATE caches SET lifecycle = 'ACTIVE' WHERE cache_id = ? AND incarnation = ? AND lifecycle = 'CREATING'",
@@ -308,9 +279,6 @@ export class SystemControl extends RpcOnlyDurableObject {
       );
       if (!row) return failure('not_found', 'cache not found', 404);
       try {
-        // changed === 0 with no ACTIVE row means DELETING: a CREATING row
-        // would have been updated above. Report 410 like the coordinator so
-        // deletion fencing reads the same code on both sides.
         if (text(row, 'lifecycle') !== 'ACTIVE' && changed === 0)
           return failure('cache_deleting', 'cache is being deleted', 410);
       } catch {
@@ -402,9 +370,6 @@ export class SystemControl extends RpcOnlyDurableObject {
           value.incarnation,
         ),
       );
-      // Removal is a retried workflow step. A lost response can cause the
-      // catalog mutation to be submitted again after it already committed;
-      // absence is therefore the desired idempotent result.
       if (!row) return ok();
       try {
         if (text(row, 'lifecycle') !== 'DELETING')
@@ -447,9 +412,6 @@ export class SystemControl extends RpcOnlyDurableObject {
   }): Promise<
     RpcResult<{ items: CacheReference[]; next_after: string | null }>
   > {
-    // Caller-supplied limits are validated, not clamped: silently clamping a
-    // mistyped limit would hide a caller bug, while a NaN limit would throw
-    // on the LIMIT bind instead of returning a usable error.
     if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100)
       return failure('invalid_limit', 'limit must be between 1 and 100', 400);
     if (input.after !== null && typeof input.after !== 'string')

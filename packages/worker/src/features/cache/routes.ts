@@ -57,9 +57,6 @@ cacheRoutes.post('/api/caches', async (c) => {
         input.upstream_cache_key_names ?? DEFAULT_UPSTREAM_CACHE_KEY_NAMES,
     }),
   );
-  // Activate the serving authority first. The catalogue remains CREATING
-  // until this succeeds, so a lost response leaves a state that a later
-  // create request can safely resume.
   const active = unwrapRpc(await cacheCoordinator.activate());
   unwrapRpc(await system(c.env).activateCache(reference));
   unwrapRpc(
@@ -87,8 +84,6 @@ cacheRoutes.get('/api/caches', async (c) => {
   const items = await Promise.all(
     page.items.map(async (reference) => {
       const result = await coordinator(c.env, reference).getCache();
-      // Interrupted creation and the end of teardown both leave a catalogue
-      // row without a coordinator. One such cache must not fail the whole page.
       if (!result.ok && result.error.code === 'not_found') {
         const config = await system(c.env).catalogueConfig(reference);
         return config.ok ? publicCache({ ...config.value, reference }) : null;
@@ -115,7 +110,6 @@ cacheRoutes.get('/api/caches/:name', async (c) => {
   return c.json(publicCache(cache));
 });
 
-// Pushers read this without the admin grant that the full configuration needs.
 cacheRoutes.get('/api/caches/:name/upstreams', async (c) => {
   const name = c.req.param('name');
   assertCacheName(name);
@@ -128,7 +122,6 @@ cacheRoutes.delete('/api/caches/:name', async (c) => {
   const operationId = idempotency(c.req.raw);
   const name = c.req.param('name');
   assertCacheName(name);
-  // Before the lookup, which may initialize an interrupted cache's coordinator.
   const admin = await authenticate(c.req.raw, c.env, name, 'admin');
   const cache = await getCacheForDeletion(c.env, name);
   const deletion = unwrapRpc(
@@ -169,7 +162,6 @@ cacheRoutes.patch('/api/caches/:name/config', async (c) => {
   assertCacheName(name);
   const cache = await getCache(c.env, name);
   const admin = await authenticate(c.req.raw, c.env, cache.name, 'admin');
-  // A change during CREATING would fence off that cache's own recovery.
   assertActive(cache);
   const input = parseJsonSchema(
     ConfigureCacheSchema,

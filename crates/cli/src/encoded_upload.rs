@@ -1,7 +1,3 @@
-//! Client-encoded uploads: the CLI chunks and compresses each NAR, the server
-//! says which chunks it lacks, and only those are sent. The server then checks
-//! the stored chunks and publishes the path.
-
 use crate::protocol::{
     contracts::api as contract, CacheName, EncodedCompleteBatchResponse,
     EncodedUploadBatchResponse, EncodedUploadResponse, UploadStateResponse, UploadStatus,
@@ -23,15 +19,11 @@ use std::{
 };
 use uuid::Uuid;
 
-/// Paths below this NAR size are one chunk, and are uploaded in batches.
 pub(crate) const BATCH_NAR_SIZE: u64 = CHUNK_MIN_SIZE as u64;
-/// Paths in one batch.
 pub(crate) const BATCH_PATHS: usize = 32;
-/// Chunks of one path uploaded at a time.
 const CHUNK_CONCURRENCY: usize = 6;
-/// Paths of one batch encoded at a time.
 const ENCODE_CONCURRENCY: usize = 8;
-/// Garbage collection closes the upload gate for minutes at most.
+/// GC holds the upload gate for minutes at most.
 const GATE_WAIT: Duration = Duration::from_secs(30 * 60);
 
 fn gate_closed(error: &anyhow::Error) -> bool {
@@ -74,9 +66,7 @@ async fn encode(path: &str, info: &PathInfo) -> Result<EncodedNar> {
     .await?
 }
 
-/// Opens an upload, waiting while garbage collection holds the upload gate.
-/// The idempotency key is kept across those waits, so a retry resumes the
-/// same upload.
+/// The idempotency key is kept across GC waits, so a retry resumes the same upload.
 async fn open<B: serde::Serialize, T: serde::de::DeserializeOwned>(
     api: &Api,
     path: &str,
@@ -95,7 +85,6 @@ async fn open<B: serde::Serialize, T: serde::de::DeserializeOwned>(
     }
 }
 
-/// Uploads one path's missing chunks and completes it.
 pub(crate) async fn upload_encoded(
     api: &Api,
     cache: &CacheName,
@@ -160,8 +149,7 @@ async fn finish(api: &Api, state: UploadStateResponse, path: &str, sent: usize) 
     Ok(())
 }
 
-/// Uploads several small paths in two requests: one to open them all, one to
-/// send their missing chunks and complete them. Returns each path's outcome.
+/// Uploads several small paths in two requests. Returns each path's outcome.
 pub(crate) async fn upload_encoded_batch(
     api: &Api,
     cache: &CacheName,

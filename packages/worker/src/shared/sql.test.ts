@@ -8,11 +8,6 @@ import {
   type SqlRow,
 } from './sql';
 
-/**
- * Fail-fast contract: helpers throw on null or mistyped columns instead of
- * coercing them (e.g. `String(null)` producing "null"), so corrupt rows
- * surface as errors rather than silent bad data.
- */
 describe('sql helpers fail fast on corrupt data', () => {
   it('text rejects null, numbers and missing columns', () => {
     expect(text({ name: 'cache' }, 'name')).toBe('cache');

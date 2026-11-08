@@ -8,7 +8,6 @@ function ledger(): GcLedger {
   return new GcLedger(
     {
       exec: <T>(query: string, ...args: unknown[]) => {
-        // Schema setup sends several statements, which prepare() rejects.
         if (args.length === 0 && query.trimEnd().split(';').length > 2) {
           db.exec(query);
           return [] as T[];
@@ -188,7 +187,6 @@ describe('leases', () => {
     value(gc.prepublish({ job_id: 'a', token: 't', manifest_key, now }));
     const expired = now + LEASE_TTL_SECONDS;
     value(gc.begin({ run_id, dry_run: false, now: expired }));
-    // The commit may still land, so draining must not forget this manifest.
     expect(value(gc.closeGate({ run_id, now: expired }))).toEqual({
       drained: true,
     });

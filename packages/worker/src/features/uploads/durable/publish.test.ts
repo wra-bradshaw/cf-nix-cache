@@ -115,10 +115,6 @@ describe('upload publication', () => {
 
     function statefulStorage() {
       let result: UploadRow['result'] = null;
-      // Tracks PROCESSING -> PUBLISHING so the strict post-setResult guard
-      // in publish() sees the upload as publishing. Stays in PUBLISHING
-      // here because the index prepare double fails, so READY is never
-      // reached and both attempts exercise the identical-mutation path.
       let state: UploadRow['state'] = 'PROCESSING';
       return {
         row: () => ({ ...row, state, result }),

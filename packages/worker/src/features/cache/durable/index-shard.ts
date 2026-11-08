@@ -279,10 +279,6 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
       );
       if (old) {
         try {
-          // prepare() and clear() share the index_operations primary key, so
-          // an id reused across mutation kinds must not read back as a
-          // clear result: a prepare row carries clear_deleted/clear_bytes
-          // defaults of 0/0. Reject the reuse instead of reporting 0/0.
           const kind = (json(old, 'mutation') as { kind?: unknown }).kind;
           if (kind !== 'clear')
             return conflict(
@@ -309,11 +305,6 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
       this.ctx.storage.sql.exec(
         "UPDATE index_operations SET status = 'ABORTED' WHERE status = 'PREPARED'",
       );
-      // COUNT(*) always returns exactly one row in SQLite: a missing row
-      // means the count itself is unreadable, so fail closed (corrupt) rather
-      // than reporting 0/0 and letting teardown proceed with unknown bytes.
-      // Uses first() (not .one()): .one() throws on an empty cursor, which
-      // would escape the transaction instead of returning corrupt_operation.
       const totals = first(
         this.ctx.storage.sql.exec<SqlRow>(
           'SELECT COUNT(*) AS count, COALESCE(SUM(file_size), 0) AS bytes FROM paths',
@@ -337,10 +328,6 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
           500,
         );
       }
-      // Compute before mutation: committedOperationIds() reads and parses
-      // rows, so a corrupt row must fail before DELETE/INSERT mutate state.
-      // Computing after mutation would commit the clear and then return
-      // corrupt_operation, leaving the shard cleared with no result.
       let reconcileIds: string[];
       try {
         reconcileIds = this.committedOperationIds();
@@ -368,11 +355,6 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
     });
   }
 
-  /**
-   * Index commits and quota finalization are separate durable operations.
-   * Teardown must finalize committed publications before debiting the shard.
-   * Returning historical IDs is safe because quota finalization is idempotent.
-   */
   private committedOperationIds(): string[] {
     return [
       ...this.ctx.storage.sql.exec<SqlRow>(
@@ -384,8 +366,6 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
   async touch(storeHash: string): Promise<RpcResult<void>> {
     this.ctx.storage.transactionSync(() =>
       this.ctx.storage.sql.exec(
-        // Throttled: this runs on every narinfo and push check, and retention
-        // is measured in days.
         'UPDATE paths SET last_accessed = ? WHERE store_hash = ? AND last_accessed < ?',
         now(),
         storeHash,
@@ -395,7 +375,6 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
     return ok();
   }
 
-  /** One page of the manifests that this shard's paths depend on. */
   async manifestKeys(input: {
     after: string | null;
     limit: number;
@@ -415,7 +394,6 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
     const keys: string[] = [];
     try {
       for (const row of rows.slice(0, limit)) {
-        // Garbage collection must not guess at what a path depends on.
         const storeHash = text(row, 'store_hash');
         let manifest: string;
         try {
@@ -444,11 +422,6 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
     }
   }
 
-  /**
-   * One page of paths unused since `before`. Paged by store hash, which never
-   * changes, so a path that cannot be evicted is passed over rather than seen
-   * again, and a concurrent touch cannot make the walk skip anything.
-   */
   async expiredPaths(input: {
     before: number;
     after: string | null;
@@ -481,9 +454,6 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
 }
 
 function preparedStatus(value: string): Prepared['status'] {
-  // Allow-list from PreparedMutation (`PREPARED`/`COMMITTED`/`ABORTED`): any
-  // other stored value is a corrupt row, not a migration to preserve. A bare
-  // `as Prepared['status']` cast would accept e.g. 'PREPARED ' or 'deleted'.
   if (value === 'PREPARED' || value === 'COMMITTED' || value === 'ABORTED')
     return value;
   throw new Error(`index operation status ${value} is not a known status`);

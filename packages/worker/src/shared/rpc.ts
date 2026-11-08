@@ -21,7 +21,6 @@ export function ok<T>(value?: T): RpcResult<T | undefined> {
   return { ok: true, value };
 }
 
-/** A retried operation whose inputs changed since it was first recorded. */
 export function conflict(code: string, message: string): RpcResult<never> {
   return failure(code, message, 409);
 }
@@ -45,7 +44,6 @@ export function idStub<T extends Rpc.DurableObjectBranded>(
   );
 }
 
-/** An RPC failure rethrown in the Worker so `handleError` can render it. */
 export class ApiCallError extends Error {
   constructor(
     readonly status: number,

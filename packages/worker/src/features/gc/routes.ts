@@ -9,7 +9,6 @@ import { auditEvent } from '../audit/event';
 
 export const gcRoutes = new Hono<AppEnv>();
 
-/** Workflow instance IDs allow fewer characters than idempotency keys. */
 async function runIdFor(operationId: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     'SHA-256',

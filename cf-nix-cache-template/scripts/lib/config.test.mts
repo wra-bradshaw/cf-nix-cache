@@ -105,9 +105,6 @@ test("a low top-level limit is short even when an environment overrides it", () 
 });
 
 test("an environment that sets limits without cpu_ms must set it explicitly", () => {
-  // Wrangler replaces (not merges) the limits object per environment, so an
-  // env `limits` without `cpu_ms` would deploy without the upload budget even
-  // though the top level sets it. See workers-sdk#8756.
   const config = validConfig();
   config.env = { preview: { limits: { subrequests: 100 } } };
   assert.match(cpuLimitsProblem(config) ?? "", /preview/);
@@ -432,7 +429,6 @@ test("observability is warned per scope but stays out of check", () => {
       problem.includes("observability.enabled should be true"),
     ),
   );
-  // Doctor-only: check stays green when only observability is off.
   assert.deepEqual(configProblems(disabled), []);
 
   const inherited = validConfig();
@@ -751,9 +747,6 @@ test("expected workflows and bindings match the template wrangler.jsonc", async 
   }
 });
 
-// The Worker source only exists in the monorepo checkout; the standalone
-// template repository (which also runs this test file) skips this part and
-// still checks the lists against its own wrangler.jsonc above.
 const workerIndexPath = join(
   templateDirectory,
   "..",

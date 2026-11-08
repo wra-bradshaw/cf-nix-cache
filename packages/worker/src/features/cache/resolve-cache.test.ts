@@ -30,7 +30,6 @@ const config: CacheConfig = {
   upstream_cache_key_names: [],
 };
 
-/** A catalogue row whose coordinator exists only once initialized. */
 function environment(lifecycle: CacheReference['lifecycle']) {
   let initialized = false;
   const initialize = vi.fn(async () => {
@@ -79,8 +78,6 @@ describe('resolving a cache for deletion', () => {
 });
 
 describe('the effective lifecycle', () => {
-  // SystemControl is the lifecycle saga authority: it leads the coordinator
-  // by one step during activation and teardown, so its fence wins.
   it.each([
     ['DELETING', 'ACTIVE', 'DELETING'],
     ['ACTIVE', 'DELETING', 'DELETING'],

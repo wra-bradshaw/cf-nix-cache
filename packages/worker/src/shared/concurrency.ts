@@ -1,4 +1,3 @@
-/** Runs `task` over `items`, at most `limit` at a time, keeping their order. */
 export async function mapLimit<T, R>(
   items: readonly T[],
   limit: number,

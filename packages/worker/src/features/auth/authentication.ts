@@ -31,10 +31,7 @@ async function assertActive(env: Env, claims: TokenClaims): Promise<void> {
   try {
     const cached = await caches.default.match(key);
     if (cached) return;
-  } catch {
-    // Cache API availability is runtime-dependent; the catalog remains the
-    // authoritative fallback.
-  }
+  } catch {}
 
   const result = await namedStub(env.TOKEN_CATALOG, 'catalog').check({
     jti: claims.jti,
@@ -57,9 +54,7 @@ async function assertActive(env: Env, claims: TokenClaims): Promise<void> {
         ),
       )
       .catch(() => undefined);
-  } catch {
-    // Best-effort acceleration only; never make authentication depend on it.
-  }
+  } catch {}
 }
 
 export async function authenticateAny(

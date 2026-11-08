@@ -57,8 +57,6 @@ export function gcPorts(env: Env, runId: string): GcPorts {
         );
         const caches: DurableGcCache[] = [];
         for (const reference of references) {
-          // Once deleting, a cache never serves again, so its paths must not
-          // keep objects alive.
           if (reference.lifecycle === 'DELETING') continue;
           const config = unwrapRpc(
             await coordinator(env, reference).getCache(),
@@ -96,8 +94,6 @@ export function gcPorts(env: Env, runId: string): GcPorts {
           );
           return true;
         } catch (error) {
-          // A conflicting publication or a cache going away. The next run
-          // reconsiders the path; anything else fails this step and retries.
           if (
             error instanceof PublicationError &&
             (!error.retryable || error.code === MUTATION_IN_PROGRESS)

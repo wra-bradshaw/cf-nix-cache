@@ -3,8 +3,6 @@ import { fail } from "./fail.mts";
 export function workerUrl(deploymentOutput = ""): string | undefined {
   const configured = process.env.CF_NIX_CACHE_URL?.replace(/\/$/, "");
   if (configured) return configured;
-  // A workers.dev hostname contains the account subdomain, which only the
-  // deployment output (or the operator, via CF_NIX_CACHE_URL) knows.
   return deploymentOutput.match(/https:\/\/[^\s'"`]+\.workers\.dev/)?.[0];
 }
 

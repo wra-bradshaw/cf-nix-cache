@@ -7,14 +7,12 @@ import { gcPorts } from './gc-adapters';
 import { runGarbageCollection } from './garbage-collection';
 import type { GcJob } from './types';
 
-/** Runs on the configured schedule, or on request through `POST /api/gc`. */
 export class GarbageCollectWorkflow extends WorkflowEntrypoint<Env, GcJob> {
   async run(event: WorkflowEvent<GcJob>, step: WorkflowStep) {
     const result = await runGarbageCollection(
       {
         run_id: event.instanceId,
         now: Math.floor(event.timestamp.getTime() / 1000),
-        // A scheduled instance has no payload.
         job: event.payload ?? {},
       },
       gcPorts(this.env, event.instanceId),

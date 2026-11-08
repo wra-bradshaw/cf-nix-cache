@@ -11,8 +11,6 @@ import { InvalidEncodingError } from './verifier';
 
 class PermanentWorkflowError extends Error {}
 
-// Reprocessing only follows a lease that outlived its long TTL, so repeating
-// this often means something is wrong. Leave the job restartable.
 const MAX_LEASE_ATTEMPTS = 5;
 
 export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
@@ -34,8 +32,6 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
         return { ok: true };
       });
       for (let attempt = 0; attempt < MAX_LEASE_ATTEMPTS; attempt += 1) {
-        // Processing may reuse existing objects, so garbage collection has to
-        // know about this upload before the first one is looked at.
         const token = await this.acquireLease(step, job.job_id, attempt);
         leaseToken = token;
         const suffix = attempt === 0 ? '' : ` (attempt ${attempt + 1})`;
@@ -43,9 +39,6 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
           `process NAR${suffix}`,
           {
             retries: { limit: 4, delay: '30 seconds', backoff: 'exponential' },
-            // Verification runs here, in the Worker: about 6.4 ms of CPU per
-            // MiB at worst, so a 10 GiB NAR takes about 66 s of the 300 s
-            // that `limits.cpu_ms` allows a step. See docs/COST_PLAN.md.
             timeout: '30 minutes',
           },
           async () => {
@@ -54,8 +47,6 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
                 result: await processUpload(this.env.CACHE_BUCKET, job),
               } as const;
             } catch (error) {
-              // Only invalid content is permanent; anything else, such as an
-              // R2 failure, is retried.
               if (error instanceof InvalidEncodingError)
                 return { permanent_error: error.message } as const;
               throw error;
@@ -78,8 +69,6 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
             if (!lease.ok)
               throw new Error(`${lease.error.code}: ${lease.error.message}`);
             if (!lease.value.valid) {
-              // This may be a retry after a publication whose response was
-              // lost, in which case there is nothing left to redo.
               const current = await upload.state();
               if (current.ok && current.value.status === 'READY')
                 return { published: true } as const;
@@ -119,8 +108,6 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
           leaseToken,
           'release gc lease after failure',
         );
-      // Transient failures leave the job in its current state so the workflow
-      // can be restarted; only permanent ones are recorded as FAILED.
       if (caught instanceof PermanentWorkflowError)
         await step.do('mark failed', async () => {
           const result = await upload.fail(caught.message);
@@ -134,7 +121,6 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
     }
   }
 
-  /** Waits out a closed upload gate, which garbage collection holds briefly. */
   private async acquireLease(
     step: WorkflowStep,
     jobId: string,
@@ -157,7 +143,6 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
     }
   }
 
-  /** Best-effort: an unreleased lease only delays a sweep until it expires. */
   private async releaseLease(
     step: WorkflowStep,
     jobId: string,

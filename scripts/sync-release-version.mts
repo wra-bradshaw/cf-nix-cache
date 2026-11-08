@@ -42,8 +42,6 @@ await writeFile(
   `${JSON.stringify(templatePackage, null, 2)}\n`,
 );
 
-// The Rust crates share the workspace version, which the CLI reports. The
-// workspace hack keeps its own version.
 const rustCrates = /(name = "cf-nix-cache(?:-core|-contracts|-verify)?"\nversion = )"[^"]+"/g;
 const edits: [string, (source: string) => string][] = [
   [

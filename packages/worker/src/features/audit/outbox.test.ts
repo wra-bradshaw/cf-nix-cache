@@ -5,7 +5,6 @@ import { AuditOutbox } from './outbox';
 
 type Row = { event_id: unknown; event: unknown; created_at: number };
 
-/** Just enough of DurableObjectState for the outbox's own statements. */
 function fakeState() {
   const rows = new Map<number, Row>();
   let nextRowId = 1;
@@ -116,8 +115,6 @@ describe('audit outbox', () => {
   it('deletes a row with a corrupt event_id by rowid instead of re-reading it', async () => {
     const state = fakeState();
     const delivered: string[] = [];
-    // Hold delivery so the row survives long enough to corrupt it: the stub
-    // reports the log as down for the first drain only.
     const available = { value: false };
     const outbox = new AuditOutbox(
       state.ctx,
@@ -134,14 +131,11 @@ describe('audit outbox', () => {
     outbox.enqueue(event('good'));
     await Promise.all(state.background);
     expect(outbox.pending()).toBe(1);
-    // Corrupt the stored row key directly: it can never be delivered or
-    // deleted by event_id, so the drain must remove it by rowid.
     for (const row of state.rows.values()) row.event_id = null;
     await outbox.drain();
     expect(state.rows.size).toBe(0);
     expect(outbox.pending()).toBe(0);
     expect(delivered).toEqual([]);
-    // A second drain must not re-read the poison pill.
     await outbox.drain();
     expect(outbox.pending()).toBe(0);
     expect(delivered).toEqual([]);

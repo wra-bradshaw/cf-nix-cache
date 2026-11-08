@@ -14,8 +14,6 @@ export function effectiveLifecycle(
   catalogue: CacheReference['lifecycle'],
   coordinatorLifecycle: CacheConfig['lifecycle'],
 ): CacheConfig['lifecycle'] {
-  // DELETING is a safety fence and wins over stale cache entries; CREATING
-  // also wins over ACTIVE so activation cannot become visible early.
   if (catalogue === 'DELETING' || coordinatorLifecycle === 'DELETING')
     return 'DELETING';
   if (catalogue === 'CREATING' || coordinatorLifecycle === 'CREATING')
@@ -32,8 +30,6 @@ async function directoryReference(
     const cached = await caches.default.match(key);
     if (cached) return (await cached.json()) as CacheReference;
   } catch {
-    // The Cache API is unavailable in some local/unit runtimes; the Durable
-    // Object remains the authoritative fallback.
   }
 
   const reference = unwrapRpc(await system(env).getCache(name));
@@ -47,7 +43,6 @@ async function directoryReference(
       )
       .catch(() => undefined);
   } catch {
-    // Best-effort acceleration only; never make routing depend on the cache.
   }
   return reference;
 }
@@ -56,8 +51,6 @@ export async function getCache(env: Env, name: string): Promise<CacheState> {
   assertCacheName(name);
   let reference = await directoryReference(env, name);
   let configResult = await coordinator(env, reference).getCache();
-  // A short-lived directory entry can point at a completed deletion. Refresh
-  // once so a cache recreated with the same name is routed to its incarnation.
   if (!configResult.ok && configResult.error.code === 'not_found') {
     reference = unwrapRpc(await system(env).getCache(name));
     configResult = await coordinator(env, reference).getCache();
@@ -65,19 +58,11 @@ export async function getCache(env: Env, name: string): Promise<CacheState> {
   const config = unwrapRpc(configResult);
   return {
     ...config,
-    // SystemControl is the lifecycle saga authority. During activation and
-    // teardown it may intentionally lead the coordinator by one step.
     lifecycle: effectiveLifecycle(reference.lifecycle, config.lifecycle),
     reference,
   };
 }
 
-/**
- * Resolves a cache that is about to be deleted. Creation can be interrupted
- * before its coordinator exists, which getCache reports as not_found, so the
- * coordinator is initialized from the catalogue to let teardown run normally.
- * A DELETING cache without a coordinator is left for its running workflow.
- */
 export async function getCacheForDeletion(
   env: Env,
   name: string,
@@ -129,7 +114,6 @@ export async function getPath(
   return unwrapRpc(await shard.lookup(storeHash));
 }
 
-/** Records use of a path, which holds off retention. Failure is only logged. */
 export async function touchPath(
   env: Env,
   cache: CacheState,

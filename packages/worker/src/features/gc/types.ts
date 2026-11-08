@@ -7,5 +7,4 @@ import type {
 export type GcActiveRun = GeneratedActiveRun;
 export type GcPhase = GcActiveRun['phase'];
 export type GcSummary = GeneratedSummary;
-/** Empty for a scheduled run. */
 export type GcJob = GcRunRequest;

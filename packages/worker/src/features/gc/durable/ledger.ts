@@ -2,15 +2,7 @@ import type { GcActiveRun, GcPhase, GcSummary } from '../types';
 import { type RpcResult, failure, ok } from '../../../shared/rpc';
 import { first, type SqlRow, integer, json, text } from '../../../shared/sql';
 
-/**
- * Longest a run may go without calling the ledger before it loses the gate.
- * A dead run can therefore block uploads for at most this long.
- */
 export const RUN_TTL_SECONDS = 30 * 60;
-/**
- * Must exceed the worst-case process and publish time, including step retries.
- * A lease that outlives this is fenced and its upload is processed again.
- */
 export const LEASE_TTL_SECONDS = 2 * 60 * 60;
 
 const PERMANENT_SCHEMA = `CREATE TABLE IF NOT EXISTS gc_run (
@@ -36,21 +28,7 @@ interface Sql {
   exec<T extends SqlRow>(query: string, ...bindings: unknown[]): Iterable<T>;
 }
 
-/**
- * Coordinates mark-and-sweep with uploads.
- *
- * Content-addressed writes are deduplicated: an upload that finds a chunk or
- * manifest already present reuses it. An unreferenced object can therefore
- * become referenced with no new write, so object age alone cannot show that it
- * is safe to delete. This ledger closes that race:
- *
- * - An upload holds a lease from before processing until after publication.
- * - A manifest about to be published is recorded on the lease and marked if a
- *   run is active, so it survives even if the mark walk has passed its shard.
- * - Deletion starts only once the gate is closed and every lease has ended. No
- *   upload can then be relying on an object it saw earlier.
- * - An expired lease fails `prepublish`, so its upload is processed again.
- */
+// Leases cover dedup-reused objects with no new write; deletion waits for gate + lease drain.
 export class GcLedger {
   constructor(
     private readonly sql: Sql,
@@ -69,7 +47,6 @@ export class GcLedger {
     return run && integer(run, 'deadline') > now ? run : undefined;
   }
 
-  /** Validates the caller still owns the run, and extends its deadline. */
   private owned(
     runId: string,
     now: number,
@@ -101,7 +78,6 @@ export class GcLedger {
     this.sql.exec(WORKING_SCHEMA);
   }
 
-  /** Marks manifests of expired leases, then removes those leases. */
   private retireExpiredLeases(now: number): void {
     this.sql.exec(
       'INSERT OR IGNORE INTO gc_marks (key, expanded) SELECT manifest_key, 0 FROM gc_leases WHERE expires_at <= ? AND manifest_key IS NOT NULL',
@@ -140,8 +116,6 @@ export class GcLedger {
           input.now,
           input.dry_run ? 1 : 0,
         );
-        // A lease that was prepublished before this run may not have committed
-        // yet, so the mark walk cannot be relied on to see its manifest.
         this.sql.exec(
           'INSERT OR IGNORE INTO gc_marks (key, expanded) SELECT manifest_key, 0 FROM gc_leases WHERE manifest_key IS NOT NULL',
         );
@@ -181,15 +155,6 @@ export class GcLedger {
     });
   }
 
-  /**
-   * One page of unexpanded marks for the workflow to expand.
-   *
-   * Internal-only walk: `limit` is a fixed constant chosen by the GC workflow
-   * (MANIFESTS_PER_STEP in garbage-collection.ts), never caller-supplied HTTP
-   * input. Clamp into range per the sql.ts limit policy instead of returning
-   * `invalid_limit` 400; `Math.trunc(...) || 1` intentionally coerces NaN, 0,
-   * and negatives to 1 rather than failing the run.
-   */
   pendingManifests(input: {
     run_id: string;
     limit: number;
@@ -218,7 +183,6 @@ export class GcLedger {
     });
   }
 
-  /** Records a manifest's chunks as live, and the manifest as processed. */
   expand(input: {
     run_id: string;
     manifests: { key: string; chunk_keys: string[] }[];
@@ -234,10 +198,7 @@ export class GcLedger {
               'INSERT INTO gc_marks (key, expanded) VALUES (?, 1) ON CONFLICT (key) DO UPDATE SET expanded = 1',
               key,
             );
-          // Upsert (not a bare UPDATE): a manifest expanded without a prior
-          // mark (late prepublish, recovery replay) must still read as
-          // processed, otherwise a later addMarks would re-queue it as
-          // unexpanded and the walk would never converge.
+          // Upsert so late marks still read as processed.
           this.sql.exec(
             'INSERT INTO gc_marks (key, expanded) VALUES (?, 1) ON CONFLICT (key) DO UPDATE SET expanded = 1',
             manifest.key,
@@ -318,11 +279,6 @@ export class GcLedger {
     });
   }
 
-  /**
-   * Blocks new uploads and reports whether all active leases have ended.
-   * Once this returns true, no upload can touch content-addressed objects
-   * until the run finishes or expires.
-   */
   closeGate(input: {
     run_id: string;
     now: number;
@@ -377,18 +333,7 @@ export class GcLedger {
     });
   }
 
-  /**
-   * The next objects that are safe to delete. Ordered descending so that
-   * `manifests/` precede `chunks/`: an interrupted sweep must never leave a
-   * manifest whose chunks are gone, because a later upload of that NAR would
-   * trust the manifest and publish a path that cannot be served.
-   *
-   * Internal-only walk: `limit` is a fixed constant chosen by the GC workflow
-   * (R2_BATCH in garbage-collection.ts), never caller-supplied HTTP input.
-   * Clamp into range per the sql.ts limit policy instead of returning
-   * `invalid_limit` 400; `Math.trunc(...) || 1` intentionally coerces NaN, 0,
-   * and negatives to 1 rather than failing the run.
-   */
+  // DESC deletes manifests before chunks.
   nextDeletions(input: {
     run_id: string;
     limit: number;
@@ -444,13 +389,11 @@ export class GcLedger {
     });
   }
 
-  /** Ends the run, opens the gate and records the summary. */
   finish(summary: GcSummary): RpcResult<void> {
     return this.transaction(() => {
       let run: SqlRow | undefined;
       try {
         run = this.row();
-        // A superseded run must not disturb the run that replaced it.
         if (!run || text(run, 'run_id') !== summary.run_id) return ok();
       } catch {
         return failure(
@@ -512,11 +455,7 @@ export class GcLedger {
     });
   }
 
-  /**
-   * Must succeed immediately before a manifest is published. When it reports
-   * the lease as invalid, objects seen during processing may have been swept,
-   * so the upload has to be processed again.
-   */
+  // Invalid lease means objects may have been swept; reprocess.
   prepublish(input: {
     job_id: string;
     token: string;
@@ -595,31 +534,7 @@ export class GcLedger {
     });
   }
 
-  /**
-   * Best-effort observability for `GET /api/gc`. Corrupt rows surface as
-   * missing (with a warn) rather than failing the endpoint, and set
-   * `corrupt: true` so a dashboard does not mistake a wedged ledger for an
-   * idle one: the control plane (`begin`/`owned`) still returns
-   * `corrupt_gc_state` 500 so gate safety is unaffected, and a corrupt
-   * summary is overwritten by the next finished run. The shape stays
-   * compatible: `corrupt` is an optional addition to `GcStatusResponse`.
-   *
-   * Operator runbook when `corrupt: true`:
-   * - The ledger has no self-heal: a corrupt row is never auto-deleted
-   *   because the gate (`begin`/`owned`) must not guess at run ownership.
-   * - Corrupt summary only (`last_run` missing): no action needed; the next
-   *   successful `finish()` overwrites `gc_last_run`. To clear it now,
-   *   `DELETE FROM gc_last_run WHERE key = 1` inside the GcLedger
-   *   transaction.
-   * - Corrupt run (`active_run` missing while a run should be live, or every
-   *   GC call returns `corrupt_gc_state`): inspect the warn logs for the
-   *   failing column, then clear the single-row gate with
-   *   `DELETE FROM gc_run WHERE key = 1` plus `DROP TABLE gc_marks` /
-   *   `gc_candidates` (recreated as empty by `resetWorkingTables` on the
-   *   next `begin`). Do not delete `gc_leases`: active upload leases must
-   *   expire or be released, otherwise a new run could sweep objects an
-   *   upload is still processing.
-   */
+  // Corrupt rows read as missing with corrupt:true; gate still fails closed.
   status(now: number): {
     active_run?: GcActiveRun;
     last_run?: GcSummary;
@@ -630,8 +545,6 @@ export class GcLedger {
     try {
       run = this.liveRun(now);
     } catch (error) {
-      // A corrupt run record reads as no live run here; `begin`/`owned`
-      // still reject corrupt state for the gate itself.
       corrupt = true;
       console.warn({
         message: 'ignoring corrupt garbage collection run record',
@@ -641,9 +554,6 @@ export class GcLedger {
     }
     const lastRow = (() => {
       try {
-        // The SELECT itself is inside the same try as the JSON parse: in a
-        // best-effort status read a storage throw must surface as
-        // corrupt:true with a warn, not escape the endpoint.
         const row = first(
           this.sql.exec<SqlRow>(
             'SELECT summary FROM gc_last_run WHERE key = 1',
@@ -652,8 +562,6 @@ export class GcLedger {
         if (!row) return undefined;
         return json<GcSummary>(row, 'summary');
       } catch (error) {
-        // A corrupt summary must not hide the active run; it surfaces as
-        // missing and is overwritten by the next finished run.
         corrupt = true;
         console.warn({
           message: 'ignoring corrupt garbage collection summary',
@@ -695,9 +603,6 @@ function gcPhase(value: string): GcPhase {
 }
 
 function dryRunFlag(value: number): boolean {
-  // SQLite has no boolean type: `dry_run` is stored as 0/1. An allow-list
-  // keeps a corrupt 2/-1 from coercing to false via `=== 1`; any other
-  // integer throws so callers map it to `corrupt_gc_state` 500.
   if (value === 1) return true;
   if (value === 0) return false;
   throw new Error(`gc dry_run flag ${value} is not 0 or 1`);

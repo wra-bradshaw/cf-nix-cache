@@ -1,6 +1,3 @@
-//! `push`: uploads the closure of some installables, skipping paths the server
-//! already has and, by default, paths signed by the cache's upstream caches.
-
 use crate::protocol::{
     contracts::{api as contract, responses::CacheUpstreamsResponse},
     CacheName, MissingPathsResponse, UploadStatus,
@@ -101,9 +98,7 @@ pub(super) async fn push(
 
 enum Work {
     One(String, PathInfo),
-    /// Small paths that are uploaded together.
     Batch(Vec<(String, PathInfo)>),
-    /// A path another push is uploading.
     Wait(String, PathInfo, String),
 }
 
@@ -131,21 +126,17 @@ struct Context {
 }
 
 impl Context {
-    /// Every failure, one per path.
     async fn run(&self, work: Work) -> Vec<anyhow::Error> {
         match work {
             Work::One(path, info) => self.one(&path, &info).await.err().into_iter().collect(),
             Work::Batch(items) => self.batch(items).await,
-            Work::Wait(path, info, id) => {
-                match wait_for_state(&self.api, &id, &path).await {
-                    Ok(state) if state.status == UploadStatus::Ready => {
-                        println!("uploaded {path} (by another push)");
-                        Vec::new()
-                    }
-                    // The other push failed, or its upload is gone: do it here.
-                    _ => self.one(&path, &info).await.err().into_iter().collect(),
+            Work::Wait(path, info, id) => match wait_for_state(&self.api, &id, &path).await {
+                Ok(state) if state.status == UploadStatus::Ready => {
+                    println!("uploaded {path} (by another push)");
+                    Vec::new()
                 }
-            }
+                _ => self.one(&path, &info).await.err().into_iter().collect(),
+            },
         }
     }
 
@@ -166,7 +157,7 @@ impl Context {
                 }
                 return failures;
             }
-            // One bad path fails a whole batch; find it by going one by one.
+            // One bad path fails a whole batch; retry one by one.
             Err(error) => {
                 eprintln!("batch upload failed, retrying its paths one by one: {error:#}")
             }
@@ -191,9 +182,7 @@ async fn upstream_key_names(api: &Api, cache: &CacheName) -> Result<Vec<String>>
         .collect())
 }
 
-/// Runs `task` over `items` with at most `limit` running at once. A failure
-/// does not stop the remaining items, since every completed upload is progress
-/// that a retry does not have to repeat. Returns the errors.
+/// A failure does not stop the rest; every completed upload saves a retry.
 async fn run_concurrently<T, F, Fut>(
     items: Vec<T>,
     limit: NonZeroUsize,

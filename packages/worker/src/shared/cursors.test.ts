@@ -9,8 +9,6 @@ describe('pagination cursors', () => {
   });
 
   it('matches the unpadded base64 token cursors issued before', () => {
-    // ASCII JSON never produces the 6-bit groups that differ between
-    // base64 and base64url, so released cursors stay byte-identical.
     const value = {
       issued_at: 1_767_225_600,
       jti: '0123456789abcdef0123456789abcdef',

@@ -1,7 +1,3 @@
-// Finalizes the release manifest and the template's pinned dependency for the
-// version Changesets just wrote to packages/worker/package.json. Runs inside
-// the Release PR job after `changeset version`, so the version PR is complete
-// and merging it publishes the release.
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,8 +22,6 @@ const version = packageJson.version;
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
   throw new Error(`invalid semver version: ${version}`);
 
-// An explicit --version guards against preparing a different release than
-// the one Changesets versioned.
 const versionIndex = process.argv.indexOf("--version");
 if (versionIndex >= 0) {
   const expected = process.argv[versionIndex + 1];

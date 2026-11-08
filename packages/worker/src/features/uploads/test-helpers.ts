@@ -1,6 +1,5 @@
 const encoder = new TextEncoder();
 
-/** A NAR holding one file, serialized the way `nix-store --dump` writes it. */
 export function narOfFile(contents: Uint8Array): Uint8Array {
   const out: number[] = [];
   for (const field of [

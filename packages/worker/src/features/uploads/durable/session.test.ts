@@ -7,12 +7,6 @@ import { narOfFile } from '../test-helpers';
 
 const encoder = new TextEncoder();
 
-/**
- * The client-encoded upload flow through real Durable Objects and R2, which
- * is also what the unit tests of the pieces cannot see: session and storage
- * parsing, the upload state machine, the publication protocol, and NAR
- * verification. Each test file gets isolated storage.
- */
 async function setupCache(name: string, tag: string) {
   const system = env.SYSTEM_CONTROL.getByName('system');
   const created = await system.createCache({
@@ -220,7 +214,6 @@ describe('upload session flow through real DOs', () => {
     expect(unknown.ok).toBe(false);
     if (unknown.ok) throw new Error('expected unknown_chunk failure');
     expect(unknown.error.code).toBe('unknown_chunk');
-    // The known chunk is still accepted.
     await env.CACHE_BUCKET.put(
       chunkKey(rawHash),
       new Uint8Array(zstdCompressSync(narOfFile(encoder.encode('hello unknown1')))),

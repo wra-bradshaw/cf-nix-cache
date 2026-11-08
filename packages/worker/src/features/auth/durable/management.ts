@@ -111,9 +111,6 @@ export class TokenManagement {
     const items = (() => {
       try {
         return rows.slice(0, input.limit).map((row) => {
-          // Allow-list the stored 0/1 before toTokenSummary: its
-          // `=== 1` check would coerce a corrupt 2 to "not revoked".
-          // Throwing here maps to `corrupt_token` 500 below.
           revokedFlag(integer(row, 'revoked'));
           return toTokenSummary(row);
         });
@@ -140,10 +137,6 @@ export class TokenManagement {
 }
 
 function revokedFlag(value: number): boolean {
-  // SQLite has no boolean type: `revoked` is stored as 0/1. An allow-list
-  // keeps a corrupt 2/-1 from coercing (=== 0 reads 2 as revoked, === 1
-  // reads 2 as active); any other integer throws so callers map it to
-  // `corrupt_token` 500.
   if (value === 1) return true;
   if (value === 0) return false;
   throw new Error(`token revoked flag ${value} is not 0 or 1`);

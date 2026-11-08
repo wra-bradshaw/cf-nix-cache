@@ -1,8 +1,4 @@
-//! The WebAssembly interface, kept to plain integers and pointers so the
-//! Worker needs no generated bindings (see `packages/worker/src/features/
-//! uploads/verifier.ts`). JavaScript writes a chunk into the handle's input
-//! buffer, calls a function, and reads the handle's output buffer: the decoded
-//! chunk on success (status 0), a UTF-8 message for invalid content (status 1).
+//! Plain-integer wasm interface: status 0 is the decoded chunk, 1 is a UTF-8 message.
 
 use crate::{Invalid, Verifier, CHUNK_MAX_COMPRESSED_SIZE};
 
@@ -26,18 +22,7 @@ impl Handle {
 
 /// # Safety
 /// Every `handle` below must come from `verifier_new` and not yet be freed.
-/// A null handle is rejected without dereferencing it: functions returning a
-/// pointer return null, `verifier_output_len` returns the length of
-/// [`NULL_HANDLE_MESSAGE`], `verifier_free` does nothing, and
-/// `verifier_chunk`/`verifier_finish` return 1 (invalid content) so the
-/// caller treats it as a clean error rather than trapping on undefined
-/// behavior. The output functions report [`NULL_HANDLE_MESSAGE`] for a null
-/// handle (there is no handle to store a message in), so a null handle still
-/// yields a distinct message instead of an empty one. The TypeScript wrapper
-/// (`verifier.ts`) maps that distinct empty-output path to a retryable
-/// `Error` rather than `InvalidEncodingError`: a null handle is a
-/// wrapper/wasm mismatch, not unacceptable content (and is unreachable
-/// through the wrapper, whose constructor rejects a null `verifier_new`).
+/// Null is rejected without dereferencing it.
 unsafe fn handle<'a>(handle: *mut Handle) -> Option<&'a mut Handle> {
     if handle.is_null() {
         None
@@ -46,10 +31,6 @@ unsafe fn handle<'a>(handle: *mut Handle) -> Option<&'a mut Handle> {
     }
 }
 
-/// Reported through `verifier_output`/`verifier_output_len` when a null
-/// handle reaches `verifier_chunk`/`verifier_finish`. There is no handle to
-/// store a message in, so it lives in a static buffer; without it a null
-/// handle would surface as an empty message.
 static NULL_HANDLE_MESSAGE: &[u8] = b"verifier is not initialized";
 
 #[no_mangle]
@@ -71,23 +52,9 @@ pub unsafe extern "C" fn verifier_free(handle: *mut Handle) {
     drop(Box::from_raw(handle));
 }
 
-/// Sizes the input buffer for a chunk of `len` bytes and returns where to
-/// write it, or null when `len` is 0 or exceeds
-/// `CHUNK_MAX_COMPRESSED_SIZE` (a null handle also yields null; see
-/// [`handle`]). Empty input is rejected here so a
-/// zero-length write cannot produce an empty-`Vec` dangling pointer, and
-/// oversize input is rejected before any allocation. Both cases
-/// intentionally report null through the same pointer: the FFI has no other
-/// error channel here (returning distinct sentinels would change the stable
-/// ABI for no behavioral gain, since the lengths are already known to the
-/// caller). The caller must therefore treat null as "empty or too large"
-/// and check the length itself to tell them apart (see `verifier.ts`, whose
-/// pre-check rejects empty and oversize input with distinct messages before
-/// reaching wasm, and whose `nullInputMessage` names the two cases, so its
-/// direct callers never see null for empty input).
-/// Direct users of this wasm interface bypassing `verifier.ts` see null for
-/// either case and must check the length they passed in (0 means empty,
-/// otherwise too large) to disambiguate.
+/// Returns where to write `len` bytes, or null for empty, oversize, or
+/// null-handle input. Null covers both empty and too large, so check `len`
+/// to tell them apart.
 ///
 /// # Safety
 /// See [`handle`]. The pointer is valid until the next call on the handle.
@@ -103,9 +70,6 @@ pub unsafe extern "C" fn verifier_input(handle: *mut Handle, len: usize) -> *mut
     handle.input.as_mut_ptr()
 }
 
-/// Decodes the chunk in the input buffer into the output buffer. With
-/// `whole_nar` set it is also the next chunk of the NAR.
-///
 /// # Safety
 /// See [`handle`].
 #[no_mangle]
@@ -129,7 +93,7 @@ pub unsafe extern "C" fn verifier_chunk(
     handle.respond(result)
 }
 
-/// Ends the NAR, which must be complete. Output: its size, as a u64 LE.
+/// Output is the NAR size as u64 LE.
 ///
 /// # Safety
 /// See [`handle`].
@@ -138,10 +102,7 @@ pub unsafe extern "C" fn verifier_finish(handle: *mut Handle) -> u32 {
     let Some(handle) = self::handle(handle) else {
         return 1;
     };
-    // `take` so a sealed handle reports "already finished" via `None`.
-    // A failed finish must not seal (see `Verifier::finish`), so the
-    // verifier is restored on `Err`; otherwise the next call would
-    // misreport an unfinished NAR as finished.
+    // Restore on `Err` so a failed finish does not seal.
     let Some(mut verifier) = handle.verifier.take() else {
         return handle.respond(Err(Invalid("verifier is already finished".into())));
     };
@@ -154,12 +115,8 @@ pub unsafe extern "C" fn verifier_finish(handle: *mut Handle) -> u32 {
     handle.respond(result)
 }
 
-/// The handle's output buffer: the decoded chunk on success (status 0), a
-/// UTF-8 message for invalid content (status 1). Returns null when there is
-/// no output yet; the caller must only dereference it when
-/// `verifier_output_len` is non-zero. For a null handle it points at
-/// [`NULL_HANDLE_MESSAGE`], so the null-handle rejection in
-/// `verifier_chunk`/`verifier_finish` still yields a distinct message.
+/// Null when there is no output yet; only dereference when
+/// `verifier_output_len` is non-zero.
 ///
 /// # Safety
 /// See [`handle`]. The pointer is valid until the next call on the handle.
@@ -207,7 +164,6 @@ mod tests {
         ])
     }
 
-    /// Pushes one chunk through the C interface; returns the status code.
     unsafe fn push(handle: *mut Handle, raw: &[u8], whole_nar: bool) -> u32 {
         let compressed = compress(raw);
         let pointer = verifier_input(handle, compressed.len());
@@ -249,10 +205,6 @@ mod tests {
         unsafe {
             let handle = verifier_new();
             assert!(!handle.is_null());
-            // An invalid NAR chunk poisons the handle (see
-            // `failed_nar_push_poisons_the_verifier` in `lib.rs`): the next
-            // chunk and `finish` must report "poisoned" rather than accepting
-            // more input or the truncated NAR.
             let junk = b"definitely not a NAR".to_vec();
             assert_eq!(push(handle, &junk, true), 1);
             assert!(output_text(handle).contains("invalid NAR"));
@@ -271,17 +223,12 @@ mod tests {
             let handle = verifier_new();
             assert!(!handle.is_null());
             let nar = file_nar(b"hello");
-            // Without `whole_nar` nothing reaches the NAR validator, so the
-            // NAR is still truncated and `finish` must fail.
             assert_eq!(push(handle, &nar, false), 0);
             assert_eq!(verifier_finish(handle), 1);
             assert!(output_text(handle).contains("truncated"));
-            // The handle must still accept the NAR after the failed finish;
-            // before the restore fix this reported "already finished".
             assert_eq!(push(handle, &nar, true), 0);
             assert_eq!(verifier_finish(handle), 0);
             assert_eq!(output_bytes(handle).len(), 8);
-            // A successful finish seals the handle instead.
             assert_eq!(verifier_finish(handle), 1);
             assert!(output_text(handle).contains("already finished"));
             assert_eq!(push(handle, &nar, true), 1);

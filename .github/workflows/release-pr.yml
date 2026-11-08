@@ -1,8 +1,5 @@
 name: Release PR
 
-# Every push to main rebuilds the version PR from the new HEAD, so it always
-# matches the code that merging the PR releases. With no pending changesets the
-# job does nothing.
 on:
   push:
     branches: [main]
@@ -17,7 +14,6 @@ permissions:
 jobs:
   version:
     runs-on: ubuntu-24.04
-    # The token that opens and merges the version PR.
     environment: release
     steps:
       - uses: actions/checkout@v7
@@ -29,20 +25,14 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The version command bumps the package and finalizes the release
-      # manifest, so the version PR is the whole release.
       - name: Create or update the version PR
         id: changesets
         uses: changesets/action@v2
         with:
-          # Pushes made with GITHUB_TOKEN do not trigger workflows, so the version
-          # PR would get no CI, and merging it would not publish the release.
           github-token: ${{ secrets.RELEASE_TOKEN }}
           version-script: pnpm release:version
           pr-title: "Release: version packages"
           commit-message: "Release: version packages"
-      # Merges once the required checks pass. The merge counts as the token's
-      # owner, so its push to main starts Publish release.
       - name: Merge the version PR when CI passes
         if: steps.changesets.outputs['pr-number'] != ''
         env:

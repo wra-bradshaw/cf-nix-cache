@@ -1,5 +1,3 @@
-//! `gc`: inspects or starts garbage collection on the server.
-
 use crate::protocol::contracts::{
     api as contract,
     responses::{GcRunResponse, GcStatusResponse},

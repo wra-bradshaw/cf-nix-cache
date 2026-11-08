@@ -39,12 +39,7 @@ export class AuditLog extends RpcOnlyDurableObject {
     limit: number;
     cursor: string | null;
   }): Promise<RpcResult<PageResponse<AuditEvent>>> {
-    // Fail-closed paging tradeoff: one corrupt row fails the whole page with
-    // `corrupt_audit` 500 instead of skipping the row. Skipping would hide
-    // audit history (an attacker could obscure an action by corrupting its
-    // row and having it silently dropped), while failing the page keeps
-    // tampering visible. Operators recover by reading past the corrupt row
-    // with a cursor or by re-seeding from the owning outbox.
+    // Fail closed so tampering stays visible.
     if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100)
       return failure('invalid_limit', 'limit must be between 1 and 100', 400);
     const cursor = decodeCursor<{ timestamp: number; id: string }>(
@@ -106,12 +101,6 @@ function auditOutcome(value: string): AuditEvent['outcome'] {
   throw new Error(`audit outcome ${value} is not a known outcome`);
 }
 
-/**
- * Audit metadata is `{ [k: string]: string }` per the contract. `json()` only
- * proves the column parses, so allow-list the shape here: a non-object or a
- * non-string value reads as corrupt (fail-closed page) rather than flowing a
- * mistyped value to API readers.
- */
 function auditMetadata(value: unknown): Record<string, string> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
     throw new Error('audit metadata is not an object');

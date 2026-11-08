@@ -34,24 +34,8 @@ function invalid(message: string): DomainError {
   return new DomainError('validation_failed', message, 422);
 }
 
-/**
- * Most chunks an upload may declare. 16384 chunks of 16 MiB could in theory
- * cover 256 GiB, but the effective ceiling is the 10 GiB NAR maximum in
- * `schemas/process-job.json`: at the 1 MiB minimum chunk size that is about
- * 10240 chunks, so 16384 leaves headroom. It matches
- * `CHUNK_LIST_MAX_CHUNKS` in `verify-stored.ts`, which must accept the list.
- */
 export const MAX_CHUNKS_PER_UPLOAD = 16384;
 
-/**
- * Idempotency fingerprint for an encoded upload. The verbatim JSON of up to
- * 16384 chunks is megabytes (about 220 bytes per chunk), too large to store
- * in the allocation and job rows on every push, so store the sha256 hex of
- * the canonical JSON instead. Equality still detects retried metadata
- * changes; collisions are negligible. No backward compatibility by design:
- * only exact hex equality joins a retry, anything else is an
- * idempotency conflict.
- */
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
   if (Array.isArray(value))
@@ -81,7 +65,6 @@ export async function fingerprintForEncodedUpload(
   ).join('');
 }
 
-/** Opens a client-encoded upload and reports the chunks the server lacks. */
 export async function openEncoded(
   env: Env,
   cache: CacheState,
@@ -132,11 +115,6 @@ export async function openEncoded(
   )
     throw invalid('upload declares duplicate chunks');
   const rawSize = input.chunks.reduce((sum, chunk) => sum + chunk.raw_size, 0);
-  // Upper bound is `MAX_NAR_SIZE` (the process-job schema maximum): larger
-  // NARs can never verify, so refuse before reserving quota or allocating an
-  // upload for one. The schema already caps this, but the Worker must not
-  // trust it — otherwise a schema change alone could allocate uploads the
-  // session DO would reject at `open`.
   if (
     !Number.isSafeInteger(input.manifest.nar_size) ||
     input.manifest.nar_size < 1 ||
@@ -149,15 +127,11 @@ export async function openEncoded(
     (sum, chunk) => sum + chunk.compressed_size,
     0,
   );
-  // Publication reserves quota for real; this only refuses early an upload
-  // that would certainly be refused at the end.
   unwrapRpc(
     await coordinator(env, cache.reference).checkQuota({
       delta: compressedSize,
     }),
   );
-  // Hashed (not verbatim): the JSON of 16384 chunks is megabytes, and the
-  // fingerprint is stored in both the allocation and job rows.
   const fingerprint = await fingerprintForEncodedUpload(input);
   const { allocation, state } = await allocateUpload(env, cache, {
     operation_id: operationId,
@@ -195,10 +169,6 @@ export async function openEncoded(
   };
 }
 
-/**
- * Checks an uploaded chunk against the session (verification level 1) and
- * only then writes it to its content-addressed key.
- */
 export async function storeChunk(
   env: Env,
   job: JobStub,
@@ -211,7 +181,6 @@ export async function storeChunk(
     await verifyChunk(compressed, claim);
   } catch (error) {
     if (!(error instanceof InvalidEncodingError)) throw error;
-    // The client's encoder is broken, or the chunk was corrupted on the way.
     unwrapRpc(await job.reject(`chunk ${rawHash}: ${error.message}`));
     throw new DomainError('invalid_chunk', error.message, 422);
   }
@@ -222,7 +191,6 @@ export async function storeChunk(
   unwrapRpc(await job.chunkStored(rawHash));
 }
 
-/** Verifies and publishes a client-encoded upload whose chunks are stored. */
 export async function completeEncoded(
   env: Env,
   job: JobStub,
@@ -233,12 +201,6 @@ export async function completeEncoded(
   let manifest: ChunkManifest;
   try {
     if (plan.kind === 'existing') {
-      // The open-time manifest hit already probed a canary sample (see
-      // `checkPresent`): the lease held since before the manifest HEAD plus
-      // GC's manifests-first sweep ordering (GcLedger.nextDeletions orders
-      // manifests before chunks) keeps the referenced chunks live, and
-      // `readManifest` below re-validates the manifest itself (size caps,
-      // schema, chunk key/size/duplicate checks) before it is trusted.
       manifest = await readManifest(
         env.CACHE_BUCKET,
         plan.manifest_key,
@@ -250,7 +212,6 @@ export async function completeEncoded(
     } else {
       const verified = await verifyStoredNar(env.CACHE_BUCKET, plan.nar);
       await writeChunkList(env.CACHE_BUCKET, plan.chunks_key, plan.nar);
-      // A manifest stored by an earlier upload of the NAR wins.
       ({ result, manifest } = await storeManifest(env.CACHE_BUCKET, verified));
     }
   } catch (error) {

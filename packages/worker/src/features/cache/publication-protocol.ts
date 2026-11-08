@@ -4,7 +4,6 @@ import type {
   QuotaReservation,
 } from './types';
 
-/** The only application boundary needed by production publication paths. */
 export interface CacheIndex {
   prepare(
     operationId: string,
@@ -20,10 +19,6 @@ export interface QuotaLedger {
   abort(operationId: string): Promise<void>;
 }
 
-/**
- * Infrastructure-free publication protocol. Durable Object adapters provide
- * the ports; this use case owns the ordering and compensation rules.
- */
 export class PublicationProtocol {
   constructor(
     private readonly index: CacheIndex,
@@ -45,9 +40,6 @@ export class PublicationProtocol {
       if (reservation.status === 'ABORTED')
         throw new PublicationError('quota operation was aborted', false);
     } catch (error) {
-      // A transport failure is ambiguous: the quota reservation may have
-      // committed remotely, so leave the durable prepare in place for a
-      // retry/reconciliation rather than issuing a compensating mutation.
       if (error instanceof PublicationError && !error.retryable)
         await this.index.abort(operationId);
       throw error;

@@ -1,8 +1,3 @@
-// The template config intentionally uses JSON-compatible values. These small
-// scanners handle comments and trailing commas without introducing a runtime
-// dependency into the customer repository. Both track JSON strings, so string
-// contents such as "//", "/*" or ", }" are never rewritten.
-
 function stripComments(source: string): string {
   let output = "";
   let quote = false;
@@ -49,8 +44,6 @@ function stripComments(source: string): string {
   return output;
 }
 
-// Runs after stripComments, so only whitespace can separate a trailing comma
-// from the closing bracket.
 function stripTrailingCommas(source: string): string {
   let output = "";
   let quote = false;

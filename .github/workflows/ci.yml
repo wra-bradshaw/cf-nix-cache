@@ -4,7 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Lets a maintainer rerun CI on any branch by hand.
   workflow_dispatch:
 
 permissions:
@@ -18,12 +17,6 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - name: Install the pnpm workspace
         run: nix develop --command pnpm install --frozen-lockfile
-      # Warm the verifier wasm build: `pretest`/`precheck`/`prebuild`/`predev`/
-      # `pree2e` all run `pnpm generate`, so later steps would rebuild anyway;
-      # this keeps the wasm-from-current-`ffi.rs` build visible and warms it
-      # once. It is not a freshness gate (`generate` rebuilds unconditionally
-      # and always exits 0); the `--check-drift` step below is the gate that
-      # fails when encoding constants drift from the wasm.
       - name: Warm verifier wasm build
         run: nix develop --command pnpm --dir packages/worker generate
       - name: Check encoding constants stay in sync
@@ -42,19 +35,8 @@ jobs:
           nix develop --command pnpm --dir packages/worker test
           nix develop --command pnpm --dir packages/worker build
           nix develop --command npm pack ./packages/worker --dry-run
-      # The template check lives in scripts/ci-check-template.sh so the
-      # workflow stays declarative; see the script header for why the template
-      # is pinned to the working-tree build, why the install generates an
-      # ephemeral lockfile (the monorepo tracks none; publish generates the
-      # public one), and why the dry-run runs here (it needs
-      # no Cloudflare credentials).
       - name: Check deployment template config
         run: scripts/ci-check-template.sh
-      # The generated contracts are gitignored, so a git diff check would be
-      # a no-op. Generate twice to temp files and compare instead, which fails
-      # if the generator is non-deterministic. This runs from packages/worker
-      # so the generator's bare imports (json-schema-to-typescript, prettier)
-      # resolve from the Worker's own dependencies rather than the template's.
       - name: Check generated contracts are deterministic
         run: |
           tmpdir=$(mktemp -d)
@@ -67,6 +49,5 @@ jobs:
         run: |
           nix flake check
           nix build .#cli
-      # Runs the Worker in miniflare with local R2 against a real Nix closure.
       - name: Run the end-to-end upload test
         run: nix develop --command pnpm --dir packages/worker e2e

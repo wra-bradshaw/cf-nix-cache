@@ -2,21 +2,7 @@ import { NIX_BASE32 } from '../../shared/identifiers';
 import { ENCODING_ID } from '../cache/types';
 import { InvalidEncodingError, decodeChunk } from './verifier';
 
-/** Largest raw chunk the encoding produces (CHUNK_MAX_SIZE).
- * Canonical value; must stay in sync with `CHUNK_MAX_RAW_SIZE` in
- * `crates/verify/src/lib.rs` (and `CHUNK_MAX_SIZE` in
- * `crates/cli/src/protocol/mod.rs`) and `CHUNK_MAX_RAW_SIZE` in
- * `verifier.ts`. The cross-module ties are asserted in `verifier.test.ts`
- * and `verify-stored.test.ts`. The cross-crate gate is the
- * `check-encoding-constants` CI step (`upload-nar.mts --check-drift`):
- * local `pnpm test` does not run it, so run that script locally when
- * touching these values.
- */
 export const CHUNK_MAX_RAW_SIZE = 16 * 1024 * 1024;
-/** zstd's worst case for a CHUNK_MAX_RAW_SIZE frame, rounded up.
- * Canonical value; must stay in sync with `CHUNK_MAX_COMPRESSED_SIZE` in
- * `crates/verify/src/lib.rs` and `verifier.ts` (see above).
- */
 export const CHUNK_MAX_COMPRESSED_SIZE = 17 * 1024 * 1024;
 
 export function chunkKey(rawHash: string): string {
@@ -27,7 +13,6 @@ export function manifestKey(narHash: string): string {
   return `manifests/${ENCODING_ID}/${narHash}.json`;
 }
 
-/** Nix's base32, which writes the hash from its last byte to its first. */
 export function nixBase32(bytes: Uint8Array): string {
   const length = Math.ceil((bytes.length * 8) / 5);
   let out = '';
@@ -55,11 +40,6 @@ export interface ChunkClaim {
   compressed_size: number;
 }
 
-/**
- * Verification level 1: an uploaded chunk is what the session says it is.
- * This must pass before the chunk is written to its content-addressed key,
- * where the first writer wins for good.
- */
 export async function verifyChunk(
   compressed: Uint8Array,
   claim: ChunkClaim,

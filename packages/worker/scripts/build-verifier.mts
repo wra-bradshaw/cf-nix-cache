@@ -1,14 +1,7 @@
 /**
- * Builds `crates/verify` for wasm32 into src/generated/verify.wasm, which the
- * Worker imports. Needs the dev shell's Rust toolchain and lld.
- *
- * Run this (`pnpm generate`) before the worker tests: `src/generated/` is
- * gitignored, so without a rebuild the tests would exercise whatever local
- * `verify.wasm` happens to be there, which may predate the current
- * `crates/verify/src/ffi.rs`. The `pretest`, `precheck`, `prebuild`,
- * `predev`, and `pree2e` scripts in `packages/worker/package.json` all run
- * `pnpm generate` for this reason. `ChunkVerifier` also asserts the wasm
- * exports exist at startup so a stale module fails fast with a rebuild hint.
+ * Builds `crates/verify` for wasm32 into src/generated/verify.wasm.
+ * Rebuild before worker tests: `src/generated/` is gitignored, so a stale
+ * `verify.wasm` may predate `crates/verify/src/ffi.rs`.
  */
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync } from 'node:fs';

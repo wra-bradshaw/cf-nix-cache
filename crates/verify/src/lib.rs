@@ -1,9 +1,3 @@
-//! Verification of client-encoded uploads, compiled to WebAssembly for the
-//! Worker. A [`Verifier`] is fed the stored chunks of one NAR in order,
-//! decodes each to its declared size, and checks their concatenation is a
-//! structurally valid NAR. The Worker hashes the decoded bytes with native
-//! SHA-256 and does all I/O.
-
 mod ffi;
 pub mod nar;
 
@@ -23,7 +17,6 @@ pub const CHUNK_MAX_RAW_SIZE: usize = 16 * 1024 * 1024;
 /// `packages/worker/src/features/uploads/verifier.ts`.
 pub const CHUNK_MAX_COMPRESSED_SIZE: usize = 17 * 1024 * 1024;
 
-/// Content that can never be accepted. Every failure here is one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invalid(pub String);
 
@@ -58,10 +51,7 @@ fn check_sizes(compressed: &[u8], raw_size: usize) -> Result<(), Invalid> {
     Ok(())
 }
 
-/// Decodes the zstd frames in `compressed` into `raw`, which must come to
-/// exactly `raw_size` bytes. zstd's one-shot decoder writes straight into a
-/// buffer of that size, so a frame cannot make it allocate more, whatever
-/// its header claims.
+/// Writes straight into a `raw_size` buffer, so a lying header cannot force over-allocation.
 fn decode(
     context: &mut DCtx<'static>,
     compressed: &[u8],
@@ -76,10 +66,7 @@ fn decode(
     let written = context
         .decompress(&mut raw[..], compressed)
         .map_err(|code| {
-            // `get_error_name` renders a human string ("Destination buffer is
-            // too small") that can change with zstd versions; the
-            // `dstSize_tooSmall` code is the stable signal that the frame
-            // needs more than `raw_size` bytes.
+            // `dstSize_tooSmall` is the stable overflow signal across zstd versions.
             // SAFETY: `code` is a return value of `ZSTD_decompressDCtx`,
             // which `ZSTD_getErrorCode` accepts.
             let error = unsafe { zstd_safe::zstd_sys::ZSTD_getErrorCode(code) };
@@ -99,15 +86,8 @@ fn decode(
     Ok(())
 }
 
-/// Decodes the chunks of one NAR, pushed in order, and checks they make a
-/// structurally valid NAR (verification level 3). Hashing is left to the
-/// caller, which has native SHA-256: WebAssembly has no SHA instructions.
-///
-/// Once a pushed chunk fails NAR validation the in-progress NAR state is
-/// partial, so the verifier is poisoned: further `chunk`/`finish` calls fail
-/// with "verifier poisoned, discard" and the caller must drop it. A
-/// successful `finish` seals the verifier instead: further `chunk`/`finish`
-/// calls fail with "verifier is already finished".
+/// Checks one NAR's chunks in order. Hashing is left to the caller.
+/// A failed NAR push poisons the verifier; a successful `finish` seals it.
 pub struct Verifier {
     nar: NarValidator,
     nar_size: u64,
@@ -133,9 +113,7 @@ impl Verifier {
         }
     }
 
-    /// Decodes `compressed` into `raw`, which must come to exactly
-    /// `raw_size` bytes. With `whole_nar` set the chunk is the next part of
-    /// the NAR; without, it is checked alone (verification level 1).
+    /// With `whole_nar` the chunk extends the NAR; without, it is checked alone.
     pub fn chunk(
         &mut self,
         compressed: &[u8],
@@ -161,8 +139,7 @@ impl Verifier {
         Ok(())
     }
 
-    /// Checks the NAR is complete, and returns its size. Seals the verifier:
-    /// later `chunk`/`finish` calls fail with "already finished".
+    /// Returns the NAR size. Seals the verifier.
     pub fn finish(&mut self) -> Result<u64, Invalid> {
         if self.finished {
             return invalid("verifier is already finished");
@@ -243,7 +220,6 @@ mod tests {
         assert!(error(&compressed[..compressed.len() - 2], raw.len()).contains("not valid zstd"));
         assert!(error(&[], 4).contains("empty"));
         assert!(error(&compressed, 0).contains("out of range"));
-        // A frame declaring 1 TiB of content is refused without allocating it.
         let mut huge = compressed.clone();
         huge[4] = 0xE0;
         huge.splice(5..5, [0, 0, 0, 0, 0, 1, 0, 0]);
@@ -268,14 +244,7 @@ mod tests {
 
     #[test]
     fn encoding_constants_stay_in_sync() {
-        // Canonical encoding parameters; must match CHUNK_MIN_SIZE /
-        // CHUNK_AVG_SIZE / CHUNK_MAX_SIZE / ZSTD_LEVEL / ENCODING_ID in
-        // crates/cli/src/protocol/mod.rs, CHUNK_MAX_RAW_SIZE /
-        // CHUNK_MAX_COMPRESSED_SIZE in
-        // packages/worker/src/features/uploads/encoding.ts, and ENCODING_ID /
-        // CHUNK in bench/verify-worker/upload-nar.mts. The verify crate stays
-        // free of the CLI's tokio dependency, so the values are duplicated
-        // here and tied together by this test rather than by import.
+        // Duplicated without a CLI dependency; `upload-nar.mts --check-drift` gates joint drift.
         const MIB: usize = 1024 * 1024;
         assert_eq!(CHUNK_MAX_RAW_SIZE, 16 * MIB);
         assert_eq!(CHUNK_MAX_COMPRESSED_SIZE, 17 * MIB);
@@ -330,7 +299,6 @@ mod tests {
             .unwrap_err()
             .0
             .contains("already finished"));
-        // A failed finish does not seal: a truncated NAR can still grow.
         let mut verifier = Verifier::new();
         verifier
             .chunk(&compress(&nar), nar.len(), false, &mut raw)

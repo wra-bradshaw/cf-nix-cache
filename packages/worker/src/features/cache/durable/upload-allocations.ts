@@ -2,11 +2,6 @@ import { type RpcResult, failure, ok } from '../../../shared/rpc';
 import { first, type SqlRow, text, integer } from '../../../shared/sql';
 import { lifecycleFailure } from '../access';
 
-/**
- * How long an upload counts as in flight without finishing. Past this, a push
- * of the same path starts a new upload instead of waiting on one that has
- * probably been abandoned. Matches the CLI's wait for a single upload.
- */
 const INFLIGHT_TTL_SECONDS = 60 * 60;
 
 export const INFLIGHT_SCHEMA = `CREATE TABLE IF NOT EXISTS inflight_uploads (
@@ -17,11 +12,8 @@ const chunksKey = (id: string) => `staging/${id}.chunks.json`;
 
 export interface Allocation {
   id: string;
-  /** Where the upload's chunk list goes (the table's `staging_key`). */
   chunks_key: string;
-  /** A retry of the same idempotency key. */
   repeated: boolean;
-  /** Another push's upload of the same NAR, still in flight. */
   merged: boolean;
 }
 
@@ -31,15 +23,7 @@ export interface AllocationRequest {
   store_hash: string;
   nar_hash: string;
   now: number;
-  /**
-   * Whether an in-flight upload may be joined. The caller decides, because
-   * only it knows whether the client can wait for an upload it did not start.
-   */
   merge: boolean;
-  /**
-   * An in-flight upload the caller found finished or failed. It is no longer
-   * joined, and a new upload replaces it.
-   */
   replace?: string;
 }
 
@@ -102,8 +86,6 @@ export class UploadAllocations {
       } catch {
         return failure('corrupt_cache', 'cache record is corrupt', 500);
       }
-      // A different NAR hash is a replacement of the path, which keeps the
-      // usual behaviour of a new upload.
       if (inflight && inflight.nar_hash === input.nar_hash && input.merge)
         return ok({
           id: inflight.upload_id,
@@ -120,8 +102,6 @@ export class UploadAllocations {
         id,
         key,
       );
-      // The first upload of a NAR stays the one others join. A replacement
-      // with a different NAR hash takes over.
       if (!inflight || inflight.nar_hash !== input.nar_hash)
         this.ctx.storage.sql.exec(
           'INSERT OR REPLACE INTO inflight_uploads (store_hash, nar_hash, upload_id, created_at) VALUES (?, ?, ?, ?)',
@@ -139,20 +119,12 @@ export class UploadAllocations {
     });
   }
 
-  /** In-flight uploads among `storeHashes`. */
   async pending(input: {
     store_hashes: string[];
     now: number;
   }): Promise<RpcResult<{ store_hash: string; upload_id: string }[]>> {
     if (typeof input.now !== 'number' || !Number.isFinite(input.now))
       return failure('invalid_now', 'now must be a finite timestamp', 400);
-    // Per-entry fail-isolation: `inflight()` throws on a corrupt row, and a
-    // single outer try would turn one corrupt store_hash into a 500 for the
-    // whole batch, blocking unrelated pushes. A corrupt entry is skipped
-    // (with a warn) so healthy hashes still report; the corrupt row stays for
-    // the owning upload's `allocate`/`release` path to surface as
-    // `corrupt_cache`. Skipping only misses a merge optimization (a new
-    // upload starts instead of joining), which is safe.
     const result: { store_hash: string; upload_id: string }[] = [];
     for (const storeHash of input.store_hashes) {
       let row: { nar_hash: string; upload_id: string } | undefined;
@@ -171,7 +143,6 @@ export class UploadAllocations {
     return ok(result);
   }
 
-  /** Called when an upload reaches a terminal state. */
   async release(input: {
     store_hash: string;
     upload_id: string;

@@ -21,7 +21,6 @@ export function permitsCache(
   );
 }
 
-/** Every delegated grant must be covered by one parent admin grant. */
 export function canDelegate(
   parent: TokenClaims,
   grants: Grant[],
@@ -44,7 +43,6 @@ export function permitsAny(claims: TokenClaims, required: Role): boolean {
   return claims.grants.some((grant) => permits(grant.role, required));
 }
 
-/** Global control-plane operations require an explicit wildcard grant. */
 export function permitsGlobal(claims: TokenClaims, required: Role): boolean {
   return claims.grants.some(
     (grant) => grant.cache === '*' && permits(grant.role, required),

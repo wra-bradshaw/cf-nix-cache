@@ -25,7 +25,6 @@ export class TokenSigner {
     };
   }
 
-  /** Reproduces an issued token from its stored metadata. */
   async signFor(
     { jti, issued_at: issuedAt }: TokenIdentity,
     subject: string,

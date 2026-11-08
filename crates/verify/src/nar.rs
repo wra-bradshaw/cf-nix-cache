@@ -1,10 +1,3 @@
-//! Streaming structural validation of a NAR (verification level 3).
-//!
-//! A NAR is a sequence of length-prefixed strings, each padded with zeros to
-//! a multiple of 8 bytes. File contents are one more such string, counted
-//! rather than buffered. The grammar is tracked as an explicit stack of what
-//! the next string must be, so bytes can be pushed in any split.
-
 use std::fmt;
 
 const MAX_TOKEN_BYTES: u64 = 4096;
@@ -26,25 +19,15 @@ fn fail<T>(message: impl Into<String>) -> Result<T, InvalidNar> {
     Err(InvalidNar(message.into()))
 }
 
-/// What the next string in the archive must be.
 #[derive(Debug)]
 enum Expect {
     Literal(&'static str),
-    /// A node's type, after `(` `type`.
     Type,
-    /// After a regular file's type: `executable` or `contents`.
     Regular,
-    /// The empty string after `executable`.
     Empty,
-    /// A file's contents, which are skipped.
     Contents,
-    /// A symlink's target, which must not be empty.
     Target,
-    /// Inside a directory: `entry` or `)`. Holds the last entry's name.
-    Directory {
-        previous: Option<Vec<u8>>,
-    },
-    /// A directory entry's name.
+    Directory { previous: Option<Vec<u8>> },
     Name,
 }
 
@@ -61,16 +44,19 @@ impl Expect {
 
 #[derive(Debug)]
 enum Phase {
-    /// Reading a string's 8-byte length.
-    Length { bytes: [u8; 8], have: usize },
-    /// Reading a string's body: buffered, or skipped when `token` is `None`.
+    Length {
+        bytes: [u8; 8],
+        have: usize,
+    },
     Body {
         len: u64,
         remaining: u64,
         token: Option<Vec<u8>>,
     },
-    /// Reading a string's zero padding.
-    Padding { remaining: usize, token: Vec<u8> },
+    Padding {
+        remaining: usize,
+        token: Vec<u8>,
+    },
 }
 
 pub struct NarValidator {
@@ -92,7 +78,6 @@ impl NarValidator {
                 bytes: [0; 8],
                 have: 0,
             },
-            // The top of the stack, the last element, is what comes next.
             stack: vec![
                 Expect::Type,
                 Expect::Literal("type"),
@@ -431,7 +416,6 @@ pub(crate) mod tests {
         ]))
         .contains("too long"));
 
-        // The root is at depth 0, so MAX_DEPTH nested directories are allowed.
         let deep = |levels: usize| {
             let mut text = String::from("nix-archive-1 ( type directory");
             for _ in 0..levels {

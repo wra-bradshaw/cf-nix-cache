@@ -11,7 +11,6 @@ function compress(raw: Uint8Array): Uint8Array {
 
 describe('client-encoded chunks', () => {
   it('writes hashes in Nix base32', async () => {
-    // `nix hash file --type sha256 --base32 /dev/null`
     expect(await sha256Nix(new Uint8Array())).toBe(
       'sha256:0mdqa9w1p6cmli6976v4wi0sw9r4p5prkj7lzfd1877wk11c9c73',
     );

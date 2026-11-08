@@ -3,18 +3,12 @@ import { type RpcResult, conflict, failure, ok } from '../../../shared/rpc';
 import { first, type SqlRow, text, integer, json } from '../../../shared/sql';
 
 function encodingId(value: string): CacheConfig['encoding_id'] {
-  // Allow-list from schemas/api.json (`encoding_id` const) and ENCODING_ID:
-  // only one chunking/compression scheme is deployed, so any other stored
-  // value is a corrupt row, not a migration to preserve.
   if (value !== ENCODING_ID)
     throw new Error(`cache encoding ${value} is not a known encoding`);
   return value;
 }
 
 function publicFlag(value: number): boolean {
-  // SQLite has no boolean type: `public` is stored as 0/1. An allow-list
-  // keeps a corrupt 2/-1 from coercing to false via `=== 1`; any other
-  // integer throws so callers map it to `corrupt_cache` 500.
   if (value === 1) return true;
   if (value === 0) return false;
   throw new Error(`cache public flag ${value} is not 0 or 1`);
@@ -74,10 +68,6 @@ export class CoordinatorLifecycle {
         'encoding_id is not a supported encoding',
         400,
       );
-    // Mirrors SystemControl.createCache: the HTTP schema constrains
-    // quota_bytes, but recovery (getCacheForDeletion) and tests call this
-    // directly. Reject a non-positive or unsafe quota before writing the
-    // coordinator row, so quota arithmetic downstream stays exact.
     if (
       !Number.isSafeInteger(input.quota_bytes) ||
       input.quota_bytes < 1 ||
@@ -148,10 +138,6 @@ export class CoordinatorLifecycle {
     retention_days?: number;
     upstream_cache_key_names?: string[];
   }): Promise<RpcResult<CacheConfig>> {
-    // RPC inputs arrive unvalidated: a truthy non-boolean such as the string
-    // "false" must not coerce to 1. Null is rejected here rather than treated
-    // as absent, so an explicit null surfaces as a caller bug (400) instead
-    // of silently keeping the stored configuration.
     if (input.public !== undefined && typeof input.public !== 'boolean')
       return failure('invalid_public', 'public must be a boolean', 400);
     if (
@@ -191,9 +177,6 @@ export class CoordinatorLifecycle {
       try {
         if (text(row, 'lifecycle') === 'DELETING')
           return failure('cache_deleting', 'cache is being deleted', 410);
-        // Null cannot reach here: it is rejected as 400 above, so only
-        // undefined keeps the stored value. publicFlag allow-lists the stored
-        // 0/1 so a corrupt 2/-1 maps to corrupt_cache instead of coercing.
         next = {
           ...row,
           public:
@@ -241,10 +224,6 @@ export class CoordinatorLifecycle {
       } catch {
         return failure('corrupt_cache', 'cache record is corrupt', 500);
       }
-      // rowsWritten is a number in workerd; the node test fake returns a bare
-      // array, so an explicit undefined reads as 0 (no row updated) rather
-      // than failing open. Without this a DELETING row with undefined
-      // rowsWritten would skip the 410 below and report success.
       const changed = (
         this.ctx.storage.sql.exec(
           "UPDATE cache SET lifecycle = 'ACTIVE' WHERE lifecycle = 'CREATING'",
@@ -286,10 +265,6 @@ export class CoordinatorLifecycle {
             'SELECT COUNT(*) AS count FROM audit_outbox',
           ),
         );
-        // COUNT(*) always returns exactly one row in SQLite, so a missing
-        // row means the query itself is corrupt. Fail closed like
-        // quota/ledger: proceeding would delete the cache while audit events
-        // may still be undelivered.
         if (!pendingAudit)
           return failure('corrupt_cache', 'cache record is corrupt', 500);
         if (integer(pendingAudit, 'count') > 0)
@@ -301,12 +276,6 @@ export class CoordinatorLifecycle {
       } catch {
         return failure('corrupt_cache', 'cache record is corrupt', 500);
       }
-      // Atomicity comes from the surrounding transactionSync, not from a
-      // single multi-statement exec: one statement per exec keeps failures
-      // attributable and avoids drivers that reject embedded semicolons.
-      // inflight_uploads is coordinator-local merge state for the same
-      // allocation keys; the coordinator DO is abandoned after removal, but
-      // clearing it keeps a reused coordinator from joining a stale upload.
       this.ctx.storage.sql.exec('DELETE FROM audit_outbox');
       this.ctx.storage.sql.exec('DELETE FROM clear_operations');
       this.ctx.storage.sql.exec('DELETE FROM quota_operations');

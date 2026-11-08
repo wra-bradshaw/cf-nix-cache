@@ -46,8 +46,6 @@ async function configureSecrets(
   publicKey: string;
   url: string;
 }> {
-  // Resolve the URL before generating keys so that a missing URL cannot leave
-  // a freshly installed key set whose public key was never printed.
   const url =
     initialUrl ??
     fail("could not determine the workers.dev URL; set CF_NIX_CACHE_URL");
@@ -79,7 +77,6 @@ async function configureSecrets(
       const response = await fetch(`${url.replace(/\/$/, "")}/api/public-key`);
       if (response.ok) publicKey = (await response.text()).trim();
     } catch {
-      // A deployment may still be propagating. doctor can verify it later.
     }
   }
   return { publicKey, url };
@@ -88,9 +85,6 @@ async function configureSecrets(
 async function setup(): Promise<void> {
   const config = await readValidConfig();
   await releaseManifest();
-  // This is the only point where a missing Worker may be read as "no
-  // secrets": the Worker has not been deployed yet. Every other Wrangler
-  // failure aborts instead of regenerating keys.
   const existingSecrets = await secretNamesFromWrangler({
     allowMissingWorker: true,
   });
@@ -100,27 +94,18 @@ async function setup(): Promise<void> {
       `partial Wrangler secret set detected (missing: ${missingSecrets(existingSecrets).join(", ")}). Refusing to deploy until the missing secrets are restored or an explicit key rotation is performed.`,
     );
   }
-  // Checked before anything is created, so that a first run without the
-  // secret can't leave a live Worker that has no secrets.
   if (state === "none") requireBootstrapSecret();
-  // Provision every configured CACHE_BUCKET, not just the top level: an
-  // environment that overrides `r2_buckets` gets its own bucket, and
-  // validation (`readValidConfig`) plus `doctor` enforce per-env bindings, so
-  // deploy must create them and their lifecycle rules too.
   for (const { bucket } of cacheBuckets(config)) {
     await ensureBucket(bucket);
     await ensureLifecycle(bucket);
   }
 
-  // A first deploy creates the Worker, Durable Objects, and Workflows before
-  // the bulk secret operation targets the Worker.
   const initialUrl = await deployWorker();
   const { url, publicKey: installedPublicKey } = await configureSecrets(
     state,
     initialUrl,
     signingKeyName(config),
   );
-  // Only a first deploy has just installed secrets to start up with.
   if (state === "none") await deployWorker();
   await healthCheck(url);
 
@@ -140,9 +125,6 @@ async function setup(): Promise<void> {
 switch (action) {
   case "setup":
   case "deploy":
-    // setup is deliberately idempotent. It performs no key generation when the
-    // complete secret set already exists, which makes this command safe for
-    // Workers Builds and every external CI runner.
     await setup();
     break;
   case "doctor":
