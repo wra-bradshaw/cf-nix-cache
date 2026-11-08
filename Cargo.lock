@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "cf-nix-cache"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "cf-nix-cache-contracts",
@@ -176,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "cf-nix-cache-contracts"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "cf-nix-cache-workspace-hack",
  "regress",
@@ -188,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "cf-nix-cache-verify"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "zstd",
  "zstd-safe",

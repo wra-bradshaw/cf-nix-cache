@@ -24,7 +24,7 @@ forEachSupportedSystem (
     common = {
       src = workspaceSrc;
       strictDeps = true;
-      version = "0.6.0";
+      version = "0.7.0";
       pname = "cf-nix-cache";
       cargoExtraArgs = "-p cf-nix-cache";
     };
