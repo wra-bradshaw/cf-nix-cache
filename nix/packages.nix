@@ -18,9 +18,21 @@ forEachSupportedSystem (
         doCheck = false;
       }
     );
+    verifier = rust.wasmCraneLib.buildPackage (
+      rust.wasmArgs
+      // {
+        cargoArtifacts = rust.wasmCargoArtifacts;
+        CARGO_PROFILE = "release";
+        doCheck = false;
+        installPhaseCommand = ''
+          mkdir -p $out
+          cp "''${CARGO_TARGET_DIR:-target}/$CARGO_BUILD_TARGET/release/cf_nix_cache_verify.wasm" $out/verify.wasm
+        '';
+      }
+    );
   in
   {
-    inherit cli;
+    inherit cli verifier;
     default = cli;
   }
 )
