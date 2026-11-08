@@ -18,7 +18,7 @@ export interface UploadRow {
   cache: string;
   cache_id: string;
   incarnation: string;
-  /** The chunk list, which lets the processor finish or verify the upload. */
+  /** The chunk list, which lets the upload workflow finish or verify the upload. */
   chunks_key: string;
   /**
    * False for a staging upload left from before they were removed. Those can

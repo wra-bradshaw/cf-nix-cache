@@ -98,7 +98,9 @@ export class UploadJob extends RpcOnlyDurableObject {
   async abort(): Promise<RpcResult<UploadStateResponse>> {
     const row = this.storage.row();
     // A session in COMPLETING is being verified and published by a request
-    // outside this object, as PROCESSING is by the workflow.
+    // outside this object, as PROCESSING is by the workflow. Rejected here
+    // (rather than in the lifecycle) so the lifecycle's COMPLETING arm stays
+    // only as defense for direct callers and legacy rows; see its comment.
     if (row?.encoded && row.state === 'COMPLETING')
       return failure(
         'invalid_transition',

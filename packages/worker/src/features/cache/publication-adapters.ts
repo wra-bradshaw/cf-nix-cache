@@ -1,5 +1,5 @@
 import { PublicationProtocol, PublicationError } from './publication-protocol';
-import type { CacheIndex, QuotaLedger } from './publication-ports';
+import type { CacheIndex, QuotaLedger } from './publication-protocol';
 import type {
   CacheMutation,
   CacheState,

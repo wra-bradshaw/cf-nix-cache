@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { getCacheForDeletion } from './resolve-cache';
+import { effectiveLifecycle, getCacheForDeletion } from './resolve-cache';
 import type { CacheConfig, CacheReference } from './types';
 
 const notFound = {
@@ -76,4 +76,26 @@ describe('resolving a cache for deletion', () => {
     });
     expect(initialize).not.toHaveBeenCalled();
   });
+});
+
+describe('the effective lifecycle', () => {
+  // SystemControl is the lifecycle saga authority: it leads the coordinator
+  // by one step during activation and teardown, so its fence wins.
+  it.each([
+    ['DELETING', 'ACTIVE', 'DELETING'],
+    ['ACTIVE', 'DELETING', 'DELETING'],
+    ['CREATING', 'ACTIVE', 'CREATING'],
+    ['ACTIVE', 'CREATING', 'CREATING'],
+    ['ACTIVE', 'ACTIVE', 'ACTIVE'],
+  ])(
+    'catalogue %s with coordinator %s reads %s',
+    (catalogue, coordinator, expected) => {
+      expect(
+        effectiveLifecycle(
+          catalogue as CacheReference['lifecycle'],
+          coordinator as CacheConfig['lifecycle'],
+        ),
+      ).toBe(expected);
+    },
+  );
 });

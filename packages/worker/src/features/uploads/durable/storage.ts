@@ -1,14 +1,32 @@
 import type { UploadManifest, UploadState } from '../types';
+import type { ChunkClaim } from '../encoding';
 import type { ProcessReceipt, UploadRow } from './upload-row';
-import { first, type SqlRow } from '../../../shared/sql';
+import { first, type SqlRow, text, integer, json } from '../../../shared/sql';
 
-// `staging_key` holds the upload's chunk list key. `upload_id` and `parts`
-// belonged to staging uploads, which were removed; new rows leave them empty.
+/**
+ * What `setResult` reports: the stored receipt plus whether it wrote. `wrote`
+ * is false when the row had already left `from` (a concurrent fail/abort
+ * won) and the caller must re-read instead of assuming the receipt landed.
+ */
+export type SetResultOutcome = ProcessReceipt & { wrote: boolean };
+
+/**
+ * Rows changed by a conditional write. `rowsWritten` is a number in workerd;
+ * the node test fake returns a bare array, so an explicit undefined reads as
+ * 0 (no row updated) rather than failing open. Without this a lost race with
+ * undefined `rowsWritten` would skip the miss below and report success.
+ */
+function rowsUpdated(cursor: unknown): number {
+  const rowsWritten = (cursor as { rowsWritten?: unknown }).rowsWritten;
+  return typeof rowsWritten === 'number' ? rowsWritten : 0;
+}
+
+// `chunks_key` holds the upload's chunk list key.
 const schema = `CREATE TABLE IF NOT EXISTS job (
   job_id TEXT PRIMARY KEY, cache TEXT NOT NULL, cache_id TEXT NOT NULL, incarnation TEXT NOT NULL,
-  staging_key TEXT NOT NULL, upload_id TEXT, state TEXT NOT NULL, manifest TEXT NOT NULL,
+  chunks_key TEXT NOT NULL, state TEXT NOT NULL, manifest TEXT NOT NULL,
   compressed_size INTEGER NOT NULL, idempotency_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
-  parts TEXT NOT NULL, error TEXT, result TEXT
+  error TEXT, result TEXT
 );
 CREATE TABLE IF NOT EXISTS session (
   key INTEGER PRIMARY KEY CHECK (key = 1), lease_token TEXT, existing_manifest INTEGER NOT NULL
@@ -27,7 +45,7 @@ export class UploadStorage {
   row(): UploadRow | null {
     const row = first(
       this.ctx.storage.sql.exec<SqlRow>(
-        'SELECT job_id, cache, cache_id, incarnation, staging_key, state, manifest, compressed_size, idempotency_key, fingerprint, error, result FROM job LIMIT 1',
+        'SELECT job_id, cache, cache_id, incarnation, chunks_key, state, manifest, compressed_size, idempotency_key, fingerprint, error, result FROM job LIMIT 1',
       ),
     );
     if (!row) return null;
@@ -37,39 +55,54 @@ export class UploadStorage {
       ),
     );
     return {
-      job_id: String(row.job_id),
-      cache: String(row.cache),
-      cache_id: String(row.cache_id),
-      incarnation: String(row.incarnation),
-      chunks_key: String(row.staging_key),
+      job_id: text(row, 'job_id'),
+      cache: text(row, 'cache'),
+      cache_id: text(row, 'cache_id'),
+      incarnation: text(row, 'incarnation'),
+      chunks_key: text(row, 'chunks_key'),
       encoded: Boolean(session),
-      state: String(row.state) as UploadState,
-      manifest: JSON.parse(String(row.manifest)) as UploadManifest,
-      compressed_size: Number(row.compressed_size),
-      idempotency_key: String(row.idempotency_key),
-      fingerprint: String(row.fingerprint),
-      error: row.error ? String(row.error) : null,
+      state: text(row, 'state') as UploadState,
+      manifest: json<UploadManifest>(row, 'manifest'),
+      compressed_size: integer(row, 'compressed_size'),
+      idempotency_key: text(row, 'idempotency_key'),
+      fingerprint: text(row, 'fingerprint'),
+      error: row.error ? text(row, 'error') : null,
       result: row.result
-        ? (JSON.parse(String(row.result)) as ProcessReceipt)
+        ? (JSON.parse(text(row, 'result')) as ProcessReceipt)
         : null,
     };
   }
 
-  insert(input: {
-    job_id: string;
-    cache: string;
-    cache_id: string;
-    incarnation: string;
-    chunks_key: string;
-    manifest: UploadManifest;
-    compressed_size: number;
-    idempotency_key: string;
-    fingerprint: string;
-  }): boolean {
+  /**
+   * Atomically records a newly opened session: the job row, its lease, and
+   * every chunk's presence in one `transactionSync`. This is the only writer
+   * of new sessions (there is no separate bare insert); a crash between
+   * separate writes would leave a job row with no session. Returns false when
+   * the job row already exists. Callers hold the serialized queue across the
+   * pre-check and this insert with no awaits between, so false is unexpected;
+   * callers treat it defensively as a lost open race and report the winner's
+   * row instead of throwing (see `open`). Only a future writer bypassing the
+   * queue could produce it.
+   */
+  insertOpen(
+    input: {
+      job_id: string;
+      cache: string;
+      cache_id: string;
+      incarnation: string;
+      chunks_key: string;
+      manifest: UploadManifest;
+      compressed_size: number;
+      idempotency_key: string;
+      fingerprint: string;
+    },
+    session: { leaseToken: string; existingManifest: boolean },
+    chunks: Array<ChunkClaim & { present: boolean }>,
+  ): boolean {
     return this.ctx.storage.transactionSync(() => {
       if (this.row()) return false;
       this.ctx.storage.sql.exec(
-        "INSERT INTO job (job_id, cache, cache_id, incarnation, staging_key, upload_id, state, manifest, compressed_size, idempotency_key, fingerprint, parts) VALUES (?, ?, ?, ?, ?, NULL, 'UPLOADING', ?, ?, ?, ?, '{}')",
+        "INSERT INTO job (job_id, cache, cache_id, incarnation, chunks_key, state, manifest, compressed_size, idempotency_key, fingerprint) VALUES (?, ?, ?, ?, ?, 'UPLOADING', ?, ?, ?, ?)",
         input.job_id,
         input.cache,
         input.cache_id,
@@ -80,61 +113,146 @@ export class UploadStorage {
         input.idempotency_key,
         input.fingerprint,
       );
+      this.ctx.storage.sql.exec(
+        'INSERT INTO session (key, lease_token, existing_manifest) VALUES (1, ?, ?)',
+        session.leaseToken,
+        session.existingManifest ? 1 : 0,
+      );
+      chunks.forEach((chunk, index) =>
+        this.ctx.storage.sql.exec(
+          'INSERT INTO session_chunks (idx, raw_hash, raw_size, compressed_hash, compressed_size, present) VALUES (?, ?, ?, ?, ?, ?)',
+          index,
+          chunk.raw_hash,
+          chunk.raw_size,
+          chunk.compressed_hash,
+          chunk.compressed_size,
+          chunk.present ? 1 : 0,
+        ),
+      );
       return true;
     });
   }
 
-  setQueued(jobId: string): void {
-    this.ctx.storage.transactionSync(() =>
-      this.ctx.storage.sql.exec(
+  setQueued(jobId: string): boolean {
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.row();
+      if (!row || row.state !== 'COMPLETING') return false;
+      assertTransition(row.state, 'QUEUED');
+      const cursor = this.ctx.storage.sql.exec(
         "UPDATE job SET state = 'QUEUED' WHERE job_id = ? AND state = 'COMPLETING'",
         jobId,
-      ),
-    );
+      );
+      if (rowsUpdated(cursor) === 0) return false;
+      return true;
+    });
   }
 
-  setState(jobId: string, from: UploadState[], to: UploadState): void {
-    this.ctx.storage.transactionSync(() =>
-      this.ctx.storage.sql.exec(
+  setState(jobId: string, from: UploadState[], to: UploadState): boolean {
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.row();
+      if (!row || !from.includes(row.state)) return false;
+      assertTransition(row.state, to);
+      const cursor = this.ctx.storage.sql.exec(
         `UPDATE job SET state = ? WHERE job_id = ? AND state IN (${from.map(() => '?').join(', ')})`,
         to,
         jobId,
         ...from,
-      ),
-    );
+      );
+      if (rowsUpdated(cursor) === 0) return false;
+      return true;
+    });
   }
 
-  /** Returns the stored receipt, whose `published_at` the first attempt set. */
+  /**
+   * Records the publish receipt, keeping the first `published_at` across
+   * retries. Reports whether it wrote via `wrote`: false means the row had
+   * already left `from` (a concurrent fail/abort won) and the caller must
+   * re-read instead of assuming the receipt was recorded.
+   */
   setResult(
     jobId: string,
     result: ProcessReceipt,
     from: UploadState[],
     to: UploadState,
-  ): ProcessReceipt {
+  ): SetResultOutcome {
     return this.ctx.storage.transactionSync(() => {
+      const row = this.row();
+      if (!row || !from.includes(row.state))
+        return {
+          ...result,
+          published_at: row?.result?.published_at ?? result.published_at,
+          wrote: false as const,
+        };
+      assertTransition(row.state, to);
       const receipt = {
         ...result,
-        published_at: this.row()?.result?.published_at ?? result.published_at,
+        published_at: row.result?.published_at ?? result.published_at,
       };
-      this.ctx.storage.sql.exec(
+      const cursor = this.ctx.storage.sql.exec(
         `UPDATE job SET state = ?, result = ? WHERE job_id = ? AND state IN (${from.map(() => '?').join(', ')})`,
         to,
         JSON.stringify(receipt),
         jobId,
         ...from,
       );
-      return receipt;
+      if (rowsUpdated(cursor) === 0)
+        return { ...receipt, wrote: false as const };
+      return { ...receipt, wrote: true as const };
     });
   }
 
-  setError(jobId: string, message: string, to: UploadState = 'FAILED'): void {
-    this.ctx.storage.transactionSync(() =>
-      this.ctx.storage.sql.exec(
-        'UPDATE job SET state = ?, error = ? WHERE job_id = ?',
+  setError(
+    jobId: string,
+    message: string,
+    to: UploadState = 'FAILED',
+  ): boolean {
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.row();
+      if (!row) return false;
+      // Conditional like setState: a late fail() racing a concurrent
+      // publish must not clobber READY (or ABORTED) back to FAILED and
+      // leave a live index record. Only states that can reach `to` may
+      // write; a false return means the row moved on and the caller must
+      // re-read instead of assuming the failure was recorded.
+      const allowed = (Object.keys(TRANSITIONS) as UploadState[]).filter(
+        (from) => TRANSITIONS[from].includes(to),
+      );
+      if (!allowed.includes(row.state)) return false;
+      assertTransition(row.state, to);
+      const cursor = this.ctx.storage.sql.exec(
+        `UPDATE job SET state = ?, error = ? WHERE job_id = ? AND state IN (${allowed.map(() => '?').join(', ')})`,
         to,
         message.slice(0, 2000),
         jobId,
-      ),
-    );
+        ...allowed,
+      );
+      if (rowsUpdated(cursor) === 0) return false;
+      return true;
+    });
   }
+}
+
+/**
+ * Every legal upload state change. The helpers above check the row they
+ * actually update and assert the move, so an illegal transition throws
+ * instead of silently stranding an upload in a state nothing reads, or
+ * resurrecting a terminal one. Self-moves exist only where a retry
+ * legitimately re-runs a step: the publish step re-runs setResult when it
+ * finds the row already PUBLISHING, keeping the first published_at, and
+ * concurrent failure paths may re-mark an already FAILED upload.
+ */
+const TRANSITIONS: Record<string, readonly string[]> = {
+  UPLOADING: ['COMPLETING', 'ABORTED', 'FAILED'],
+  COMPLETING: ['QUEUED', 'PROCESSING', 'ABORTED', 'FAILED'],
+  QUEUED: ['PROCESSING', 'ABORTED', 'FAILED'],
+  PROCESSING: ['PUBLISHING', 'FAILED'],
+  PUBLISHING: ['PUBLISHING', 'READY', 'FAILED'],
+  READY: [],
+  FAILED: ['FAILED'],
+  ABORTED: [],
+};
+
+function assertTransition(from: UploadState, to: UploadState): void {
+  if (!TRANSITIONS[from]?.includes(to))
+    throw new Error(`invalid upload transition ${from} -> ${to}`);
 }
