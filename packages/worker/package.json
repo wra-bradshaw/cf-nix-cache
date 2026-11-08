@@ -35,20 +35,19 @@
     "node": ">=20"
   },
   "scripts": {
-    "check": "tsc --noEmit && tsc -p tsconfig.node.json && eslint . && prettier --check . && pnpm boundaries:check && knip",
-    "fix": "eslint . --fix && prettier --write .",
-    "dev": "vite dev",
-    "predev": "pnpm generate",
-    "build": "vite build && node scripts/package.mts",
-    "prebuild": "pnpm generate",
-    "prepack": "pnpm build",
-    "test": "vitest run --config vitest.config.ts && vitest run --config vitest.node.config.ts",
-    "pretest": "pnpm generate",
     "generate": "node scripts/generate-contracts.mts && node scripts/build-verifier.mts",
-    "precheck": "pnpm generate",
-    "pree2e": "pnpm generate",
-    "boundaries:check": "node scripts/check-boundaries.mts",
-    "e2e": "vitest run --config vitest.e2e.config.ts"
+    "check": "pnpm generate && pnpm run _lint",
+    "test": "pnpm generate && pnpm run _test",
+    "build": "pnpm generate && pnpm run _build",
+    "e2e": "pnpm generate && pnpm run _e2e",
+    "check:all": "pnpm generate && node scripts/generate-contracts.mts --check && pnpm run _lint && pnpm run _test && pnpm run _build && pnpm run _e2e",
+    "dev": "pnpm generate && vite dev",
+    "fix": "eslint . --fix && prettier --write .",
+    "prepack": "pnpm build",
+    "_lint": "tsc --noEmit && tsc -p tsconfig.node.json && eslint . && prettier --check . && node scripts/check-boundaries.mts && knip",
+    "_test": "vitest run --config vitest.config.ts && vitest run --config vitest.node.config.ts",
+    "_build": "vite build && node scripts/package.mts",
+    "_e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.66.0",

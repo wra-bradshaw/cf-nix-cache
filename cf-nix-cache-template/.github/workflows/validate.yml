@@ -16,8 +16,6 @@ jobs:
         uses: actions/checkout@v7
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
-        with:
-          version: 11.15.0
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
@@ -27,10 +25,6 @@ jobs:
       # and auto-merge depends on this job, so it must never pass by skipping.
       - name: Install the standalone template
         run: pnpm install --frozen-lockfile
-      # `check` type-checks, runs the unit tests (JSONC parser and config
-      # validation), validates wrangler.jsonc against the installed release,
-      # and dry-runs it with Wrangler. The dry-run compiles and validates
-      # locally and needs no Cloudflare credentials, so forks without secrets
-      # still pass this job.
+      # The Wrangler dry-run needs no Cloudflare credentials, so forks pass too.
       - name: Type-check, validate and dry-run the config
         run: pnpm run check

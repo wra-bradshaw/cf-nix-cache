@@ -34,6 +34,25 @@ const templatePackage = JSON.parse(
 
 const failures: string[] = [];
 
+// For the publish workflow: an unfinalized manifest means "nothing to
+// publish yet" rather than a failure.
+if (writeGithubOutput && manifest.releaseReady !== true) {
+  await githubOutput({ ready: "false" });
+  console.log("release metadata has not been finalized; nothing to publish");
+  process.exit(0);
+}
+
+async function githubOutput(values: Record<string, string>): Promise<void> {
+  const output = process.env.GITHUB_OUTPUT;
+  if (!output) throw new Error("GITHUB_OUTPUT is not set");
+  await appendFile(
+    output,
+    Object.entries(values)
+      .map(([key, value]) => `${key}=${value}\n`)
+      .join(""),
+  );
+}
+
 async function placeholderFiles(directory: string): Promise<string[]> {
   const matches: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -99,11 +118,9 @@ if (failures.length > 0) {
   );
 }
 
-if (writeGithubOutput && failures.length === 0) {
-  const output = process.env.GITHUB_OUTPUT;
-  if (!output) throw new Error("GITHUB_OUTPUT is not set");
-  await appendFile(
-    output,
-    `package_name=${packageJson.name}\nversion=${packageJson.version}\n`,
-  );
-}
+if (writeGithubOutput && failures.length === 0)
+  await githubOutput({
+    ready: "true",
+    package_name: packageJson.name,
+    version: packageJson.version,
+  });

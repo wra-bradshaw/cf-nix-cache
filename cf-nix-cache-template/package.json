@@ -7,7 +7,6 @@
   "repository": "https://github.com/wra-bradshaw/cf-nix-cache-template",
   "scripts": {
     "check": "tsc --noEmit && pnpm test && tsx scripts/check-config.mts && wrangler deploy --dry-run",
-    "check:ci": "tsc --noEmit && pnpm test && tsx scripts/check-config.mts",
     "test": "tsx --test \"scripts/lib/*.test.mts\"",
     "setup": "tsx scripts/deploy.mts setup",
     "deploy": "tsx scripts/deploy.mts deploy",

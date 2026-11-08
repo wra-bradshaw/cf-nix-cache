@@ -59,8 +59,9 @@ Run these in `nix develop`: generating the Worker's sources compiles
 cargo fmt --check
 cargo test --workspace
 pnpm --dir packages/worker install
-pnpm --dir packages/worker check  # regenerates contracts and the verifier, then runs boundaries:check
+pnpm --dir packages/worker check  # regenerates contracts and the verifier, then lints
 pnpm --dir packages/worker test
+pnpm --dir packages/worker check:all  # what CI runs: one generate, then lint, test, build and e2e
 ```
 
 The deployment app has explicit `plan`, `apply`, and `destroy` modes. Only
