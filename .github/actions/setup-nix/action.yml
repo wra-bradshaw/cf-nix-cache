@@ -26,20 +26,35 @@ runs:
         PULL_TOKEN: ${{ inputs.pull-token }}
       run: |
         echo "CACHE_NAME=$CACHE_NAME" >> "$GITHUB_ENV"
+        hook="$RUNNER_TEMP/nix-post-build-hook.sh"
+        log="$RUNNER_TEMP/nix-built-paths.log"
+        {
+          printf '%s\n' '#!/bin/sh' \
+            '# Log locally-built outputs for later cache push; never fail the build.' \
+            '# shellcheck disable=SC2086' \
+            'for p in $OUT_PATHS; do printf "%s\n" "$p"; done >> "'"$log"'" 2>/dev/null || true' \
+            'exit 0'
+        } > "$hook"
+        chmod +x "$hook"
+        : > "$log"
+        chmod 644 "$log"
+        echo "NIX_BUILT_PATHS_FILE=$log" >> "$GITHUB_ENV"
+        printf 'post-build-hook = %s\n' "$hook" \
+          | sudo tee -a /etc/nix/nix.custom.conf >/dev/null
         if [ -z "$ENDPOINT" ] || [ -z "$PUBLIC_KEY" ] || [ -z "$PULL_TOKEN" ]; then
           echo "::warning::cf-nix-cache secrets are unavailable; building without the cache"
-          exit 0
+        else
+          endpoint="${ENDPOINT%/}"
+          host="${endpoint#*://}"
+          host="${host%%/*}"
+          netrc="$RUNNER_TEMP/cf-nix-cache-netrc"
+          (umask 077; printf 'machine %s login token password %s\n' "$host" "$PULL_TOKEN" > "$netrc")
+          sudo mkdir -p /etc/determinate
+          jq -n --arg netrc "$netrc" '{authentication: {additionalNetrcSources: [$netrc]}}' \
+            | sudo tee /etc/determinate/config.json >/dev/null
+          printf 'extra-substituters = %s/cache/%s\nextra-trusted-public-keys = %s\n' \
+            "$endpoint" "$CACHE_NAME" "$PUBLIC_KEY" \
+            | sudo tee -a /etc/nix/nix.custom.conf >/dev/null
         fi
-        endpoint="${ENDPOINT%/}"
-        host="${endpoint#*://}"
-        host="${host%%/*}"
-        netrc="$RUNNER_TEMP/cf-nix-cache-netrc"
-        (umask 077; printf 'machine %s login token password %s\n' "$host" "$PULL_TOKEN" > "$netrc")
-        sudo mkdir -p /etc/determinate
-        jq -n --arg netrc "$netrc" '{authentication: {additionalNetrcSources: [$netrc]}}' \
-          | sudo tee /etc/determinate/config.json >/dev/null
-        printf 'extra-substituters = %s/cache/%s\nextra-trusted-public-keys = %s\n' \
-          "$endpoint" "$CACHE_NAME" "$PUBLIC_KEY" \
-          | sudo tee -a /etc/nix/nix.custom.conf >/dev/null
         sudo systemctl restart nix-daemon.service
         timeout 30 sh -c 'until nix store info >/dev/null 2>&1; do sleep 1; done'

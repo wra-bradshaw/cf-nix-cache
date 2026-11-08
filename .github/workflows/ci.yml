@@ -47,4 +47,11 @@ jobs:
         env:
           CF_NIX_CACHE_ENDPOINT: ${{ secrets.CF_NIX_CACHE_ENDPOINT }}
           CF_NIX_CACHE_TOKEN: ${{ secrets.CF_NIX_CACHE_TOKEN }}
-        run: ./result/bin/cf-nix-cache push "$CACHE_NAME" ./result
+        run: |
+          [ -f "${NIX_BUILT_PATHS_FILE:-}" ] || exit 0
+          tmp="$(mktemp)"
+          sort -u "$NIX_BUILT_PATHS_FILE" | while IFS= read -r p; do
+            [ -e "$p" ] && printf '%s\n' "$p"
+          done > "$tmp" || true
+          [ -s "$tmp" ] || exit 0
+          xargs -r ./result/bin/cf-nix-cache push "$CACHE_NAME" < "$tmp"
