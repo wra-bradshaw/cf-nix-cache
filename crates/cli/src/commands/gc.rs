@@ -1,10 +1,8 @@
-//! `gc`: inspects or starts garbage collection on the server.
-
-use anyhow::Result;
-use cf_nix_cache_core::contracts::{
+use crate::protocol::contracts::{
     api as contract,
     responses::{GcRunResponse, GcStatusResponse},
 };
+use anyhow::Result;
 use reqwest::Method;
 
 use super::print_json;

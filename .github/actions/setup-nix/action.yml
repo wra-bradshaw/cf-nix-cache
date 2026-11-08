@@ -1,0 +1,45 @@
+name: Set up Nix
+description: >-
+  Install Determinate Nix and substitute from the project's cf-nix-cache when
+  its secrets are available. Exports CACHE_NAME for later steps.
+
+inputs:
+  cache-name:
+    description: Cache to pull from; defaults to `will`.
+  endpoint:
+    description: CF_NIX_CACHE_ENDPOINT secret.
+  public-key:
+    description: CF_NIX_CACHE_PUBLIC_KEY secret.
+  pull-token:
+    description: CF_NIX_CACHE_PULL_TOKEN secret.
+
+runs:
+  using: composite
+  steps:
+    - uses: DeterminateSystems/determinate-nix-action@v3
+    - name: Configure the cf-nix-cache substituter
+      shell: bash
+      env:
+        CACHE_NAME: ${{ inputs.cache-name || 'will' }}
+        ENDPOINT: ${{ inputs.endpoint }}
+        PUBLIC_KEY: ${{ inputs.public-key }}
+        PULL_TOKEN: ${{ inputs.pull-token }}
+      run: |
+        echo "CACHE_NAME=$CACHE_NAME" >> "$GITHUB_ENV"
+        if [ -z "$ENDPOINT" ] || [ -z "$PUBLIC_KEY" ] || [ -z "$PULL_TOKEN" ]; then
+          echo "::warning::cf-nix-cache secrets are unavailable; building without the cache"
+          exit 0
+        fi
+        endpoint="${ENDPOINT%/}"
+        host="${endpoint#*://}"
+        host="${host%%/*}"
+        netrc="$RUNNER_TEMP/cf-nix-cache-netrc"
+        (umask 077; printf 'machine %s login token password %s\n' "$host" "$PULL_TOKEN" > "$netrc")
+        sudo mkdir -p /etc/determinate
+        jq -n --arg netrc "$netrc" '{authentication: {additionalNetrcSources: [$netrc]}}' \
+          | sudo tee /etc/determinate/config.json >/dev/null
+        printf 'extra-substituters = %s/cache/%s\nextra-trusted-public-keys = %s\n' \
+          "$endpoint" "$CACHE_NAME" "$PUBLIC_KEY" \
+          | sudo tee -a /etc/nix/nix.custom.conf >/dev/null
+        sudo systemctl restart nix-daemon.service
+        timeout 30 sh -c 'until nix store info >/dev/null 2>&1; do sleep 1; done'

@@ -6,7 +6,6 @@ import { now } from '../../../shared/clock';
 import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
 import { GcLedger } from './ledger';
 
-/** The installation-wide authority for garbage collection and upload leases. */
 export class GcControl extends RpcOnlyDurableObject {
   private readonly ledger: GcLedger;
   private readonly audit: AuditOutbox;
@@ -75,7 +74,6 @@ export class GcControl extends RpcOnlyDurableObject {
     return this.ledger.finish(summary);
   }
 
-  /** The token is empty while the upload gate is closed. */
   async acquireLease(input: {
     job_id: string;
   }): Promise<RpcResult<{ token: string | null }>> {

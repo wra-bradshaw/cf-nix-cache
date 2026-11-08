@@ -1,13 +1,9 @@
-//! The API responses the CLI acts on, limited to the fields it reads, so that a
-//! newer server's additions don't break it. Commands that only show a response
-//! print it unparsed. The tests tie these shapes to the schemas.
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MissingPathsResponse {
     pub missing: Vec<String>,
-    /// Paths another push is uploading; older servers do not report them.
+    /// Older servers omit this.
     #[serde(default)]
     pub pending: Vec<PendingUpload>,
 }
@@ -61,11 +57,10 @@ pub struct UploadStateResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::responses as generated;
+    use crate::protocol::contracts::responses as generated;
     use serde::de::DeserializeOwned;
     use serde_json::{json, Value};
 
-    /// `value` must be valid for the schema type `S` and readable as `W`.
     fn readable_from_schema<S: DeserializeOwned, W: DeserializeOwned>(value: Value) -> W {
         serde_json::from_value::<S>(value.clone()).expect("sample violates the schema");
         serde_json::from_value(value).expect("wire type cannot read a valid response")

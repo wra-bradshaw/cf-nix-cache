@@ -3,39 +3,6 @@
 forEachSupportedSystem (
   { pkgs, ... }:
   let
-    prepareImage = pkgs.writeShellApplication {
-      name = "cf-nix-cache-prepare-image";
-      runtimeInputs = [
-        pkgs.coreutils
-        pkgs.docker-client
-        pkgs.nix
-      ];
-      text = ''
-        image_name="cf-nix-cache-processor"
-        image_path="$(nix build .#packages.x86_64-linux.processorImage --no-link --print-out-paths)"
-        image_hash="$(basename "$image_path" | cut -d- -f1)"
-        image_tag="$image_name:nix-$image_hash"
-        image_marker=".wrangler/nix-processor-image-$image_hash"
-
-        mkdir -p .wrangler
-        image_id=""
-        if image_id="$(docker image inspect "$image_tag" --format '{{.Id}}' 2>/dev/null)"; then
-          :
-        else
-          image_id=""
-        fi
-        expected_marker="$(printf '%s\n%s\n' "$image_path" "$image_id")"
-
-        if [ -z "$image_id" ] || [ "$(cat "$image_marker" 2>/dev/null || true)" != "$expected_marker" ]; then
-          docker load --input "$image_path" >/dev/null
-          docker tag "$image_name:nix" "$image_tag"
-          image_id="$(docker image inspect "$image_tag" --format '{{.Id}}')"
-          printf '%s\n%s\n' "$image_path" "$image_id" > "$image_marker"
-        fi
-
-        printf '%s\n' "$image_tag"
-      '';
-    };
     deploy = pkgs.writeShellApplication {
       name = "cf-nix-cache-deploy";
       runtimeInputs = [
@@ -44,27 +11,22 @@ forEachSupportedSystem (
         pkgs.gnugrep
         pkgs.nodejs
         pkgs.pnpm
-        prepareImage
       ];
       text = ''
+        # `pnpm build` compiles crates/verify to wasm32 with the dev shell's
+        # toolchain, so run inside it, with the caller's own `nix`. Like the
+        # rest of this app, this expects the repository root as the working
+        # directory.
+        if [ -z "''${CC_wasm32_unknown_unknown:-}" ]; then
+          exec nix develop --command "$0" "$@"
+        fi
         action="''${1:-plan}"
         if [ "$#" -gt 0 ]; then shift; fi
         case "$action" in plan|apply|destroy) ;; *) echo "usage: deploy [plan|apply|destroy]" >&2; exit 2 ;; esac
 
         # wrangler.jsonc is the source of truth. The production R2 bucket name
         # is read from it so it cannot drift from the Worker binding.
-        # shellcheck disable=SC2016 # the single-quoted program is JavaScript.
-        prod_bucket="$(node -e '
-          const fs = require("node:fs");
-          let source = fs.readFileSync("wrangler.jsonc", "utf8");
-          source = source.replace(/\/\*[\s\S]*?\*\//g, "");
-          source = source.replace(/(^|[^:])\/\/.*$/gm, "$1");
-          source = source.replace(/,\s*([}\]])/g, "$1");
-          const config = JSON.parse(source);
-          const bucket = (config.env?.production?.r2_buckets ?? []).find((b) => b.binding === "CACHE_BUCKET")?.bucket_name;
-          if (!bucket) { console.error("CACHE_BUCKET is not configured in env.production"); process.exit(1); }
-          process.stdout.write(bucket);
-        ')"
+        prod_bucket="$(node packages/worker/scripts/production-bucket.mts wrangler.jsonc)"
 
         w() {
           pnpm --dir packages/worker exec wrangler "$@" --config "$PWD/wrangler.jsonc"
@@ -111,8 +73,7 @@ forEachSupportedSystem (
 
         case "$action" in
           plan)
-            # Validates the Worker bundle without pushing images or touching
-            # account resources.
+            # Validates the Worker bundle without touching account resources.
             CLOUDFLARE_ENV=production \
               CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH="$PWD/wrangler.jsonc" \
               pnpm --dir packages/worker build
@@ -133,21 +94,11 @@ forEachSupportedSystem (
             check_secrets
             ensure_bucket_and_lifecycle
 
-            # Wrangler builds the Dockerfile on top of the loaded Nix image and
-            # pushes it to the account's registry during deploy.
-            image_ref="$(cf-nix-cache-prepare-image)"
-            rendered_config=".wrangler.production.json"
-            node packages/worker/scripts/render-wrangler-config.mts \
-              --input wrangler.jsonc \
-              --output "$rendered_config" \
-              --image "$image_ref"
             CLOUDFLARE_ENV=production \
-              CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH="$PWD/$rendered_config" \
+              CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH="$PWD/wrangler.jsonc" \
               pnpm --dir packages/worker build
 
-            pnpm --dir packages/worker exec wrangler deploy \
-              --config "$PWD/$rendered_config" \
-              --env production
+            w deploy --env production
             ;;
         esac
       '';
@@ -155,15 +106,17 @@ forEachSupportedSystem (
     dev = pkgs.writeShellApplication {
       name = "cf-nix-cache-dev";
       runtimeInputs = [
-        pkgs.coreutils
-        pkgs.docker-client
         pkgs.nodejs
         pkgs.pnpm
-        prepareImage
       ];
       text = ''
-        image_ref="$(cf-nix-cache-prepare-image)"
-        docker tag "$image_ref" "cf-nix-cache-processor:nix-local"
+        # `pnpm build` compiles crates/verify to wasm32 with the dev shell's
+        # toolchain, so run inside it, with the caller's own `nix`. Like the
+        # rest of this app, this expects the repository root as the working
+        # directory.
+        if [ -z "''${CC_wasm32_unknown_unknown:-}" ]; then
+          exec nix develop --command "$0" "$@"
+        fi
         exec pnpm --dir packages/worker dev "$@"
       '';
     };

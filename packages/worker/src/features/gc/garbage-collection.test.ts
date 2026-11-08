@@ -47,7 +47,6 @@ interface Path {
   last_accessed: number;
 }
 
-/** A cache installation: a real ledger over in-memory paths and objects. */
 class World {
   readonly ledger = realLedger();
   readonly objects = new Map<string, { size: number; uploaded: number }>();
@@ -157,7 +156,6 @@ class World {
     return cache;
   }
 
-  /** Stores a manifest and chunks, as a processor would. */
   store(manifest: string, chunks: string[], uploaded = OLD): void {
     this.manifests.set(manifest, chunks);
     this.objects.set(manifest, { size: 1, uploaded });
@@ -181,7 +179,6 @@ class World {
     );
   }
 
-  /** A live path's chain must be intact, or the path cannot be served. */
   assertServable(manifest: string): void {
     expect(this.objects.has(manifest)).toBe(true);
     for (const chunk of this.manifests.get(manifest)!)
@@ -410,12 +407,10 @@ describe('races with uploads', () => {
   it('keeps objects an upload reused after the mark walk passed', async () => {
     const world = new World();
     const cache = world.cache();
-    // Unreferenced at the start of the run, so it is a deletion candidate.
     world.store('manifests/reused', ['chunks/reused']);
     world.store('manifests/dead', ['chunks/dead']);
     let published = false;
     world.onStep = (name) => {
-      // The upload deduplicates, then publishes, once listing is under way.
       if (name === 'count candidates' && !published) {
         published = true;
         value(world.ledger.acquireLease({ job_id: 'j', token: 't', now: NOW }));
@@ -443,7 +438,6 @@ describe('races with uploads', () => {
     const cache = world.cache();
     world.store('manifests/reused', ['chunks/reused']);
     world.store('manifests/dead', ['chunks/dead']);
-    // Processing started before the run, and has already seen the old objects.
     value(world.ledger.acquireLease({ job_id: 'j', token: 't', now: NOW }));
     world.onStep = (name) => {
       if (name === 'sleep') {
@@ -559,7 +553,6 @@ describe('failure', () => {
         () => NOW,
       ),
     ).rejects.toThrow('lost connection');
-    // The manifest went first, so no surviving manifest points at a lost chunk.
     expect([...world.objects.keys()]).toEqual(['chunks/dead']);
     await world.run({}, 'second');
     expect(world.objects.size).toBe(0);

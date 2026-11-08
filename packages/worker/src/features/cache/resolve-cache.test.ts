@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { getCacheForDeletion } from './resolve-cache';
+import { effectiveLifecycle, getCacheForDeletion } from './resolve-cache';
 import type { CacheConfig, CacheReference } from './types';
 
 const notFound = {
@@ -30,7 +30,6 @@ const config: CacheConfig = {
   upstream_cache_key_names: [],
 };
 
-/** A catalogue row whose coordinator exists only once initialized. */
 function environment(lifecycle: CacheReference['lifecycle']) {
   let initialized = false;
   const initialize = vi.fn(async () => {
@@ -76,4 +75,24 @@ describe('resolving a cache for deletion', () => {
     });
     expect(initialize).not.toHaveBeenCalled();
   });
+});
+
+describe('the effective lifecycle', () => {
+  it.each([
+    ['DELETING', 'ACTIVE', 'DELETING'],
+    ['ACTIVE', 'DELETING', 'DELETING'],
+    ['CREATING', 'ACTIVE', 'CREATING'],
+    ['ACTIVE', 'CREATING', 'CREATING'],
+    ['ACTIVE', 'ACTIVE', 'ACTIVE'],
+  ])(
+    'catalogue %s with coordinator %s reads %s',
+    (catalogue, coordinator, expected) => {
+      expect(
+        effectiveLifecycle(
+          catalogue as CacheReference['lifecycle'],
+          coordinator as CacheConfig['lifecycle'],
+        ),
+      ).toBe(expected);
+    },
+  );
 });

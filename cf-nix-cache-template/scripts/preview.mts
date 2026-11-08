@@ -1,13 +1,12 @@
-import { withRenderedConfig } from "./lib/config.mts";
-import { releaseImage } from "./lib/release.mts";
+import { readValidConfig } from "./lib/config.mts";
+import { releaseManifest } from "./lib/release.mts";
 import { wrangler } from "./lib/wrangler.mts";
 
 export async function preview(): Promise<void> {
-  const { image } = await releaseImage();
-  await withRenderedConfig(image, async (rendered) => {
-    await wrangler(["versions", "upload"], {}, rendered);
-  });
+  await readValidConfig();
+  await releaseManifest();
+  await wrangler(["versions", "upload"]);
   console.log(
-    "Uploaded a Worker version for preview; production Container state was not changed.",
+    "Uploaded a Worker version for preview; production traffic was not changed.",
   );
 }

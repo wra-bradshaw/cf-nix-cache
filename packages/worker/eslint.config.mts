@@ -8,7 +8,7 @@ export default tseslint.config(
       'dist/**',
       'coverage/**',
       'worker-configuration.d.ts',
-      'src/generated/json-contracts.ts',
+      'src/generated/**',
     ],
   },
   eslint.configs.recommended,

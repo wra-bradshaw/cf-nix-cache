@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cf-nix-cache.dev/schemas/manifest.json",
+  "$comment": "Still canonical for the Worker: validated as ChunkManifest via ChunkManifestSchema and stored as the upload manifest. The Rust contracts crate no longer re-exports this schema since the processor container was removed; the TypeScript contracts generated from schemas/*.json remain the source of truth.",
   "title": "cf-nix-cache chunk manifest",
   "type": "object",
   "additionalProperties": false,

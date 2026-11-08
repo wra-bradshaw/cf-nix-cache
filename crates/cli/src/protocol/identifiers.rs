@@ -1,8 +1,6 @@
-use crate::Error;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-/// The Nix base32 alphabet (no `e`, `o`, `u`, or `t`).
 const NIX32_ALPHABET: &[u8] = b"0123456789abcdfghijklmnpqrsvwxyz";
 
 fn is_nix32(value: &str, len: usize) -> bool {
@@ -13,18 +11,18 @@ pub fn nix_base32(bytes: &[u8]) -> String {
     nix_base32::to_nix_base32(bytes)
 }
 
-pub fn validate_store_hash(value: &str) -> Result<(), Error> {
-    is_nix32(value, 32)
-        .then_some(())
-        .ok_or(Error::InvalidStoreHash)
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum Invalid {
+    #[error("cache names must be 1-64 lowercase letters, digits, '-' or '_'")]
+    CacheName,
+    #[error("store hashes must be 32 lowercase Nix base32 characters")]
+    StoreHash,
+    #[error("store path names must contain a 32-character Nix hash, '-', and a non-empty name")]
+    StorePathName,
 }
 
-pub(crate) fn validate_nar_hash(value: &str) -> Result<(), Error> {
-    value
-        .strip_prefix("sha256:")
-        .is_some_and(|hash| is_nix32(hash, 52))
-        .then_some(())
-        .ok_or(Error::InvalidNarHash)
+pub fn validate_store_hash(value: &str) -> Result<(), Invalid> {
+    is_nix32(value, 32).then_some(()).ok_or(Invalid::StoreHash)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -42,7 +40,7 @@ impl<'de> Deserialize<'de> for CacheName {
 }
 
 impl FromStr for CacheName {
-    type Err = Error;
+    type Err = Invalid;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let valid = !value.is_empty()
@@ -50,9 +48,7 @@ impl FromStr for CacheName {
             && value
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
-        valid
-            .then(|| Self(value.into()))
-            .ok_or(Error::InvalidCacheName)
+        valid.then(|| Self(value.into())).ok_or(Invalid::CacheName)
     }
 }
 
@@ -77,11 +73,11 @@ impl<'de> Deserialize<'de> for StorePathName {
 }
 
 impl FromStr for StorePathName {
-    type Err = Error;
+    type Err = Invalid;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let Some((hash, name)) = value.split_once('-') else {
-            return Err(Error::InvalidStorePathName);
+            return Err(Invalid::StorePathName);
         };
         validate_store_hash(hash)?;
         if name.is_empty()
@@ -89,7 +85,7 @@ impl FromStr for StorePathName {
             || value.contains('/')
             || value.chars().any(|character| character.is_control())
         {
-            return Err(Error::InvalidStorePathName);
+            return Err(Invalid::StorePathName);
         }
         Ok(Self(value.to_owned()))
     }
@@ -125,13 +121,6 @@ mod tests {
         assert!(format!("{}-bad/name", "0".repeat(32))
             .parse::<StorePathName>()
             .is_err());
-    }
-
-    #[test]
-    fn validates_nar_hashes() {
-        assert!(validate_nar_hash(&format!("sha256:{}", "0".repeat(52))).is_ok());
-        assert!(validate_nar_hash("sha256:bad").is_err());
-        assert!(validate_nar_hash(&format!("sha512:{}", "0".repeat(52))).is_err());
     }
 
     #[test]

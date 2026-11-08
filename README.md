@@ -6,20 +6,21 @@ The data plane is a TypeScript Cloudflare Worker. SQLite-backed Durable
 Objects own mutable state and serialization, R2 stores immutable
 content-addressed chunks, and the CLI chunks and compresses each NAR itself, so
 a push sends only the chunks the installation lacks and the Worker checks them
-before publishing. A native Rust Container verifies NARs too large to check in
-a Worker request, in retryable Workflows.
+before publishing. The checks run in the Worker itself, with a Rust verifier
+compiled to WebAssembly: in the completing request for NARs up to 256 MiB, and
+in a retryable Workflow step for larger ones.
 
 ## Layout
 
 - `packages/worker`: the Worker (HTTP API, Nix substituter, authentication,
-  Durable Objects, Container binding, and Workflows). It is also the published
-  `cf-nix-cache` npm package, together with its immutable processor release
-  manifest.
+  Durable Objects, and Workflows). It is also the published `cf-nix-cache`
+  npm package, together with its release manifest.
 - `crates/core`: Rust protocol values, encoding parameters, and manifest
   validation.
 - `crates/contracts`: generated Rust wire DTOs from the JSON Schemas.
-- `crates/processor`: native Container service that verifies large uploads:
-  their stored chunks decode to their keys and make up a valid NAR.
+- `crates/verify`: the upload verifier, compiled to wasm32 and bundled with
+  the Worker: stored chunks decode (C zstd) to their declared sizes and make up
+  a valid NAR. The Worker hashes them with native SHA-256.
 - `crates/cli`: Nix publisher (including the client-side encoder) and
   administration client.
 - `schemas`: JSON contracts shared by Worker and Rust.
@@ -39,25 +40,28 @@ The supported customer distribution is the standalone
 tiny Worker entrypoint, pinned Wrangler/dependency versions, customer-owned
 `wrangler.jsonc`, and setup/upgrade helpers. Cloudflare Workers Builds runs
 `pnpm run deploy`; external CI can run the same command. No deployment from that
-template builds Rust; Wrangler only wraps the pre-built processor image in a
-one-line Dockerfile and pushes it to the account's registry.
+template builds Rust: the published package already contains the compiled
+WebAssembly verifier.
 
-Releases publish `cf-nix-cache@X.Y.Z` and the matching public
-`linux/amd64` processor image. The package's release manifest records the
-immutable image digest, so Dependabot/Renovate updates one dependency. The
-template renders a temporary Wrangler config that changes only the processor
-image and leaves customer names, placement, routes, and observability
-intact. The development flake below remains useful for local builds and
+Releases publish `cf-nix-cache@X.Y.Z`, so Dependabot/Renovate updates one
+dependency, and customer names, placement, routes, and observability in the
+template's `wrangler.jsonc` stay intact. Large uploads are verified in a
+Workflow step with `limits.cpu_ms` of 300000, which needs the Workers Paid
+plan. The development flake below remains useful for local builds and
 integration tests; it is not the customer upgrade path.
 
 ## Local checks
+
+Run these in `nix develop`: generating the Worker's sources compiles
+`crates/verify` for wasm32, which needs the dev shell's `lld` and clang.
 
 ```console
 cargo fmt --check
 cargo test --workspace
 pnpm --dir packages/worker install
-pnpm --dir packages/worker check  # includes contracts:check and boundaries:check
+pnpm --dir packages/worker check  # regenerates contracts and the verifier, then lints
 pnpm --dir packages/worker test
+pnpm --dir packages/worker check:all  # what CI runs: one generate, then lint, test, build and e2e
 ```
 
 The deployment app has explicit `plan`, `apply`, and `destroy` modes. Only
@@ -66,8 +70,8 @@ ensures the R2 bucket and lifecycle rules, and deploys the Worker; `plan` is a
 dry-run deploy and `destroy` prints manual teardown steps instead of deleting
 anything.
 
-Run the full local integration test with Miniflare, local R2, the native Rust
-processor, and a real Nix closure:
+Run the full local integration test with Miniflare, local R2, and a real Nix
+closure:
 
 ```console
 pnpm --dir packages/worker e2e
@@ -77,16 +81,6 @@ The test provisions an isolated Worker, Durable Object, and Workflow environment
 pushes `nixpkgs#hello`, verifies the signed Nix metadata and ranged NAR
 responses, then reconstructs the closure with `nix copy`.
 
-The Container reaches R2 at the virtual `http://cache.r2` origin. Container
-egress interception dispatches that host to the Worker's `ObjectStoreProxy`
-entrypoint and its R2 binding, so local development requires neither an S3
-endpoint nor R2 access keys.
-
-`ProcessorContainer` uses the `durable_object` scheduling policy: it is a plain
-Durable Object that starts its container itself with the `processor` image from
-`ctx.container.images`, registers the `cache.r2` interception, waits for
-`/ready`, and sets a two-minute inactivity timeout.
-
 Generate Worker binding types after changing `wrangler.jsonc`:
 
 ```console
@@ -94,10 +88,7 @@ cp .dev.vars.example .dev.vars # if absent, so the secret types are included
 pnpm --dir packages/worker exec wrangler types --config "$PWD/wrangler.jsonc"
 ```
 
-The processor image is built by Nix for `x86_64-linux`, using the Crane/Fenix
-toolchain and the configured Linux builder. Docker is only used to load the
-result locally and to wrap it in Wrangler's container build; it never builds
-Rust. Start local development with:
+Start local development with:
 
 ```console
 nix run .#dev
@@ -108,18 +99,16 @@ the `cf-nix-cache-dev` bucket); the required secrets, including `NIX_PUBLIC_KEYS
 from a gitignored `.dev.vars` (copy `.dev.vars.example`). Deployments use
 `env.production`.
 
-For production, the deploy app builds the same cached Nix image, ensures the
-production R2 bucket and lifecycle rules, and deploys a generated Wrangler
-config whose `PROCESSOR_IMAGE` build variable names that image; Wrangler builds
-the wrapper `Dockerfile` and pushes it to Cloudflare Registry:
+For production, the deploy app builds the Worker, ensures the production R2
+bucket and lifecycle rules, and deploys `env.production` from `wrangler.jsonc`.
+Both apps run in the dev shell, entering it if needed:
 
 ```console
 nix run .#deploy -- apply
 ```
 
-The first local run requires a Docker-compatible engine. Subsequent runs reuse
-the loaded image when the Nix output is unchanged. Secrets are installed with
-`wrangler secret put` and never committed to the repository:
+Secrets are installed with `wrangler secret put` and never committed to the
+repository:
 
 ```console
 pnpm --dir packages/worker exec wrangler secret put AUTH_PRIVATE_JWK --config "$PWD/wrangler.jsonc" --env production

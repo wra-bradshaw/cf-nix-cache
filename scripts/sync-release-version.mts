@@ -42,9 +42,7 @@ await writeFile(
   `${JSON.stringify(templatePackage, null, 2)}\n`,
 );
 
-// The Rust binaries report this version, and the processor writes it into
-// every manifest. The workspace hack keeps its own version.
-const rustCrates = /(name = "cf-nix-cache(?:-core|-contracts|-processor)?"\nversion = )"[^"]+"/g;
+const rustCrates = /(name = "cf-nix-cache(?:-core|-contracts|-verify)?"\nversion = )"[^"]+"/g;
 const edits: [string, (source: string) => string][] = [
   [
     "Cargo.toml",
@@ -58,12 +56,7 @@ const edits: [string, (source: string) => string][] = [
   [
     "nix/packages.nix",
     (source) =>
-      source
-        .replace(/version = "[^"]+";/g, `version = "${packageJson.version}";`)
-        .replace(
-          /"(cf-nix-cache(?:-processor)?)-\d[^"]*"/g,
-          `"$1-${packageJson.version}"`,
-        ),
+      source.replace(/version = "[^"]+";/g, `version = "${packageJson.version}";`),
   ],
 ];
 for (const [file, edit] of edits) {

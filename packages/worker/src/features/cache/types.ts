@@ -45,7 +45,6 @@ export interface CacheReference {
   name: string;
   incarnation: string;
   coordinator_id: string;
-  /** Catalogue lifecycle; SystemControl may lead the coordinator by a step. */
   lifecycle: CacheConfig['lifecycle'];
 }
 
@@ -59,7 +58,6 @@ export interface CacheWorkflowJob {
   operation_id: string;
 }
 
-/** Most clients of a cache also use cache.nixos.org. */
 export const DEFAULT_UPSTREAM_CACHE_KEY_NAMES = ['cache.nixos.org-1'];
 
 export const ENCODING_ID = 'fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1';

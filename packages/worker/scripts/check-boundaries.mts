@@ -43,7 +43,6 @@ const impureSharedModules = new Set([
 const pureFeatureModules = new Set([
   'auth/authorization.ts',
   'cache/publication-protocol.ts',
-  'cache/publication-ports.ts',
   'cache/shards.ts',
   'gc/garbage-collection.ts',
   'gc/gc-ports.ts',

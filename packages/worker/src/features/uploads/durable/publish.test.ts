@@ -115,14 +115,23 @@ describe('upload publication', () => {
 
     function statefulStorage() {
       let result: UploadRow['result'] = null;
+      let state: UploadRow['state'] = 'PROCESSING';
       return {
-        row: () => ({ ...row, result }),
-        setResult: (_: string, receipt: NonNullable<UploadRow['result']>) => {
+        row: () => ({ ...row, state, result }),
+        setResult: (
+          _jobId: string,
+          receipt: NonNullable<UploadRow['result']>,
+        ) => {
           result = {
             ...receipt,
             published_at: result?.published_at ?? receipt.published_at,
           };
-          return result;
+          state = 'PUBLISHING';
+          return { ...result, wrote: true as const };
+        },
+        setState: (_jobId: string, _from: unknown, to: UploadRow['state']) => {
+          state = to;
+          return true;
         },
       } as unknown as UploadStorage;
     }

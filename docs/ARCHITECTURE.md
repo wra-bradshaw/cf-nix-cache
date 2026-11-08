@@ -14,7 +14,7 @@ stock Nix / CLI
 transport ──► application use cases ──► typed ports
                                       ├─ CacheIndex / prepare-commit protocol
                                       ├─ QuotaLedger / reservation protocol
-                                      └─ Durable Object / processor adapters
+                                      └─ Durable Object / Workflow adapters
 ```
 
 Durable Objects are adapters and authorities for mutable state. Cache
@@ -62,8 +62,8 @@ structurally valid NAR with the declared hash (levels 2 and 3); the manifest,
 and so the narinfo `FileHash`, is built from the stored bytes, whichever zstd
 build wrote them. NARs up to 256 MiB are checked in the completing Worker
 request, which benchmarks put at well under the 30-second CPU limit; larger ones
-go to the processor workflow, which reads the same chunks and writes only the
-manifest. The chunk list is written before publication, so a completion
+go to the `ProcessUploadWorkflow`, which runs the same checks in one step,
+reads the same chunks, and writes only the manifest. The chunk list is written before publication, so a completion
 interrupted while publishing is finished by the workflow from the chunks
 already in the bucket: a retryable failure enqueues it immediately, and a later
 state poll or push enqueues it if the request died without a response. The
@@ -73,18 +73,21 @@ The cache coordinator tracks each path's in-flight upload by store hash and
 NAR hash, so concurrent pushes of a path join one upload instead of processing
 it twice. Entries end when the upload does, and expire after an hour.
 
-The processor is split into HTTP bootstrap, verification of a chunk list, NAR
-validation, and an injected object-store adapter. It writes nothing but the
-manifest, so rejected input leaves nothing behind. Invalid input is a permanent
-422; object-store and other infrastructure failures are retryable 503
-responses. Jobs share a pool of 16 `lite` containers, chosen by
-a hash of the job ID so that retries land on the same one; the `durable_object`
-scheduling policy has no `max_instances`, so the pool is the cap. Each
-container runs one job at a time and stops 10 seconds after its last request.
-The Container accesses `CACHE_BUCKET` through the
-Worker's `cache.r2` `outboundByHost` handler, so the same binding targets local
-Miniflare R2 under `wrangler dev` and deployed R2 in production.
-Content-addressed writes are conditional.
+Both paths verify with `crates/verify`, compiled to WebAssembly and bundled
+with the Worker: it decodes each chunk with the C zstd library and validates
+the NAR structure as the chunks stream past, while the Worker hashes raw and
+compressed bytes with native `crypto.subtle`, since WebAssembly has no SHA
+instructions. Verification writes nothing but the manifest, so rejected input
+leaves nothing behind. Invalid content fails the workflow permanently; R2 and
+other infrastructure failures are retried by the step. The step's CPU budget
+is `limits.cpu_ms` (300000, which needs Workers Paid), since Workflow steps
+run under the Worker's configured CPU limit ([Workflows limits](https://developers.cloudflare.com/workflows/reference/limits/));
+at a measured worst case
+of about 6.4 ms per MiB, a 10 GiB NAR is roughly extrapolated as ~66 s
+(linear extrapolation from that rate, about ~6.6 s at 1 GiB; neither is a
+measured bound; see
+[COST_PLAN.md](COST_PLAN.md#results)). Content-addressed writes are
+conditional.
 
 The CLI has command definitions, capability handlers, and a retrying API
 client. Outbound JSON bodies are built directly as the Rust DTOs generated
@@ -116,8 +119,8 @@ installation-wide mark-and-sweep, weekly by default:
 5. **Sweep.** Mark the manifests those uploads published, then delete the
    remaining candidates, manifests before chunks. Then reopen the gate.
 
-An object's age cannot show that deleting it is safe, because the processor's
-conditional writes deduplicate: an old unreferenced chunk can become referenced
+An object's age cannot show that deleting it is safe, because conditional
+writes deduplicate: an old unreferenced chunk can become referenced
 by a new upload with no write to it, and an existing manifest is taken as proof
 that its chunks exist. Upload leases close that race. An upload holds a lease
 from before processing until after publication, and records its manifest before
@@ -131,6 +134,17 @@ ledger or it loses the gate, so a dead run blocks uploads for at most 30 minutes
 Every step is idempotent, and deleting manifests first means an interrupted
 sweep cannot leave a manifest whose chunks are gone.
 
+## Durable Object migrations
+
+Durable Object classes are declared in `wrangler.jsonc` (`exports` at the top
+level, `migrations` in the template's copy). The policy is append-only: never
+edit a past migration, add a new tagged migration for every class change, and
+remove a class with `deleted_classes` rather than by deleting its entry. A
+removed class must hold no durable data worth keeping; `ProcessorContainer`
+was removed this way once verification moved into the Worker. The template
+refuses to deploy a config whose migrations do not delete the removed classes
+it knows about, so an old deployment cannot silently keep a stale class.
+
 ## Worker structure
 
 The worker is organized by feature first. `src/index.ts` is the entrypoint and
@@ -138,15 +152,20 @@ exports the Durable Object and Workflow classes directly from their feature
 modules. `src/app` composes the Hono application and renders errors.
 `src/features` owns the application surface, with each feature keeping its
 routes, use cases, types, and helpers together; Durable Object classes live in
-`features/*/durable`. `src/shared` is the small cross-feature kernel for errors,
+`features/*/durable` as thin RPC surfaces over helper classes that own the
+SQL. `src/shared` is the small cross-feature kernel for errors,
 identifiers, cursors, schema parsing, HTTP helpers, and RPC, SQL and Workflow
-helpers.
+helpers. `shared/sql.ts` owns row access: `text`, `integer` and `json` read
+typed columns and throw on null or mistyped values, and `collectPages` and
+`pageCursor` cover cursor pagination. Upload state changes go through
+`UploadStorage`, which asserts every transition against an explicit table, so
+an illegal move throws instead of stranding an upload.
 
 Dependencies point one way: `app` may import `features`, and `features` may
 import `shared` and each other, but `shared` may not import `features` or `app`
 and `features` may not import `app`. Pure modules (most of `shared`, each
 feature's `types.ts`, `auth/authorization`, `cache/publication-protocol`,
-`cache/publication-ports`, `cache/shards`, `gc/garbage-collection`,
+`cache/shards`, `gc/garbage-collection`,
 `gc/gc-ports`, and `uploads/manifest`) may import only other pure modules or
 generated contracts, and may not use Cloudflare or other infrastructure APIs.
 `packages/worker/scripts/check-boundaries.mts` enforces this as part of the
@@ -157,10 +176,11 @@ tests keep the Vitest file focused on lifecycle and scenario declarations;
 harness setup, HTTP assertions, process utilities, and scenario implementations
 are split under `e2e/support` and `e2e/scenarios`.
 
-The Rust crates are small, so their module layouts stay nearly flat. `core/src`
-owns shared protocol semantics (`identifiers`, `processing`, `wire`, `error`).
-The processor splits into `main` (HTTP bootstrap), `pipeline` (verification),
-`nar` (NAR validation), and `object_store` (storage adapter). The CLI splits
+The Rust crates are small, so their module layouts stay nearly flat. The CLI
+owns shared protocol semantics in `protocol` (`identifiers` and `wire`;
+request DTOs are schema-generated in `contracts`). `verify` has a streaming
+NAR validator (`nar`) and the WebAssembly calling convention the Worker uses
+(`ffi`). The CLI splits
 into `args` (command definitions), `commands` (dispatch, with `admin`, `gc`,
 `push`, and `configure_nix` command flows), `nix` and `upload` (local Nix and
 shared upload helpers), `encode` and `encoded_upload` (client-side chunking

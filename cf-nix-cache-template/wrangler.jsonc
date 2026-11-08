@@ -18,11 +18,11 @@
       { "name": "CACHE_COORDINATOR", "class_name": "CacheCoordinator" },
       { "name": "CACHE_INDEX", "class_name": "CacheIndexShard" },
       { "name": "UPLOAD_JOB", "class_name": "UploadJob" },
-      { "name": "PROCESSOR", "class_name": "ProcessorContainer" },
       { "name": "GC_CONTROL", "class_name": "GcControl" },
     ],
   },
   "migrations": [
+    // Never edit a past migration; Wrangler validates the history on `deploy --dry-run`.
     {
       "tag": "v1",
       "new_sqlite_classes": [
@@ -36,24 +36,7 @@
       ],
     },
     { "tag": "v2", "new_sqlite_classes": ["GcControl"] },
-  ],
-  "containers": [
-    {
-      "class_name": "ProcessorContainer",
-      "scheduling_policy": "durable_object",
-      // `pnpm run deploy` builds ./Dockerfile on top of the processor image
-      // pinned by the installed cf-nix-cache release, and pushes it to this
-      // account's container registry. PROCESSOR_IMAGE is kept in sync with
-      // that release.
-      "images": {
-        "processor": {
-          "dockerfile": "./Dockerfile",
-          "build_vars": {
-            "PROCESSOR_IMAGE": "docker.io/willlol/cf-nix-cache@sha256:5b09a54ec73c2843f0bc42d8c0e637f4ff61c7f0752faf0c8e325ba2411fb3e6",
-          },
-        },
-      },
-    },
+    { "tag": "v3", "deleted_classes": ["ProcessorContainer"] },
   ],
   "workflows": [
     {
@@ -83,6 +66,8 @@
     "NIX_SIGNING_KEY_NAME": "cache.nix-signing",
   },
   "observability": { "enabled": true },
-  // A garbage collection run makes one request per index shard and manifest.
-  "limits": { "subrequests": 10000000 },
+  "limits": {
+    "subrequests": 10000000,
+    "cpu_ms": 300000,
+  },
 }

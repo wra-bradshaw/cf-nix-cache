@@ -23,7 +23,6 @@ forEachSupportedSystem (
   in
   {
     cli = packages.${system}.cli;
-    processor = packages.${system}.processor;
     hakari =
       pkgs.runCommand "cf-nix-cache-hakari"
         {

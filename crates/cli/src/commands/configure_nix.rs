@@ -1,7 +1,5 @@
-//! `configure-nix`: prints the Nix settings for using a cache.
-
+use crate::protocol::CacheName;
 use anyhow::{Context, Result};
-use cf_nix_cache_core::CacheName;
 use etcetera::BaseStrategy;
 use reqwest::Url;
 use std::path::Path;
@@ -21,8 +19,6 @@ pub(super) async fn configure_nix(api: Api, cache: CacheName) -> Result<()> {
     Ok(())
 }
 
-/// Nix settings for using `cache`, for single-user and multi-user (daemon)
-/// installs. `user_config` is the absolute per-user Nix config directory.
 fn nix_config(
     endpoint: &str,
     cache: &CacheName,

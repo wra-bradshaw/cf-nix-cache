@@ -1,6 +1,13 @@
 import type { CacheMutation, PathRecord, PreparedMutation } from '../types';
-import { type RpcResult, failure, ok } from '../../../shared/rpc';
-import { first, type SqlRow } from '../../../shared/sql';
+import { type RpcResult, conflict, failure, ok } from '../../../shared/rpc';
+import {
+  first,
+  type SqlRow,
+  text,
+  integer,
+  json,
+  pageCursor,
+} from '../../../shared/sql';
 import { now } from '../../../shared/clock';
 import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
 
@@ -37,14 +44,17 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
 
   async lookup(storeHash: string): Promise<RpcResult<PathRecord>> {
     const row = first(
-      this.ctx.storage.sql.exec<{ record: string }>(
+      this.ctx.storage.sql.exec<SqlRow>(
         'SELECT record FROM paths WHERE store_hash = ?',
         storeHash,
       ),
     );
-    return row
-      ? ok(JSON.parse(row.record) as PathRecord)
-      : failure('not_found', 'path not found', 404);
+    if (!row) return failure('not_found', 'path not found', 404);
+    try {
+      return ok(json<PathRecord>(row, 'record'));
+    } catch {
+      return failure('corrupt_path', `path ${storeHash} is corrupt`, 500);
+    }
   }
 
   async prepare(input: {
@@ -60,16 +70,23 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
         ),
       );
       if (existing) {
-        if (String(existing.mutation) !== mutationJson)
+        try {
+          if (text(existing, 'mutation') !== mutationJson)
+            return conflict(
+              'operation_conflict',
+              'index mutation changed during retry',
+            );
+          return ok(toPrepared(existing));
+        } catch {
           return failure(
-            'operation_conflict',
-            'index mutation changed during retry',
-            409,
+            'corrupt_operation',
+            'index operation record is corrupt',
+            500,
           );
-        return ok(toPrepared(existing));
+        }
       }
       const fenced = first(
-        this.ctx.storage.sql.exec<{ operation_id: string }>(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT operation_id FROM deletion_fence WHERE key = 1',
         ),
       );
@@ -84,29 +101,44 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
           ? input.mutation.record.store_hash
           : input.mutation.store_hash;
       const previousRow = first(
-        this.ctx.storage.sql.exec<{ record: string }>(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT record FROM paths WHERE store_hash = ?',
           storeHash,
         ),
       );
-      const previous = previousRow
-        ? (JSON.parse(previousRow.record) as PathRecord)
-        : null;
+      let previous: PathRecord | null;
+      try {
+        previous = previousRow ? json<PathRecord>(previousRow, 'record') : null;
+      } catch {
+        return failure('corrupt_path', `path ${storeHash} is corrupt`, 500);
+      }
       const next =
         input.mutation.kind === 'upsert' ? input.mutation.record : null;
       const delta = deltaFor(next, previous);
       const lock = first(
-        this.ctx.storage.sql.exec<{ operation_id: string }>(
+        this.ctx.storage.sql.exec<SqlRow>(
           "SELECT operation_id FROM index_operations WHERE store_hash = ? AND status = 'PREPARED'",
           storeHash,
         ),
       );
-      if (lock && lock.operation_id !== input.operation_id)
-        return failure(
-          'mutation_in_progress',
-          'another mutation is in progress for this path',
-          409,
-        );
+      if (lock) {
+        let lockId: string;
+        try {
+          lockId = text(lock, 'operation_id');
+        } catch {
+          return failure(
+            'corrupt_operation',
+            'index operation record is corrupt',
+            500,
+          );
+        }
+        if (lockId !== input.operation_id)
+          return failure(
+            'mutation_in_progress',
+            'another mutation is in progress for this path',
+            409,
+          );
+      }
       this.ctx.storage.sql.exec(
         "INSERT INTO index_operations (operation_id, store_hash, mutation, previous, next_record, delta, status) VALUES (?, ?, ?, ?, ?, ?, 'PREPARED')",
         input.operation_id,
@@ -136,11 +168,37 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
       );
       if (!row)
         return failure('operation_not_found', 'index operation not found', 404);
-      if (row.status === 'COMMITTED') return ok(toPrepared(row));
-      if (row.status === 'ABORTED')
+      let status: string;
+      try {
+        status = text(row, 'status');
+      } catch {
+        return failure(
+          'corrupt_operation',
+          'index operation record is corrupt',
+          500,
+        );
+      }
+      if (status === 'COMMITTED') {
+        try {
+          return ok(toPrepared(row));
+        } catch {
+          return failure(
+            'corrupt_operation',
+            'index operation record is corrupt',
+            500,
+          );
+        }
+      }
+      if (status === 'ABORTED')
         return failure('operation_aborted', 'index operation was aborted', 409);
+      if (status !== 'PREPARED')
+        return failure(
+          'corrupt_operation',
+          'index operation record is corrupt',
+          500,
+        );
       const fenced = first(
-        this.ctx.storage.sql.exec<{ operation_id: string }>(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT operation_id FROM deletion_fence WHERE key = 1',
         ),
       );
@@ -155,7 +213,16 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
           410,
         );
       }
-      const mutation = JSON.parse(String(row.mutation)) as Mutation;
+      let mutation: Mutation;
+      try {
+        mutation = json<Mutation>(row, 'mutation');
+      } catch {
+        return failure(
+          'corrupt_operation',
+          'index operation record is corrupt',
+          500,
+        );
+      }
       if (mutation.kind === 'upsert')
         this.ctx.storage.sql.exec(
           'INSERT OR REPLACE INTO paths (store_hash, record, file_size, last_accessed, created_at) VALUES (?, ?, ?, ?, ?)',
@@ -174,7 +241,15 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
         "UPDATE index_operations SET status = 'COMMITTED' WHERE operation_id = ? AND status = 'PREPARED'",
         operationId,
       );
-      return ok(toPrepared({ ...row, status: 'COMMITTED' }));
+      try {
+        return ok(toPrepared({ ...row, status: 'COMMITTED' }));
+      } catch {
+        return failure(
+          'corrupt_operation',
+          'index operation record is corrupt',
+          500,
+        );
+      }
     });
   }
 
@@ -197,21 +272,32 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
   > {
     return this.ctx.storage.transactionSync(() => {
       const old = first(
-        this.ctx.storage.sql.exec<{
-          clear_deleted: number;
-          clear_bytes: number;
-          status: string;
-        }>(
-          'SELECT clear_deleted, clear_bytes, status FROM index_operations WHERE operation_id = ?',
+        this.ctx.storage.sql.exec<SqlRow>(
+          'SELECT mutation, clear_deleted, clear_bytes, status FROM index_operations WHERE operation_id = ?',
           operationId,
         ),
       );
-      if (old)
-        return ok({
-          deleted: Number(old.clear_deleted),
-          bytes: Number(old.clear_bytes),
-          reconcile_operation_ids: this.committedOperationIds(),
-        });
+      if (old) {
+        try {
+          const kind = (json(old, 'mutation') as { kind?: unknown }).kind;
+          if (kind !== 'clear')
+            return conflict(
+              'operation_conflict',
+              'operation id was used by a different mutation',
+            );
+          return ok({
+            deleted: integer(old, 'clear_deleted'),
+            bytes: integer(old, 'clear_bytes'),
+            reconcile_operation_ids: this.committedOperationIds(),
+          });
+        } catch {
+          return failure(
+            'corrupt_operation',
+            'index operation record is corrupt',
+            500,
+          );
+        }
+      }
       this.ctx.storage.sql.exec(
         'INSERT OR IGNORE INTO deletion_fence (key, operation_id) VALUES (1, ?)',
         operationId,
@@ -219,13 +305,39 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
       this.ctx.storage.sql.exec(
         "UPDATE index_operations SET status = 'ABORTED' WHERE status = 'PREPARED'",
       );
-      const totals = this.ctx.storage.sql
-        .exec<{ count: number; bytes: number }>(
+      const totals = first(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT COUNT(*) AS count, COALESCE(SUM(file_size), 0) AS bytes FROM paths',
-        )
-        .one();
-      const deleted = Number(totals.count);
-      const bytes = Number(totals.bytes);
+        ),
+      );
+      if (!totals)
+        return failure(
+          'corrupt_operation',
+          'index operation record is corrupt',
+          500,
+        );
+      let deleted: number;
+      let bytes: number;
+      try {
+        deleted = integer(totals, 'count');
+        bytes = integer(totals, 'bytes');
+      } catch {
+        return failure(
+          'corrupt_operation',
+          'index operation record is corrupt',
+          500,
+        );
+      }
+      let reconcileIds: string[];
+      try {
+        reconcileIds = this.committedOperationIds();
+      } catch {
+        return failure(
+          'corrupt_operation',
+          'index operation record is corrupt',
+          500,
+        );
+      }
       this.ctx.storage.sql.exec('DELETE FROM paths');
       this.ctx.storage.sql.exec(
         "INSERT INTO index_operations (operation_id, mutation, delta, status, clear_deleted, clear_bytes) VALUES (?, ?, ?, 'COMMITTED', ?, ?)",
@@ -238,29 +350,22 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
       return ok({
         deleted,
         bytes,
-        reconcile_operation_ids: this.committedOperationIds(),
+        reconcile_operation_ids: reconcileIds,
       });
     });
   }
 
-  /**
-   * Index commits and quota finalization are separate durable operations.
-   * Teardown must finalize committed publications before debiting the shard.
-   * Returning historical IDs is safe because quota finalization is idempotent.
-   */
   private committedOperationIds(): string[] {
     return [
-      ...this.ctx.storage.sql.exec<{ operation_id: string }>(
+      ...this.ctx.storage.sql.exec<SqlRow>(
         "SELECT operation_id FROM index_operations WHERE status = 'COMMITTED' AND store_hash IS NOT NULL",
       ),
-    ].map((row) => String(row.operation_id));
+    ].map((row) => text(row, 'operation_id'));
   }
 
   async touch(storeHash: string): Promise<RpcResult<void>> {
     this.ctx.storage.transactionSync(() =>
       this.ctx.storage.sql.exec(
-        // Throttled: this runs on every narinfo and push check, and retention
-        // is measured in days.
         'UPDATE paths SET last_accessed = ? WHERE store_hash = ? AND last_accessed < ?',
         now(),
         storeHash,
@@ -270,77 +375,101 @@ export class CacheIndexShard extends RpcOnlyDurableObject {
     return ok();
   }
 
-  /** One page of the manifests that this shard's paths depend on. */
   async manifestKeys(input: {
     after: string | null;
     limit: number;
   }): Promise<RpcResult<{ keys: string[]; next_after: string | null }>> {
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 1000)
+      return failure('invalid_limit', 'limit must be between 1 and 1000', 400);
+    if (input.after !== null && typeof input.after !== 'string')
+      return failure('invalid_after', 'after must be a string or null', 400);
+    const limit = input.limit;
     const rows = [
-      ...this.ctx.storage.sql.exec<{
-        store_hash: string;
-        manifest_key: string | null;
-      }>(
+      ...this.ctx.storage.sql.exec<SqlRow>(
         "SELECT store_hash, json_extract(record, '$.manifest_key') AS manifest_key FROM paths WHERE store_hash > ? ORDER BY store_hash LIMIT ?",
         input.after ?? '',
-        input.limit,
+        limit + 1,
       ),
     ];
     const keys: string[] = [];
-    for (const row of rows) {
-      // Garbage collection must not guess at what a path depends on.
-      if (!row.manifest_key)
-        return failure(
-          'corrupt_path',
-          `path ${String(row.store_hash)} has no manifest`,
-          500,
-        );
-      keys.push(String(row.manifest_key));
+    try {
+      for (const row of rows.slice(0, limit)) {
+        const storeHash = text(row, 'store_hash');
+        let manifest: string;
+        try {
+          manifest = text(row, 'manifest_key');
+        } catch {
+          return failure(
+            'corrupt_path',
+            `path ${storeHash} has no manifest`,
+            500,
+          );
+        }
+        if (!manifest)
+          return failure(
+            'corrupt_path',
+            `path ${storeHash} has no manifest`,
+            500,
+          );
+        keys.push(manifest);
+      }
+      return ok({
+        keys,
+        next_after: pageCursor(rows, limit, (row) => text(row, 'store_hash')),
+      });
+    } catch {
+      return failure('corrupt_path', 'index shard record is corrupt', 500);
     }
-    return ok({
-      keys,
-      next_after:
-        rows.length === input.limit
-          ? String(rows[rows.length - 1]!.store_hash)
-          : null,
-    });
   }
 
-  /**
-   * One page of paths unused since `before`. Paged by store hash, which never
-   * changes, so a path that cannot be evicted is passed over rather than seen
-   * again, and a concurrent touch cannot make the walk skip anything.
-   */
   async expiredPaths(input: {
     before: number;
     after: string | null;
     limit: number;
   }): Promise<RpcResult<{ hashes: string[]; next_after: string | null }>> {
-    const hashes = [
-      ...this.ctx.storage.sql.exec<{ store_hash: string }>(
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 1000)
+      return failure('invalid_limit', 'limit must be between 1 and 1000', 400);
+    if (typeof input.before !== 'number' || !Number.isFinite(input.before))
+      return failure(
+        'invalid_before',
+        'before must be a finite timestamp',
+        400,
+      );
+    if (input.after !== null && typeof input.after !== 'string')
+      return failure('invalid_after', 'after must be a string or null', 400);
+    const limit = input.limit;
+    const rows = [
+      ...this.ctx.storage.sql.exec<SqlRow>(
         'SELECT store_hash FROM paths WHERE last_accessed < ? AND store_hash > ? ORDER BY store_hash LIMIT ?',
         input.before,
         input.after ?? '',
-        input.limit,
+        limit + 1,
       ),
-    ].map((row) => String(row.store_hash));
-    return ok({
-      hashes,
-      next_after:
-        hashes.length === input.limit ? hashes[hashes.length - 1]! : null,
-    });
+    ];
+    try {
+      return ok({
+        hashes: rows.slice(0, limit).map((row) => text(row, 'store_hash')),
+        next_after: pageCursor(rows, limit, (row) => text(row, 'store_hash')),
+      });
+    } catch {
+      return failure('corrupt_path', 'index shard record is corrupt', 500);
+    }
   }
+}
+
+function preparedStatus(value: string): Prepared['status'] {
+  if (value === 'PREPARED' || value === 'COMMITTED' || value === 'ABORTED')
+    return value;
+  throw new Error(`index operation status ${value} is not a known status`);
 }
 
 function toPrepared(row: SqlRow): Prepared {
   return {
-    operation_id: String(row.operation_id),
-    delta: Number(row.delta),
-    previous: row.previous
-      ? (JSON.parse(String(row.previous)) as PathRecord)
-      : null,
-    record: row.next_record
-      ? (JSON.parse(String(row.next_record)) as PathRecord)
-      : null,
-    status: String(row.status) as Prepared['status'],
+    operation_id: text(row, 'operation_id'),
+    delta: integer(row, 'delta'),
+    previous: row.previous == null ? null : json<PathRecord>(row, 'previous'),
+    record:
+      row.next_record == null ? null : json<PathRecord>(row, 'next_record'),
+    status: preparedStatus(text(row, 'status')),
   };
 }

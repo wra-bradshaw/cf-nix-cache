@@ -6,12 +6,11 @@ import {
 import type { ProcessJob, ProcessResult } from './types';
 import { idStub } from '../../shared/rpc';
 import { gcControl } from '../gc/gc-adapters';
-import { processorFor } from '../processing/durable/container';
+import { processUpload } from './verify-stored';
+import { InvalidEncodingError } from './verifier';
 
 class PermanentWorkflowError extends Error {}
 
-// Reprocessing only follows a lease that outlived its long TTL, so repeating
-// this often means something is wrong. Leave the job restartable.
 const MAX_LEASE_ATTEMPTS = 5;
 
 export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
@@ -33,8 +32,6 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
         return { ok: true };
       });
       for (let attempt = 0; attempt < MAX_LEASE_ATTEMPTS; attempt += 1) {
-        // Processing may reuse existing objects, so garbage collection has to
-        // know about this upload before the first one is looked at.
         const token = await this.acquireLease(step, job.job_id, attempt);
         leaseToken = token;
         const suffix = attempt === 0 ? '' : ` (attempt ${attempt + 1})`;
@@ -42,38 +39,18 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
           `process NAR${suffix}`,
           {
             retries: { limit: 4, delay: '30 seconds', backoff: 'exponential' },
-            // Containers are pooled, so a job may queue behind others.
             timeout: '30 minutes',
           },
           async () => {
-            const processor = await processorFor(
-              this.env.PROCESSOR!,
-              job.job_id,
-            );
-            const response = await processor.fetch(
-              'https://processor/process',
-              {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify(job),
-              },
-            );
-            // Only a client error says the input itself is bad. Anything else
-            // is infrastructure, and may be a proxy's response, not the
-            // processor's.
-            if (response.status >= 500)
-              throw new Error(
-                `processor temporary failure (${response.status}): ${await response.text()}`,
-              );
-            if (!response.ok)
+            try {
               return {
-                permanent_error: `processor rejected input with ${response.status}: ${await response.text()}`,
+                result: await processUpload(this.env.CACHE_BUCKET, job),
               } as const;
-            // The processor also returns the whole manifest, which can exceed
-            // a step's result limit. Publication re-reads it from R2.
-            const { manifest_key, deduplicated } =
-              await response.json<ProcessResult>();
-            return { result: { manifest_key, deduplicated } } as const;
+            } catch (error) {
+              if (error instanceof InvalidEncodingError)
+                return { permanent_error: error.message } as const;
+              throw error;
+            }
           },
         );
         if ('permanent_error' in processed)
@@ -92,8 +69,6 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
             if (!lease.ok)
               throw new Error(`${lease.error.code}: ${lease.error.message}`);
             if (!lease.value.valid) {
-              // This may be a retry after a publication whose response was
-              // lost, in which case there is nothing left to redo.
               const current = await upload.state();
               if (current.ok && current.value.status === 'READY')
                 return { published: true } as const;
@@ -133,8 +108,6 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
           leaseToken,
           'release gc lease after failure',
         );
-      // Transient failures leave the job in its current state so the workflow
-      // can be restarted; only permanent ones are recorded as FAILED.
       if (caught instanceof PermanentWorkflowError)
         await step.do('mark failed', async () => {
           const result = await upload.fail(caught.message);
@@ -148,7 +121,6 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
     }
   }
 
-  /** Waits out a closed upload gate, which garbage collection holds briefly. */
   private async acquireLease(
     step: WorkflowStep,
     jobId: string,
@@ -171,7 +143,6 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
     }
   }
 
-  /** Best-effort: an unreleased lease only delays a sweep until it expires. */
   private async releaseLease(
     step: WorkflowStep,
     jobId: string,

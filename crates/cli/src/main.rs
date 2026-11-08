@@ -8,6 +8,7 @@ mod config;
 mod encode;
 mod encoded_upload;
 mod nix;
+mod protocol;
 mod upload;
 
 #[tokio::main]

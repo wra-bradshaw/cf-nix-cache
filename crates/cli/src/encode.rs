@@ -1,8 +1,5 @@
-//! Client-side encoding: the chunking and compression the processor would
-//! otherwise run, so that only chunks the server lacks are uploaded.
-
+use crate::protocol::{nix_base32, CHUNK_AVG_SIZE, CHUNK_MAX_SIZE, CHUNK_MIN_SIZE, ZSTD_LEVEL};
 use anyhow::{bail, Context, Result};
-use cf_nix_cache_core::{nix_base32, CHUNK_AVG_SIZE, CHUNK_MAX_SIZE, CHUNK_MIN_SIZE, ZSTD_LEVEL};
 use fastcdc::v2020::StreamCDC;
 use sha2::{Digest, Sha256};
 use std::{
@@ -18,11 +15,9 @@ pub(crate) struct EncodedChunk {
     pub(crate) raw_size: u64,
     pub(crate) compressed_hash: String,
     pub(crate) compressed_size: u64,
-    /// Where the compressed bytes start in the encoded file.
     offset: u64,
 }
 
-/// A NAR split into compressed chunks, kept in a temporary file in order.
 pub(crate) struct EncodedNar {
     file: NamedTempFile,
     pub(crate) chunks: Vec<EncodedChunk>,
@@ -31,7 +26,6 @@ pub(crate) struct EncodedNar {
 }
 
 impl EncodedNar {
-    /// The compressed bytes of the first chunk with `raw_hash`.
     pub(crate) fn chunk_bytes(&self, raw_hash: &str) -> Result<Vec<u8>> {
         let chunk = self
             .chunks
@@ -50,7 +44,6 @@ fn sha256_nix(bytes: &[u8]) -> String {
     format!("sha256:{}", nix_base32(&Sha256::digest(bytes)))
 }
 
-/// Hashes everything read through it.
 struct HashingReader<R> {
     inner: R,
     hash: Sha256,
@@ -66,8 +59,6 @@ impl<R: Read> Read for HashingReader<R> {
     }
 }
 
-/// Splits `nar` with FastCDC and compresses each chunk as its own zstd frame,
-/// with the parameters `ENCODING_ID` names.
 pub(crate) fn encode(nar: impl Read) -> Result<EncodedNar> {
     let mut reader = HashingReader {
         inner: nar,
@@ -102,7 +93,6 @@ pub(crate) fn encode(nar: impl Read) -> Result<EncodedNar> {
     })
 }
 
-/// Encodes the NAR of a store path, which must match what Nix recorded for it.
 pub(crate) fn encode_path(path: &str, nar_hash: &str, nar_size: u64) -> Result<EncodedNar> {
     let mut child = Command::new("nix-store")
         .args(["--dump", path])
@@ -158,10 +148,7 @@ mod tests {
         assert_eq!(joined, nar);
     }
 
-    /// Pins zstd's output for ENCODING_ID, which every chunk in existing
-    /// caches was written with, so that a zstd upgrade that changes it is
-    /// noticed. Correctness does not depend on it: manifests are built from
-    /// the stored bytes, and a chunk's key is its raw hash.
+    /// A zstd upgrade must not silently change output; correctness does not depend on it.
     #[test]
     fn compression_output_is_stable_for_the_encoding_profile() {
         let mut state = 0x2545_f491_4f6c_dd1d_u64;

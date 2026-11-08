@@ -1,7 +1,6 @@
 import type { GcSummary } from './types';
 
 export interface GcCache {
-  /** Opaque to the application; passed back to the other ports. */
   name: string;
   incarnation: string;
   retention_days: number;
@@ -25,7 +24,6 @@ export interface GcLedgerPort {
 }
 
 export interface GcCatalogPort {
-  /** Every cache that can serve paths. A cache being deleted is excluded. */
   liveCaches(): Promise<GcCache[]>;
   manifestKeys(
     cache: GcCache,
@@ -40,7 +38,6 @@ export interface GcCatalogPort {
     after: string | null,
     limit: number,
   ): Promise<{ hashes: string[]; next_after: string | null }>;
-  /** Returns false if the path is busy or its cache is going away. */
   evict(
     cache: GcCache,
     storeHash: string,
@@ -50,11 +47,6 @@ export interface GcCatalogPort {
 }
 
 export interface GcObjectsPort {
-  /**
-   * The chunk keys of a manifest, or null if the object does not exist. Throws
-   * if it exists but cannot be understood, so that a run never deletes chunks
-   * it could not rule out as live.
-   */
   manifestChunks(key: string): Promise<string[] | null>;
   list(
     prefix: string,
@@ -67,7 +59,6 @@ export interface GcObjectsPort {
   delete(keys: string[]): Promise<void>;
 }
 
-/** The subset of Workflows' `step` that orchestration relies on. */
 export interface GcSteps {
   do<T>(name: string, body: () => Promise<T>): Promise<T>;
   sleep(name: string, duration: '30 seconds'): Promise<void>;

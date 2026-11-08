@@ -8,7 +8,7 @@ declare global {
     BOOTSTRAP_SECRET_HASH: string;
     /**
      * Overrides INLINE_VERIFY_MAX_NAR_SIZE, in bytes. Tests lower it to send
-     * small NARs to the processor.
+     * small NARs to the upload workflow.
      */
     INLINE_VERIFY_MAX_NAR_SIZE?: string;
   }

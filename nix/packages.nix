@@ -25,92 +25,19 @@ forEachSupportedSystem (
       src = workspaceSrc;
       strictDeps = true;
       version = "0.6.0";
+      pname = "cf-nix-cache";
+      cargoExtraArgs = "-p cf-nix-cache";
     };
-    cargoArtifacts = craneLib.buildDepsOnly (
+    cli = craneLib.buildPackage (
       common
       // {
-        pname = "cf-nix-cache-deps";
-        cargoExtraArgs = "--workspace";
+        cargoArtifacts = craneLib.buildDepsOnly common;
+        doCheck = false;
       }
     );
-    crateArgs = {
-      inherit cargoArtifacts;
-      src = workspaceSrc;
-      strictDeps = true;
-      version = "0.6.0";
-      doCheck = false;
-    };
-    separateCli = craneLib.buildPackage (
-      crateArgs
-      // {
-        pname = "cf-nix-cache";
-        cargoExtraArgs = "-p cf-nix-cache";
-      }
-    );
-    separateProcessor = craneLib.buildPackage (
-      crateArgs
-      // {
-        pname = "cf-nix-cache-processor";
-        cargoExtraArgs = "-p cf-nix-cache-processor";
-      }
-    );
-    workspaceBinaries =
-      if system == "x86_64-linux" then
-        craneLib.buildPackage (
-          crateArgs
-          // {
-            pname = "cf-nix-cache-workspace";
-            cargoExtraArgs = "--workspace";
-            installPhaseCommand = ''
-              mkdir -p "$out/bin"
-              cp target/release/cf-nix-cache "$out/bin/cf-nix-cache"
-              cp target/release/cf-nix-cache-processor "$out/bin/cf-nix-cache-processor"
-            '';
-          }
-        )
-      else
-        null;
-    fromWorkspace =
-      name: binary:
-      pkgs.runCommand name { } ''
-        mkdir -p "$out/bin"
-        cp ${workspaceBinaries}/bin/${binary} "$out/bin/${binary}"
-      '';
-    cli =
-      if workspaceBinaries != null then
-        fromWorkspace "cf-nix-cache-0.6.0" "cf-nix-cache"
-      else
-        separateCli;
-    processor =
-      if workspaceBinaries != null then
-        fromWorkspace "cf-nix-cache-processor-0.6.0" "cf-nix-cache-processor"
-      else
-        separateProcessor;
-    processorImage = pkgs.dockerTools.buildLayeredImage {
-      name = "cf-nix-cache-processor";
-      tag = "nix";
-      created = "1970-01-01T00:00:01Z";
-      contents = [
-        processor
-        pkgs.cacert
-      ];
-      config = {
-        Entrypoint = [ "${processor}/bin/cf-nix-cache-processor" ];
-        Env = [
-          "PORT=8080"
-          "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-        ];
-        ExposedPorts."8080/tcp" = { };
-        User = "65532:65532";
-        Labels."org.opencontainers.image.title" = "cf-nix-cache-processor";
-      };
-    };
   in
   {
-    inherit cli processor;
+    inherit cli;
     default = cli;
-  }
-  // lib.optionalAttrs (system == "x86_64-linux") {
-    inherit processorImage;
   }
 )

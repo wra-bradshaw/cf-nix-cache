@@ -1,20 +1,15 @@
-//! Client-encoded uploads: the CLI chunks and compresses each NAR, the server
-//! says which chunks it lacks, and only those are sent. The server then checks
-//! the stored chunks and publishes the path, for most paths without a
-//! processor container.
-
+use crate::protocol::{
+    contracts::api as contract, CacheName, EncodedCompleteBatchResponse,
+    EncodedUploadBatchResponse, EncodedUploadResponse, UploadStateResponse, UploadStatus,
+    CHUNK_MIN_SIZE, ENCODING_ID,
+};
 use crate::{
-    client::{api_path, Api},
+    client::{api_path, Api, ApiError},
     encode::{encode_path, EncodedNar},
     nix::{nix_hash, PathInfo},
     upload::{manifest, wait_for_state},
 };
 use anyhow::{bail, Context, Result};
-use cf_nix_cache_core::{
-    contracts::api as contract, CacheName, EncodedCompleteBatchResponse,
-    EncodedUploadBatchResponse, EncodedUploadResponse, UploadStateResponse, UploadStatus,
-    CHUNK_MIN_SIZE, ENCODING_ID,
-};
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Method;
 use std::{
@@ -24,35 +19,18 @@ use std::{
 };
 use uuid::Uuid;
 
-/// Paths below this NAR size are one chunk, and are uploaded in batches.
 pub(crate) const BATCH_NAR_SIZE: u64 = CHUNK_MIN_SIZE as u64;
-/// Paths in one batch.
 pub(crate) const BATCH_PATHS: usize = 32;
-/// Chunks of one path uploaded at a time.
 const CHUNK_CONCURRENCY: usize = 6;
-/// Paths of one batch encoded at a time.
 const ENCODE_CONCURRENCY: usize = 8;
-/// Garbage collection closes the upload gate for minutes at most.
+/// GC holds the upload gate for minutes at most.
 const GATE_WAIT: Duration = Duration::from_secs(30 * 60);
 
-const SERVER_TOO_OLD: &str =
-    "the server does not accept client-encoded uploads; upgrade its cf-nix-cache Worker";
-
-/// Names an older server, which has no client-encoded upload routes.
-fn explain(error: anyhow::Error) -> anyhow::Error {
-    let message = error.to_string();
-    if message.starts_with("API returned 404") && message.contains("route not found") {
-        return error.context(SERVER_TOO_OLD);
-    }
-    error
-}
-
-pub(crate) fn is_server_too_old(error: &anyhow::Error) -> bool {
-    error.to_string() == SERVER_TOO_OLD
-}
-
 fn gate_closed(error: &anyhow::Error) -> bool {
-    error.to_string().contains("\"code\":\"gc_in_progress\"")
+    matches!(
+        error.downcast_ref::<ApiError>(),
+        Some(api) if api.status == 503 && api.code.as_deref() == Some("gc_in_progress")
+    )
 }
 
 fn request(
@@ -88,9 +66,7 @@ async fn encode(path: &str, info: &PathInfo) -> Result<EncodedNar> {
     .await?
 }
 
-/// Opens an upload, waiting while garbage collection holds the upload gate.
-/// The idempotency key is kept across those waits, so a retry resumes the
-/// same upload.
+/// The idempotency key is kept across GC waits, so a retry resumes the same upload.
 async fn open<B: serde::Serialize, T: serde::de::DeserializeOwned>(
     api: &Api,
     path: &str,
@@ -104,12 +80,11 @@ async fn open<B: serde::Serialize, T: serde::de::DeserializeOwned>(
                 eprintln!("garbage collection is running; waiting to upload");
                 tokio::time::sleep(Duration::from_secs(30)).await;
             }
-            result => return result.map_err(explain),
+            result => return result,
         }
     }
 }
 
-/// Uploads one path's missing chunks and completes it.
 pub(crate) async fn upload_encoded(
     api: &Api,
     cache: &CacheName,
@@ -139,7 +114,6 @@ pub(crate) async fn upload_encoded(
                 let bytes = nar.chunk_bytes(&hash)?;
                 api.put_chunk(id, &hash, bytes)
                     .await
-                    .map_err(explain)
                     .with_context(|| format!("uploading chunk {hash}"))
             })
             .buffer_unordered(CHUNK_CONCURRENCY)
@@ -175,8 +149,7 @@ async fn finish(api: &Api, state: UploadStateResponse, path: &str, sent: usize) 
     Ok(())
 }
 
-/// Uploads several small paths in two requests: one to open them all, one to
-/// send their missing chunks and complete them. Returns each path's outcome.
+/// Uploads several small paths in two requests. Returns each path's outcome.
 pub(crate) async fn upload_encoded_batch(
     api: &Api,
     cache: &CacheName,
@@ -246,8 +219,7 @@ pub(crate) async fn upload_encoded_batch(
                 &serde_json::json!({ "ids": ids }),
                 files.into_iter().collect(),
             )
-            .await
-            .map_err(explain)?;
+            .await?;
         for state in response.uploads {
             completed.insert(state.id.clone(), state);
         }
@@ -262,4 +234,26 @@ pub(crate) async fn upload_encoded_batch(
         outcomes.push((path.to_string(), finish(api, state, path, sent).await));
     }
     Ok(outcomes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn api_error(status: u16, code: &str, message: &str) -> anyhow::Error {
+        ApiError {
+            status,
+            code: Some(code.into()),
+            message: message.into(),
+        }
+        .into()
+    }
+
+    #[test]
+    fn gate_closed_matches_the_lease_error() {
+        assert!(gate_closed(&api_error(503, "gc_in_progress", "")));
+        assert!(!gate_closed(&api_error(503, "other", "")));
+        assert!(!gate_closed(&api_error(409, "gc_in_progress", "")));
+        assert!(!gate_closed(&anyhow::anyhow!("boom")));
+    }
 }

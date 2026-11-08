@@ -22,10 +22,8 @@ import { mapLimit } from '../../shared/concurrency';
 
 export const encodedUploadRoutes = new Hono<AppEnv>();
 
-const NAR_HASH = /^sha256:[0-9abcdfghijklmnpqrsvwxyz]{52}$/;
-/** Paths opened or completed together, run this many at a time. */
+export const NAR_HASH = /^sha256:[0-9abcdfghijklmnpqrsvwxyz]{52}$/;
 const BATCH_CONCURRENCY = 16;
-/** A batch's chunk bodies; the request limit is 100 MB. */
 const MAX_BATCH_BODY = 64 * 1024 * 1024;
 
 encodedUploadRoutes.post('/api/uploads/encoded', async (c) => {
@@ -40,7 +38,6 @@ encodedUploadRoutes.post('/api/uploads/encoded', async (c) => {
   return c.json(result, result.merged ? 200 : 201);
 });
 
-/** Opens up to 64 uploads to one cache in a single request. */
 encodedUploadRoutes.post('/api/uploads/encoded/batch', async (c) => {
   const key = idempotency(c.req.raw);
   const input = parseJsonSchema(
@@ -72,6 +69,14 @@ encodedUploadRoutes.put('/api/uploads/:id/chunks/:hash', async (c) => {
   if (length > CHUNK_MAX_COMPRESSED_SIZE)
     throw new DomainError('payload_too_large', 'chunk is too large', 413);
   const body = new Uint8Array(await c.req.raw.arrayBuffer());
+  if (body.byteLength > CHUNK_MAX_COMPRESSED_SIZE)
+    throw new DomainError('payload_too_large', 'chunk is too large', 413);
+  if (body.byteLength !== length)
+    throw new DomainError(
+      'validation_failed',
+      'chunk body size does not match Content-Length',
+      400,
+    );
   await storeChunk(c.env, job, hash, body);
   return new Response(null, {
     status: 204,
@@ -79,11 +84,6 @@ encodedUploadRoutes.put('/api/uploads/:id/chunks/:hash', async (c) => {
   });
 });
 
-/**
- * Uploads the chunks of several opened uploads and completes them. The body is
- * multipart/form-data: a `request` field holding `{ids}`, and one file field
- * per chunk, named by its raw hash.
- */
 encodedUploadRoutes.post('/api/uploads/encoded/batch/complete', async (c) => {
   idempotency(c.req.raw);
   const length = Number(c.req.header('content-length') ?? NaN);
@@ -104,12 +104,18 @@ encodedUploadRoutes.post('/api/uploads/encoded/batch/complete', async (c) => {
     );
   }
   const requestField = form.get('request');
+  if (requestField === null)
+    throw new DomainError(
+      'validation_failed',
+      'batch is missing request field',
+      400,
+    );
   let request: unknown;
   try {
     request = JSON.parse(
       typeof requestField === 'string'
         ? requestField
-        : await requestField!.text(),
+        : await requestField.text(),
     );
   } catch {
     throw new DomainError(
@@ -127,13 +133,16 @@ encodedUploadRoutes.post('/api/uploads/encoded/batch/complete', async (c) => {
     const missing = unwrapRpc(await job.missingChunks());
     for (const hash of missing) {
       const value = form.get(hash);
-      if (value === null || typeof value === 'string') continue;
-      await storeChunk(
-        c.env,
-        job,
-        hash,
-        new Uint8Array(await value.arrayBuffer()),
-      );
+      if (value === null || typeof value === 'string')
+        throw new DomainError(
+          'invalid_input',
+          `batch is missing chunk ${hash}`,
+          400,
+        );
+      const valueBytes = new Uint8Array(await value.arrayBuffer());
+      if (valueBytes.byteLength > CHUNK_MAX_COMPRESSED_SIZE)
+        throw new DomainError('payload_too_large', 'chunk is too large', 413);
+      await storeChunk(c.env, job, hash, valueBytes);
     }
     return completeEncoded(c.env, job);
   });

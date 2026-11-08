@@ -9,7 +9,6 @@ import { ENCODING_ID } from '../../cache/types';
 export interface ProcessReceipt {
   manifest_key: string;
   deduplicated: boolean;
-  /** Set by the first attempt, so that every retry publishes the same record. */
   published_at: number;
 }
 
@@ -18,12 +17,7 @@ export interface UploadRow {
   cache: string;
   cache_id: string;
   incarnation: string;
-  /** The chunk list, which lets the processor finish or verify the upload. */
   chunks_key: string;
-  /**
-   * False for a staging upload left from before they were removed. Those can
-   * no longer be processed.
-   */
   encoded: boolean;
   state: UploadState;
   manifest: UploadManifest;

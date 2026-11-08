@@ -1,10 +1,24 @@
-import type { CacheIndex, QuotaLedger } from './publication-ports';
-import type { CacheMutation, PreparedMutation } from './types';
+import type {
+  CacheMutation,
+  PreparedMutation,
+  QuotaReservation,
+} from './types';
 
-/**
- * Infrastructure-free publication protocol. Durable Object adapters provide
- * the ports; this use case owns the ordering and compensation rules.
- */
+export interface CacheIndex {
+  prepare(
+    operationId: string,
+    mutation: CacheMutation,
+  ): Promise<PreparedMutation>;
+  commit(operationId: string): Promise<PreparedMutation>;
+  abort(operationId: string): Promise<void>;
+}
+
+export interface QuotaLedger {
+  reserve(operationId: string, delta: number): Promise<QuotaReservation>;
+  finalize(operationId: string): Promise<void>;
+  abort(operationId: string): Promise<void>;
+}
+
 export class PublicationProtocol {
   constructor(
     private readonly index: CacheIndex,
@@ -26,9 +40,6 @@ export class PublicationProtocol {
       if (reservation.status === 'ABORTED')
         throw new PublicationError('quota operation was aborted', false);
     } catch (error) {
-      // A transport failure is ambiguous: the quota reservation may have
-      // committed remotely, so leave the durable prepare in place for a
-      // retry/reconciliation rather than issuing a compensating mutation.
       if (error instanceof PublicationError && !error.retryable)
         await this.index.abort(operationId);
       throw error;

@@ -5,7 +5,7 @@ import { type RpcResult, failure, ok } from '../../../shared/rpc';
 import { hashSecret } from '../credentials';
 import { AuditOutbox } from '../../audit/outbox';
 import { TokenSigner } from './signer';
-import { first, type SqlRow } from '../../../shared/sql';
+import { first, type SqlRow, text, integer, json } from '../../../shared/sql';
 
 type IssuedToken = {
   id: string;
@@ -31,15 +31,6 @@ type EarlierIssue = {
 
 export const BOOTSTRAP_SCHEMA = `CREATE TABLE IF NOT EXISTS bootstrap_consumed (secret_hash TEXT PRIMARY KEY, operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL);`;
 
-/**
- * Earlier releases kept a single consumed flag that did not record which secret
- * consumed it. Attribute that flag to the currently configured hash, so an
- * upgrade can never revive a used secret: re-arming still takes a new hash.
- */
-/**
- * Clears the bearer tokens that earlier releases stored for replay. A replay
- * now re-signs from the row's metadata, so storage holds no usable credential.
- */
 export function scrubStoredTokens(ctx: DurableObjectState): void {
   ctx.storage.sql.exec("UPDATE tokens SET token = '' WHERE token <> ''");
 }
@@ -85,8 +76,6 @@ export class TokenIssuance {
     const secretHash = await hashSecret(input.secret);
     if (secretHash !== this.env.BOOTSTRAP_SECRET_HASH)
       return failure('forbidden', 'invalid bootstrap secret', 403);
-    // Scoped to the secret, so a re-armed bootstrap that reuses an idempotency
-    // key mints a new token instead of replaying one from an earlier secret.
     const operationId = `bootstrap:${secretHash.slice(0, 16)}:${input.operation_id}`;
     const existing = this.earlierIssue(operationId, input.fingerprint);
     if (existing) return this.replay(existing);
@@ -163,7 +152,6 @@ export class TokenIssuance {
     return outcome.repeated ? this.replay(outcome.repeated) : outcome.issued;
   }
 
-  /** What an earlier attempt of this operation issued, if any. */
   private earlierIssue(
     operationId: string,
     fingerprint: string,
@@ -175,19 +163,19 @@ export class TokenIssuance {
       ),
     );
     if (!row) return null;
-    if (String(row.fingerprint) !== fingerprint)
+    if (text(row, 'fingerprint') !== fingerprint)
       return failure(
         'idempotency_conflict',
         'idempotency key was reused with different token metadata',
         409,
       );
     return {
-      jti: String(row.jti),
-      subject: String(row.subject),
-      grants: JSON.parse(String(row.grants)) as Grant[],
-      issued_at: Number(row.issued_at),
-      expires_at: Number(row.expires_at),
-      revoked: Number(row.revoked) === 1,
+      jti: text(row, 'jti'),
+      subject: text(row, 'subject'),
+      grants: json<Grant[]>(row, 'grants'),
+      issued_at: integer(row, 'issued_at'),
+      expires_at: integer(row, 'expires_at'),
+      revoked: integer(row, 'revoked') === 1,
     };
   }
 

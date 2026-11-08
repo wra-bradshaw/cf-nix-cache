@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PublicationProtocol } from './publication-protocol';
-import type { CacheIndex, QuotaLedger } from './publication-ports';
+import type { CacheIndex, QuotaLedger } from './publication-protocol';
 
 describe('publication protocol', () => {
   it('does not compensate an ambiguous quota transport failure', async () => {

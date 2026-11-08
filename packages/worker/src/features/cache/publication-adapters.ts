@@ -1,5 +1,5 @@
 import { PublicationProtocol, PublicationError } from './publication-protocol';
-import type { CacheIndex, QuotaLedger } from './publication-ports';
+import type { CacheIndex, QuotaLedger } from './publication-protocol';
 import type {
   CacheMutation,
   CacheState,
@@ -15,7 +15,6 @@ function unwrapPublication<T>(result: RpcResult<T>, cache: string): T {
   if (!result.ok)
     throw new PublicationError(
       `${cache}: ${result.error.message}`,
-      // Another operation holds the path's lock only until it finishes.
       result.error.status >= 500 || result.error.code === MUTATION_IN_PROGRESS,
       result.error.code,
       result.error.status,

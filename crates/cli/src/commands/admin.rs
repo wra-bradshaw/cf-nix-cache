@@ -1,7 +1,5 @@
-//! Thin API wrappers: the cache, token, audit, and upload admin subcommands.
-
+use crate::protocol::{contracts::api as contract, ENCODING_ID};
 use anyhow::{Context, Result};
-use cf_nix_cache_core::{contracts::api as contract, ENCODING_ID};
 use reqwest::Method;
 use serde_json::Value;
 use std::num::NonZeroU64;
@@ -74,8 +72,7 @@ pub(super) async fn cache(api: Api, command: CacheCommand) -> Result<()> {
             &api.request::<Value, _>(
                 Method::PATCH,
                 &format!("/api/caches/{name}/config"),
-                // Not the generated DTO, which omits an empty list: clearing
-                // the list would then send an empty, rejected request.
+                // Generated DTO omits an empty list, which would send a rejected empty request.
                 Some(&serde_json::json!({ "upstream_cache_key_names": key_names })),
             )
             .await?,

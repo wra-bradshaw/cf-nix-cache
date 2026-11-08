@@ -1,6 +1,5 @@
 import { DomainError } from './errors';
 
-/** Nix base32 alphabet (no e, o, u, t) and a store hash written in it. */
 export const NIX_BASE32 = '0123456789abcdfghijklmnpqrsvwxyz';
 export const STORE_HASH_PATTERN = `[${NIX_BASE32}]{32}`;
 const STORE_HASH = new RegExp(`^${STORE_HASH_PATTERN}$`);

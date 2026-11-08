@@ -1,5 +1,5 @@
 // GENERATED FROM schemas/*.json. Do not edit by hand.
-// Regenerate with: pnpm --dir packages/worker contracts:generate
+// Regenerate with: pnpm --dir packages/worker generate
 
 // Source: schemas/api.json
 export type CfNixCacheAPIContract =
@@ -219,7 +219,7 @@ export interface CfNixCacheChunkManifest {
 }
 
 // Source: schemas/process-job.json
-export interface CfNixCacheProcessorJob {
+export interface CfNixCacheUploadJob {
   job_id: string;
   nar_hash: string;
   nar_size: number;

@@ -1,17 +1,16 @@
 # Release procedure
 
 1. Run Rust formatting/tests/Clippy, Worker typecheck/tests, and `nix flake check`.
-2. Build the CLI and Nix-built processor image. Run deployed smoke tests for health,
+2. Build the CLI and the Worker. Run deployed smoke tests for health,
    bootstrap, token revocation, public/private Nix downloads, range resumes,
    duplicate uploads, quota enforcement, and forced Workflow retries.
 3. Install Wrangler secrets and run `nix run .#deploy -- apply`. This builds the
-   cached `linux/amd64` Nix image, ensures the production R2 bucket and lifecycle
-   rules, pushes its immutable tag to Cloudflare Registry, and deploys the
-   Worker/Container.
+   Worker (including the WebAssembly verifier), ensures the production R2 bucket
+   and lifecycle rules, and deploys the Worker.
 4. Bootstrap the installation once, create a cache, issue a scoped CI token,
    and complete a stock-Nix restore before directing production DNS.
 
-The Worker, Durable Objects, Workflows, Container, R2 binding, and routes are
+The Worker, Durable Objects, Workflows, R2 binding, and routes are
 all deployed through Wrangler from `wrangler.jsonc`. Never place Ed25519
 private keys, bootstrap secrets, or R2 credentials in the repository.
 
@@ -20,19 +19,18 @@ private keys, bootstrap secrets, or R2 credentials in the repository.
 The customer-facing release is intentionally independent of the development
 monorepo layout:
 
-1. Build and test `packages/worker`. `pnpm build` runs `vite build` and then
-   lays out the npm package (`dist/index.js`, `dist/index.d.ts`).
-2. Build the `linux/amd64` processor with Nix and publish it to
-   `docker.io/willlol/cf-nix-cache` by digest. Do not publish or
-   deploy a mutable tag.
-3. Run `node scripts/release-worker-package.mts --version X.Y.Z --image docker.io/willlol/cf-nix-cache@sha256:<digest>` and publish the
-   package with `pnpm --dir packages/worker publish --access public`.
-4. Update the template's pinned dependency and run its config validation. A
-   dependency PR is the only normal customer upgrade input.
+1. Build and test `packages/worker` in `nix develop`. `pnpm build` compiles
+   the verifier to WebAssembly, runs `vite build`, and then lays out the npm
+   package (`dist/index.js`, `dist/index.d.ts`, `dist/assets/verify-<hash>.wasm`).
+2. Run `pnpm release:prepare --version X.Y.Z`, which finalizes the release
+   manifest and the template's pinned dependency, and publish the package with
+   `pnpm --dir packages/worker publish --access public`.
+3. Run the template's config validation. A dependency PR is the only normal
+   customer upgrade input.
 
-The package build fails if its release manifest does not match the package
-version or the image is not an immutable `docker.io` digest. `pnpm
-release:check` additionally rejects a platform other than `linux/amd64`.
+The release manifest is `{ "schemaVersion": 2, "releaseReady": true,
+"version": "X.Y.Z" }`. The package build fails if it does not match the
+package version, and `pnpm release:check` also rejects any other field.
 
 ### Automated release flow
 
@@ -43,15 +41,14 @@ to `main` with pending changesets, the `Release PR` workflow runs
 1. `changeset version` bumps the package and syncs the version into the
    release manifest, the template, and the Rust workspace and Nix packages
    (`releaseReady: false`).
-2. `scripts/pin-processor-image.sh` builds the Nix processor image, pushes a
-   source-specific tag to `PROCESSOR_REPOSITORY` (repository variable, default
-   `docker.io/willlol/cf-nix-cache`), resolves the registry digest, and pins it
-   in the release manifest (`releaseReady: true`) and template Wrangler config.
+2. `pnpm release:prepare` finalizes the release manifest
+   (`releaseReady: true`) and the template's dependency, and `pnpm
+   release:check` validates the result.
 
 The result is a single version PR containing the whole release, set to
 auto-merge once CI passes. A changeset reaching `main` therefore releases without
-further review. The job needs `DOCKERHUB_USERNAME`, a repository-scoped
-`DOCKERHUB_TOKEN`, and `RELEASE_TOKEN` in the `release` GitHub Environment.
+further review. The job needs `RELEASE_TOKEN` in the `release` GitHub
+Environment.
 
 `RELEASE_TOKEN` is a fine-grained token scoped to this repository with
 **Contents: read and write** and **Pull requests: read and write**. It replaces
@@ -61,14 +58,13 @@ publishing. If it expires, the `Release PR` job fails until the secret is
 replaced.
 
 Merging the version PR triggers `Publish release`. To retry a failed publication,
-run `gh workflow run publish-release.yml --ref main`. That workflow verifies the
-public image by digest, rebuilds and tests the Worker package, publishes npm
-from the pinned commit, and creates `vX.Y.Z` on GitHub. Configure the npm
+run `gh workflow run publish-release.yml --ref main`. That workflow rebuilds
+and tests the Worker package in the Nix dev shell, publishes npm from the
+pinned commit, and creates `vX.Y.Z` on GitHub. Configure the npm
 package's trusted publisher for `.github/workflows/publish-release.yml`; npm
 publishing uses GitHub OIDC and does not require a long-lived npm token.
-`releaseReady` is only set to true once a digest has been pinned for the new
-version, so a partially prepared version PR cannot publish the previous
-processor image.
+`releaseReady` is only set to true by `release:prepare`, so a version PR whose
+preparation failed part-way cannot publish.
 
 If the `TEMPLATE_REPOSITORY` variable is set to
 `wra-bradshaw/cf-nix-cache-template`, the publish workflow also opens a PR in
@@ -81,7 +77,3 @@ environment as a fine-grained token scoped to the template repository with
 for that branch, or creates one, and fails if the PR cannot be created. The first
 npm release may need to be bootstrapped with a short-lived npm token before its
 trusted-publisher settings are available.
-
-The two registries are deliberately ordered rather than treated as an atomic
-transaction: Docker is published first, then npm references its immutable
-digest. A failed npm publication can be retried without changing the image.

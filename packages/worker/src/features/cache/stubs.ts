@@ -9,7 +9,6 @@ export function coordinator(env: Env, reference: CacheReference) {
   return idStub(env.CACHE_COORDINATOR, reference.coordinator_id);
 }
 
-/** The cache index shard owning a store hash (or a two-character prefix). */
 export function indexShard(
   env: Env,
   incarnation: string,

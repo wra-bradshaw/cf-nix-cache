@@ -1,22 +1,17 @@
-//! Helpers shared by uploads: the path metadata the server publishes, and
-//! waiting for an upload to finish.
-
+use crate::protocol::{
+    contracts::api as contract, CacheName, StorePathName, UploadStateResponse, UploadStatus,
+};
 use crate::{
     client::{api_path, Api},
     nix::{basename, nix_hash, store_hash, PathInfo},
 };
 use anyhow::{anyhow, bail, Context, Result};
-use cf_nix_cache_core::{
-    contracts::api as contract, CacheName, StorePathName, UploadStateResponse, UploadStatus,
-};
 use std::{
     fmt::Display,
     num::NonZeroU64,
     time::{Duration, Instant},
 };
 
-/// Validates the basename of `path` as a store path name and converts it to
-/// the contract type `T`.
 fn store_path_name<T>(path: &str) -> Result<T>
 where
     T: TryFrom<String>,
@@ -26,7 +21,6 @@ where
     T::try_from(name.to_string()).map_err(|error| anyhow!("{error}"))
 }
 
-/// Builds the upload manifest for `path` from its `nix path-info` entry.
 pub(crate) fn manifest(
     cache: &CacheName,
     path: &str,
@@ -48,7 +42,6 @@ pub(crate) fn manifest(
     })
 }
 
-/// Polls an upload until it is READY, FAILED or ABORTED.
 pub(crate) async fn wait_for_state(api: &Api, id: &str, path: &str) -> Result<UploadStateResponse> {
     let deadline = Instant::now() + Duration::from_secs(60 * 60);
     let mut delay = Duration::from_secs(2);

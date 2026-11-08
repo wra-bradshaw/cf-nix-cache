@@ -1,7 +1,3 @@
-/**
- * Starts the workflow, or restarts it if an earlier instance with this id has
- * stopped. An id that already exists is reported in `errors`, not thrown.
- */
 export async function ensureWorkflow<T>(
   workflow: Workflow<T>,
   id: string,

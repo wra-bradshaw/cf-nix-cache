@@ -84,12 +84,12 @@ claimed hashes and sizes before it is stored, and a chunk that fails is answered
 with `invalid_chunk` (422) and fails the upload. Completion checks that the
 stored chunks concatenate to a valid NAR with the declared hash, and publishes
 the path, in the same request for NARs up to 256 MiB. Larger ones are queued for
-the processor and complete as `QUEUED`; poll `GET /api/uploads/{id}` until
+a verification workflow and complete as `QUEUED`; poll `GET /api/uploads/{id}` until
 `READY`. An upload whose NAR the installation already has needs no chunks at
 all.
 
 Completion stores the upload's chunk list before publishing, so an interrupted
-publication is finished by the processor workflow from the chunks already in
+publication is finished by the verification workflow from the chunks already in
 the bucket. A retryable failure starts that workflow before the response; if a
 request dies without a response, the next `GET /api/uploads/{id}` (or a push of
 the same path) starts it. Recovery never asks the client to send the NAR again.

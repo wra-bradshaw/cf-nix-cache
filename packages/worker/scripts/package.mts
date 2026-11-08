@@ -1,7 +1,7 @@
 // Lays out the published npm package after `vite build`. Templates resolve the
 // package version from `dist/..`, so the entry must stay at `dist/index.js`
 // rather than the Vite environment directory `dist/cf_nix_cache/`.
-import { cp, readFile, writeFile } from 'node:fs/promises';
+import { cp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,6 +17,25 @@ await cp(
   resolve(workerOutput, 'index.js.map'),
   resolve(outputDirectory, 'index.js.map'),
 );
+// The bundle imports the chunk verifier as `./assets/verify-<hash>.wasm`, so
+// the assets keep the same path relative to the copied entry.
+await rm(resolve(outputDirectory, 'assets'), { recursive: true, force: true });
+await cp(resolve(workerOutput, 'assets'), resolve(outputDirectory, 'assets'), {
+  recursive: true,
+});
+const bundle = await readFile(resolve(outputDirectory, 'index.js'), 'utf8');
+const wasmImports = [
+  ...bundle.matchAll(/["']\.\/assets\/([^"']+\.wasm)["']/g),
+].map((match) => match[1]);
+if (wasmImports.length === 0) {
+  throw new Error('dist/index.js does not import the chunk verifier');
+}
+const assets = new Set(await readdir(resolve(outputDirectory, 'assets')));
+for (const asset of wasmImports) {
+  if (!assets.has(asset)) {
+    throw new Error(`dist/index.js imports missing asset ${asset}`);
+  }
+}
 
 // Wrangler only needs the runtime exports. The declaration names them without
 // depending on the monorepo's generated Worker types, so a consumer's
@@ -28,8 +47,6 @@ const exportedClasses = [
   'DeleteCacheWorkflow',
   'GarbageCollectWorkflow',
   'GcControl',
-  'ObjectStoreProxy',
-  'ProcessorContainer',
   'ProcessUploadWorkflow',
   'SystemControl',
   'TokenCatalog',
@@ -58,11 +75,8 @@ if (releaseManifest.version !== packageJson.version) {
     `release manifest ${releaseManifest.version} does not match package ${packageJson.version}`,
   );
 }
-if (
-  typeof releaseManifest.processorImage !== 'string' ||
-  !/^docker\.io\/.+@sha256:[0-9a-f]{64}$/.test(releaseManifest.processorImage)
-) {
+if (releaseManifest.schemaVersion !== 2) {
   throw new Error(
-    'release manifest processorImage must be an immutable docker.io digest reference',
+    `unsupported release manifest schema ${releaseManifest.schemaVersion}`,
   );
 }

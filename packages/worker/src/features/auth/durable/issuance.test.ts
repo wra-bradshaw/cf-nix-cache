@@ -18,7 +18,6 @@ const TOKENS = `CREATE TABLE tokens (
 );`;
 const LEGACY = `CREATE TABLE bootstrap (key INTEGER PRIMARY KEY CHECK (key = 1), operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL);`;
 
-/** A real SQLite database behind the parts of DurableObjectState in use. */
 function fakeState() {
   const db = new DatabaseSync(':memory:');
   db.exec(TOKENS);

@@ -21,6 +21,10 @@ export function ok<T>(value?: T): RpcResult<T | undefined> {
   return { ok: true, value };
 }
 
+export function conflict(code: string, message: string): RpcResult<never> {
+  return failure(code, message, 409);
+}
+
 export function namedStub<T extends Rpc.DurableObjectBranded>(
   namespace: DurableObjectNamespace<T> | undefined,
   name: string,
@@ -40,7 +44,6 @@ export function idStub<T extends Rpc.DurableObjectBranded>(
   );
 }
 
-/** An RPC failure rethrown in the Worker so `handleError` can render it. */
 export class ApiCallError extends Error {
   constructor(
     readonly status: number,

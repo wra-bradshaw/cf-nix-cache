@@ -5,20 +5,26 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   config:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - name: Check out the repository
+        uses: actions/checkout@v7
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+      - name: Set up Node
+        uses: actions/setup-node@v7
         with:
           node-version: 22
+          cache: pnpm
       # The publish workflow opens the release PR once npm serves the package,
       # and auto-merge depends on this job, so it must never pass by skipping.
       - name: Install the standalone template
         run: pnpm install --frozen-lockfile
-      # `check` type-checks, dry-runs wrangler.jsonc, and dry-runs the rendered
-      # config that `pnpm run deploy` actually deploys.
-      - name: Type-check and dry-run the source and rendered configs
+      # The Wrangler dry-run needs no Cloudflare credentials, so forks pass too.
+      - name: Type-check, validate and dry-run the config
         run: pnpm run check

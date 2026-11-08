@@ -8,11 +8,12 @@ import type {
 } from '../../generated/contracts';
 import { allocateUpload } from './allocate';
 import {
+  CHUNK_MAX_COMPRESSED_SIZE,
   CHUNK_MAX_RAW_SIZE,
-  InvalidEncodingError,
   chunkKey,
   verifyChunk,
 } from './encoding';
+import { InvalidEncodingError, RAW_HASH } from './verifier';
 import { validateUploadManifest } from './manifest';
 import type {
   ChunkManifest,
@@ -20,7 +21,12 @@ import type {
   UploadStateResponse,
 } from './types';
 import { writeChunkList } from './durable/session';
-import { readManifest, storeManifest, verifyStoredNar } from './verify-stored';
+import {
+  MAX_NAR_SIZE,
+  readManifest,
+  storeManifest,
+  verifyStoredNar,
+} from './verify-stored';
 
 type JobStub = DurableObjectStub<import('./durable/job').UploadJob>;
 
@@ -28,7 +34,41 @@ function invalid(message: string): DomainError {
   return new DomainError('validation_failed', message, 422);
 }
 
-/** Opens a client-encoded upload and reports the chunks the server lacks. */
+export const MAX_CHUNKS_PER_UPLOAD = 16384;
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object')
+    return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value))
+    return `[${value
+      .map((item) =>
+        item === undefined ||
+        typeof item === 'function' ||
+        typeof item === 'symbol'
+          ? 'null'
+          : (stableStringify(item) ?? 'null'),
+      )
+      .join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    ([, v]) =>
+      v !== undefined && typeof v !== 'function' && typeof v !== 'symbol',
+  );
+  entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries
+    .map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`)
+    .join(',')}}`;
+}
+
+async function fingerprintForEncodedUpload(
+  input: EncodedUploadRequest,
+): Promise<string> {
+  const bytes = new TextEncoder().encode(stableStringify({ encoded: input }));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
+}
+
 export async function openEncoded(
   env: Env,
   cache: CacheState,
@@ -38,23 +78,65 @@ export async function openEncoded(
   validateUploadManifest(input.manifest);
   if (input.manifest.cache !== cache.name)
     throw invalid('upload belongs to another cache');
-  if (input.chunks.some((chunk) => chunk.raw_size > CHUNK_MAX_RAW_SIZE))
+  if (input.chunks.length === 0 || input.chunks.length > MAX_CHUNKS_PER_UPLOAD)
+    throw invalid('upload declares an invalid number of chunks');
+  if (
+    input.chunks.some(
+      (chunk) =>
+        !Number.isSafeInteger(chunk.raw_size) ||
+        chunk.raw_size < 1 ||
+        chunk.raw_size > CHUNK_MAX_RAW_SIZE,
+    )
+  )
     throw invalid('chunk is larger than the encoding allows');
+  if (
+    input.chunks.some(
+      (chunk) =>
+        !Number.isSafeInteger(chunk.compressed_size) ||
+        chunk.compressed_size < 1 ||
+        chunk.compressed_size > CHUNK_MAX_COMPRESSED_SIZE,
+    )
+  )
+    throw invalid('chunk is larger than the encoding allows');
+  if (
+    input.chunks.some(
+      (chunk) =>
+        typeof chunk.compressed_hash !== 'string' ||
+        !RAW_HASH.test(chunk.compressed_hash),
+    )
+  )
+    throw invalid('chunk has an invalid compressed hash');
+  if (
+    input.chunks.some(
+      (chunk) =>
+        typeof chunk.raw_hash !== 'string' || !RAW_HASH.test(chunk.raw_hash),
+    )
+  )
+    throw invalid('chunk has an invalid raw hash');
+  if (
+    new Set(input.chunks.map((chunk) => chunk.raw_hash)).size !==
+    input.chunks.length
+  )
+    throw invalid('upload declares duplicate chunks');
   const rawSize = input.chunks.reduce((sum, chunk) => sum + chunk.raw_size, 0);
+  if (
+    !Number.isSafeInteger(input.manifest.nar_size) ||
+    input.manifest.nar_size < 1 ||
+    input.manifest.nar_size > MAX_NAR_SIZE
+  )
+    throw invalid('upload declares an invalid NAR size');
   if (rawSize !== input.manifest.nar_size)
     throw invalid('chunk sizes do not add up to the NAR size');
   const compressedSize = input.chunks.reduce(
     (sum, chunk) => sum + chunk.compressed_size,
     0,
   );
-  // Publication reserves quota for real; this only refuses early an upload
-  // that would certainly be refused at the end.
   unwrapRpc(
     await coordinator(env, cache.reference).checkQuota({
       delta: compressedSize,
     }),
   );
-  const fingerprint = JSON.stringify({ encoded: input });
+  const fingerprint = await fingerprintForEncodedUpload(input);
   const { allocation, state } = await allocateUpload(env, cache, {
     operation_id: operationId,
     fingerprint,
@@ -91,10 +173,6 @@ export async function openEncoded(
   };
 }
 
-/**
- * Checks an uploaded chunk against the session (verification level 1) and
- * only then writes it to its content-addressed key.
- */
 export async function storeChunk(
   env: Env,
   job: JobStub,
@@ -107,7 +185,6 @@ export async function storeChunk(
     await verifyChunk(compressed, claim);
   } catch (error) {
     if (!(error instanceof InvalidEncodingError)) throw error;
-    // The client's encoder is broken, or the chunk was corrupted on the way.
     unwrapRpc(await job.reject(`chunk ${rawHash}: ${error.message}`));
     throw new DomainError('invalid_chunk', error.message, 422);
   }
@@ -118,7 +195,6 @@ export async function storeChunk(
   unwrapRpc(await job.chunkStored(rawHash));
 }
 
-/** Verifies and publishes a client-encoded upload whose chunks are stored. */
 export async function completeEncoded(
   env: Env,
   job: JobStub,
@@ -128,24 +204,18 @@ export async function completeEncoded(
   let result: ProcessResult;
   let manifest: ChunkManifest;
   try {
-    const listed = writeChunkList(env.CACHE_BUCKET, plan.chunks_key, plan.nar);
     if (plan.kind === 'existing') {
-      [manifest] = await Promise.all([
-        readManifest(
-          env.CACHE_BUCKET,
-          plan.manifest_key,
-          plan.nar.nar_hash,
-          plan.nar.nar_size,
-        ),
-        listed,
-      ]);
+      manifest = await readManifest(
+        env.CACHE_BUCKET,
+        plan.manifest_key,
+        plan.nar.nar_hash,
+        plan.nar.nar_size,
+      );
+      await writeChunkList(env.CACHE_BUCKET, plan.chunks_key, plan.nar);
       result = { manifest_key: plan.manifest_key, deduplicated: true };
     } else {
-      const [verified] = await Promise.all([
-        verifyStoredNar(env.CACHE_BUCKET, plan.nar),
-        listed,
-      ]);
-      // A manifest stored by an earlier upload of the NAR wins.
+      const verified = await verifyStoredNar(env.CACHE_BUCKET, plan.nar);
+      await writeChunkList(env.CACHE_BUCKET, plan.chunks_key, plan.nar);
       ({ result, manifest } = await storeManifest(env.CACHE_BUCKET, verified));
     }
   } catch (error) {

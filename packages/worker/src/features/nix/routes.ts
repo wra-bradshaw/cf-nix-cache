@@ -53,10 +53,8 @@ async function nixHandler(c: Context<AppEnv>): Promise<Response> {
   const storeHash = (narInfo ?? narObject)?.[1];
   if (!storeHash) throw new DomainError('not_found', 'path not found', 404);
   await authFor(request, c.env, cache, 'pull');
-  // A missing path surfaces as the shard's not_found / "path not found".
   const record = await getPath(c.env, cache, storeHash);
   if (narInfo) {
-    // A client that already holds a NAR still asks for its narinfo.
     c.executionCtx.waitUntil(touchPath(c.env, cache, storeHash));
     return new Response(request.method === 'HEAD' ? null : record.narinfo, {
       headers: {

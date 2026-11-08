@@ -9,14 +9,12 @@ import type {
 } from './gc-ports';
 
 const DEFAULT_GRACE_SECONDS = 24 * 60 * 60;
-/** Bucket prefixes of content-addressed objects. Staging is never touched. */
 const SWEPT_PREFIXES = ['manifests/', 'chunks/'];
 const SHARDS_PER_STEP = 128;
 const SHARDS_PER_EVICTION_STEP = 32;
 const SHARD_PAGE = 500;
 const MANIFESTS_PER_STEP = 256;
 const CONCURRENCY = 16;
-// The most keys one R2 list response or multi-delete request can carry.
 const R2_BATCH = 1000;
 
 async function forEachLimit<T>(
@@ -52,17 +50,9 @@ export interface GcPorts {
   objects: GcObjectsPort;
 }
 
-/**
- * Runs one garbage collection. Every side effect happens inside a step, and
- * every step is safe to repeat, so a retried or replayed run converges.
- *
- * Any failure aborts the run before further deletion: an incomplete view of
- * what is live must never be treated as a complete one.
- */
 export async function runGarbageCollection(
   input: {
     run_id: string;
-    /** Fixed for the run, so that replays compute the same cutoffs. */
     now: number;
     job: GcJob;
   },
@@ -139,8 +129,6 @@ export async function runGarbageCollection(
 
     await expandMarks('walk');
 
-    // Listing happens with the gate open, so a run that finds nothing to
-    // delete never delays an upload, however large the bucket is.
     const cutoff = input.now - graceSeconds;
     for (const prefix of SWEPT_PREFIXES) {
       let cursor: string | null = null;
@@ -176,7 +164,6 @@ export async function runGarbageCollection(
         if (drained) break;
         await step.sleep(`wait for uploads ${poll}`, '30 seconds');
       }
-      // Uploads that finished during the run may have reused candidates.
       await expandMarks('drain');
       for (let page = 0; ; page += 1) {
         const deleted = await step.do(`delete ${page}`, async () => {
@@ -205,7 +192,6 @@ export async function runGarbageCollection(
     return summary;
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
-    // Reopens the gate right away rather than when the run's deadline lapses.
     await step.do('record failure', async () => {
       await ledger.finish({
         ...summary,
@@ -222,8 +208,6 @@ export async function runGarbageCollection(
     const before = input.now - cache.retention_days * 24 * 60 * 60;
     const prefixes = shardPrefixes();
     let nextPrefix = 0;
-    // Shards with more expired paths than one page come round again, so a step
-    // stays bounded however many paths have expired.
     let unfinished: ShardCursor[] = [];
     let evictedInCache = 0;
     for (let page = 0; ; page += 1) {
@@ -263,8 +247,6 @@ export async function runGarbageCollection(
               }
             },
           );
-          // Sorted because shards finish in no fixed order, and a replay must
-          // see the same cursors in the same order.
           more.sort((left, right) => left.prefix.localeCompare(right.prefix));
           return { evicted, skipped, more };
         },

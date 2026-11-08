@@ -1,7 +1,5 @@
-//! Command dispatch and the output helpers shared by the command flows.
-
+use crate::protocol::contracts::api as contract;
 use anyhow::{Context, Result};
-use cf_nix_cache_core::contracts::api as contract;
 use serde::Serialize;
 use serde_json::Value;
 use std::num::NonZeroU64;
@@ -85,7 +83,6 @@ fn print_token(response: &Value, output: TokenOutput) -> Result<()> {
     Ok(())
 }
 
-/// Converts a `--valid-for` duration to the contract's whole seconds.
 fn valid_for_seconds(valid_for: humantime::Duration) -> Result<NonZeroU64> {
     NonZeroU64::new(valid_for.as_secs())
         .ok_or_else(|| anyhow::anyhow!("--valid-for must be at least one second"))

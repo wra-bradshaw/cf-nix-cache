@@ -23,14 +23,12 @@ pathRoutes.post('/api/caches/:name/missing', async (c) => {
   idempotency(c.req.raw);
   await authFor(c.req.raw, c.env, cache, 'push');
   const input = parseJsonSchema(MissingPathsSchema, await parseJson(c.req.raw));
-  // Each hash lives in its own index shard, so the lookups run in parallel.
   const found = await mapLimit(
     input.store_hashes,
     LOOKUP_CONCURRENCY,
     async (storeHash) => {
       try {
         await getPath(c.env, cache, storeHash);
-        // A repeated push of a path counts as use, even if nothing downloads it.
         c.executionCtx.waitUntil(touchPath(c.env, cache, storeHash));
         return true;
       } catch (caught) {
@@ -40,8 +38,6 @@ pathRoutes.post('/api/caches/:name/missing', async (c) => {
     },
   );
   const missing = input.store_hashes.filter((_, index) => !found[index]);
-  // Paths another push is uploading are not missing: uploading them again
-  // would only repeat that work. The caller can wait for those uploads.
   const pending = missing.length
     ? unwrapRpc(
         await coordinator(c.env, cache.reference).pendingUploads({

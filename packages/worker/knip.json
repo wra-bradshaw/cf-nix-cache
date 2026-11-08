@@ -1,5 +1,4 @@
 {
-  "entry": ["src/index.ts", "scripts/render-wrangler-config.mts"],
-  "ignoreBinaries": ["nix-store"],
-  "ignore": ["src/generated/contracts.ts"]
+  "entry": ["src/index.ts", "scripts/production-bucket.mts"],
+  "ignoreBinaries": ["nix-store"]
 }

@@ -35,17 +35,12 @@ const workerNotFound =
   /Worker "[^"]+"(?: \(env: [^)]+\))? not found\.|\[code: 10007\]/;
 
 export async function secretNamesFromWrangler(
-  config: string,
   options: { allowMissingWorker?: boolean } = {},
 ): Promise<Set<string>> {
-  const result = await wrangler(
-    ["secret", "list", "--format", "json"],
-    {
-      allowFailure: true,
-      quiet: true,
-    },
-    config,
-  );
+  const result = await wrangler(["secret", "list", "--format", "json"], {
+    allowFailure: true,
+    quiet: true,
+  });
   if (result.status !== 0) {
     const output = `${result.stdout}\n${result.stderr}`;
     // Only an explicit "Worker not found" before the first deployment means
@@ -74,15 +69,10 @@ export async function secretNamesFromWrangler(
 
 export async function putSecrets(
   secrets: Record<string, string>,
-  config: string,
 ): Promise<void> {
   // Values are sent through stdin in one bulk operation. They never appear in
   // argv, the repository, a temporary file, or the command log.
-  await wrangler(
-    ["secret", "bulk"],
-    {
-      input: `${JSON.stringify(secrets)}\n`,
-    },
-    config,
-  );
+  await wrangler(["secret", "bulk"], {
+    input: `${JSON.stringify(secrets)}\n`,
+  });
 }

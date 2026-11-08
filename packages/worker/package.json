@@ -20,6 +20,7 @@
     "dist/index.js",
     "dist/index.js.map",
     "dist/index.d.ts",
+    "dist/assets/*.wasm",
     "release-manifest.json"
   ],
   "exports": {
@@ -34,24 +35,23 @@
     "node": ">=20"
   },
   "scripts": {
-    "check": "tsc --noEmit && tsc -p tsconfig.node.json && eslint . && prettier --check . && pnpm boundaries:check && pnpm contracts:check && knip",
+    "generate": "node scripts/generate-contracts.mts && node scripts/build-verifier.mts",
+    "check": "pnpm generate && pnpm run _lint",
+    "test": "pnpm generate && pnpm run _test",
+    "build": "pnpm generate && pnpm run _build",
+    "e2e": "pnpm generate && pnpm run _e2e",
+    "check:all": "pnpm generate && node scripts/generate-contracts.mts --check && pnpm run _lint && pnpm run _test && pnpm run _build && pnpm run _e2e",
+    "dev": "pnpm generate && vite dev",
     "fix": "eslint . --fix && prettier --write .",
-    "dev": "vite dev",
-    "predev": "pnpm contracts:generate",
-    "build": "vite build && node scripts/package.mts",
-    "prebuild": "pnpm contracts:generate",
     "prepack": "pnpm build",
-    "test": "vitest run",
-    "pretest": "pnpm contracts:generate",
-    "contracts:generate": "node scripts/generate-contracts.mts",
-    "precheck": "pnpm contracts:generate",
-    "pree2e": "pnpm contracts:generate",
-    "contracts:check": "node scripts/check-contracts.mts",
-    "boundaries:check": "node scripts/check-boundaries.mts",
-    "e2e": "vitest run --config vitest.e2e.config.ts"
+    "_lint": "tsc --noEmit && tsc -p tsconfig.node.json && eslint . && prettier --check . && node scripts/check-boundaries.mts && knip",
+    "_test": "vitest run --config vitest.config.ts && vitest run --config vitest.node.config.ts",
+    "_build": "vite build && node scripts/package.mts",
+    "_e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.66.0",
+    "@cloudflare/vitest-plugin": "^1.6.0",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.19.2",
     "ajv": "^8.20.0",
@@ -66,7 +66,6 @@
     "typescript-eslint": "^8.72.1",
     "vite": "^8.3.5",
     "vitest": "^5.0.5",
-    "wrangler": "^4.156.0",
-    "fzstd": "0.1.1"
+    "wrangler": "^4.156.0"
   }
 }

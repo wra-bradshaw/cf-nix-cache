@@ -11,5 +11,5 @@ Choose the semantic-version bump and describe the user-visible change. Changes
 that cannot affect the published runtime may use an empty changeset or omit one.
 
 The `Release PR` workflow turns accumulated changesets into a version PR. The
-same job publishes the matching processor image and pins its immutable digest
-in that PR, so merging it publishes the release.
+same job finalizes the release manifest in that PR, so merging it publishes the
+release.
