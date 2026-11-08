@@ -20,5 +20,5 @@ Uploads are verified in the Worker by `crates/verify`, compiled to
 WebAssembly and shipped as `dist/assets/verify-<hash>.wasm` next to the
 bundle. NARs over 256 MiB are verified in a Workflow step, so deployments must
 set `limits.cpu_ms` to 300000, which needs the Workers Paid plan. Building the
-package needs the repository's Nix dev shell (`nix develop`) for the wasm32
-toolchain.
+package needs the repository's Nix dev shell (`nix develop`): the wasm is built
+by the flake's `verifier` package.

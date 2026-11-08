@@ -15,19 +15,14 @@ import {
   type E2eFixture,
 } from '../support/harness';
 import { expectJson, jsonRequest, request } from '../support/http';
-import {
-  resolveZstd,
-  repositoryDirectory,
-  run,
-  runAsync,
-} from '../support/process';
+import { resolveZstd, run, runAsync } from '../support/process';
 
 const cacheName = 'e2e';
 // execFileSync defaults to 1 MiB of output, less than most NARs.
 const narBufferBytes = 1024 * 1024 * 1024;
 
 export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
-  const { server, base, bootstrapSecret, publicKey } = fixture;
+  const { server, base, bootstrapSecret, publicKey, cli } = fixture;
   const zstd = resolveZstd();
   try {
     const unauthorized = await jsonRequest<Record<string, unknown>>(
@@ -85,7 +80,6 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
       'nixpkgs#hello',
     ]).trim();
     expect(hello).toMatch(/^\/nix\/store\//);
-    const cli = path.join(repositoryDirectory, 'target/debug/cf-nix-cache');
     expect(cacheInfo.upstream_cache_key_names).toEqual(['cache.nixos.org-1']);
     // Whether hello is signed upstream depends on how this machine got it.
     const pushAll = ['push', '--ignore-upstream-cache-filter'];

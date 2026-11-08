@@ -1,4 +1,4 @@
 {
   "entry": ["src/index.ts", "scripts/production-bucket.mts"],
-  "ignoreBinaries": ["nix-store"]
+  "ignoreBinaries": ["nix", "nix-store"]
 }
