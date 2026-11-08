@@ -1,33 +1,38 @@
-{ lib, forEachSupportedSystem }:
+{ inputs, lib, forEachSupportedSystem }:
 
 forEachSupportedSystem (
-  { pkgs, ... }:
+  { pkgs, system }:
+  let
+    rust = (import ./rust.nix { inherit inputs lib; }) {
+      inherit pkgs system;
+    };
+  in
   {
     default = pkgs.mkShellNoCC {
       packages =
         with pkgs;
         [
-          cargo
+          # Same Rust toolchain as the crane checks/builds (plus rust-src and
+          # rust-analyzer for in-shell use) so local cargo agrees with CI.
+          rust.devToolchain
           cargo-hakari
-          clippy
-          rustc
-          rustfmt
           nodejs
           pnpm
           nix
           zstd
-          # The Worker's chunk verifier: crates/verify for wasm32, with zstd's
-          # C sources compiled by an unwrapped clang (the wrapper targets the
-          # host only).
-          lld
         ]
         ++ lib.optionals pkgs.stdenv.isDarwin [
           pkgs.llvmPackages.clang
           pkgs.libiconv
           pkgs.darwin.cctools
         ];
-      CC_wasm32_unknown_unknown = "${pkgs.llvmPackages.clang-unwrapped}/bin/clang";
-      AR_wasm32_unknown_unknown = "${pkgs.llvmPackages.bintools-unwrapped}/bin/llvm-ar";
+      # Explicit marker for apps.nix ("am I inside the dev shell?"). The wasm
+      # verifier is built by the `verifier` Nix package now, so the shell no
+      # longer sets CC_wasm32_unknown_unknown/AR_wasm32_unknown_unknown or
+      # ships lld for in-shell wasm builds.
+      env = {
+        CF_NIX_CACHE_DEV_SHELL = "1";
+      };
       shellHook = lib.optionalString pkgs.stdenv.isDarwin ''
         export CC="${pkgs.llvmPackages.clang}/bin/clang"
         export CXX="${pkgs.llvmPackages.clang}/bin/clang++"
