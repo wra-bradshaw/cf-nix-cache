@@ -53,11 +53,6 @@ const edits: [string, (source: string) => string][] = [
     "Cargo.lock",
     (source) => source.replace(rustCrates, `$1"${packageJson.version}"`),
   ],
-  [
-    "nix/packages.nix",
-    (source) =>
-      source.replace(/version = "[^"]+";/g, `version = "${packageJson.version}";`),
-  ],
 ];
 for (const [file, edit] of edits) {
   const target = path.join(repository, file);
