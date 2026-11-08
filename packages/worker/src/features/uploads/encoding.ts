@@ -1,10 +1,22 @@
-import { Decompress } from 'fzstd';
 import { NIX_BASE32 } from '../../shared/identifiers';
 import { ENCODING_ID } from '../cache/types';
+import { InvalidEncodingError, decodeChunk } from './verifier';
 
-/** Largest raw chunk the encoding produces (CHUNK_MAX_SIZE). */
+/** Largest raw chunk the encoding produces (CHUNK_MAX_SIZE).
+ * Canonical value; must stay in sync with `CHUNK_MAX_RAW_SIZE` in
+ * `crates/verify/src/lib.rs` (and `CHUNK_MAX_SIZE` in
+ * `crates/cli/src/protocol/mod.rs`) and `CHUNK_MAX_RAW_SIZE` in
+ * `verifier.ts`. The cross-module ties are asserted in `verifier.test.ts`
+ * and `verify-stored.test.ts`. The cross-crate gate is the
+ * `check-encoding-constants` CI step (`upload-nar.mts --check-drift`):
+ * local `pnpm test` does not run it, so run that script locally when
+ * touching these values.
+ */
 export const CHUNK_MAX_RAW_SIZE = 16 * 1024 * 1024;
-/** zstd's worst case for a CHUNK_MAX_RAW_SIZE frame, rounded up. */
+/** zstd's worst case for a CHUNK_MAX_RAW_SIZE frame, rounded up.
+ * Canonical value; must stay in sync with `CHUNK_MAX_COMPRESSED_SIZE` in
+ * `crates/verify/src/lib.rs` and `verifier.ts` (see above).
+ */
 export const CHUNK_MAX_COMPRESSED_SIZE = 17 * 1024 * 1024;
 
 export function chunkKey(rawHash: string): string {
@@ -34,43 +46,6 @@ export function nixBase32(bytes: Uint8Array): string {
 export async function sha256Nix(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return `sha256:${nixBase32(new Uint8Array(digest))}`;
-}
-
-/** Raised for content that can never be accepted, as opposed to a failure. */
-export class InvalidEncodingError extends Error {}
-
-/**
- * Decodes a compressed chunk and checks it holds exactly `rawSize` bytes. The
- * output is counted as it is produced, so a frame that expands past its
- * declared size is stopped there rather than decoded in full.
- */
-export function decodeChunk(
-  compressed: Uint8Array,
-  rawSize: number,
-): Uint8Array {
-  const raw = new Uint8Array(rawSize);
-  let length = 0;
-  const decoder = new Decompress((data) => {
-    if (length + data.length > rawSize)
-      throw new InvalidEncodingError(
-        `chunk decodes to more than ${rawSize} bytes`,
-      );
-    raw.set(data, length);
-    length += data.length;
-  });
-  try {
-    decoder.push(compressed, true);
-  } catch (error) {
-    if (error instanceof InvalidEncodingError) throw error;
-    throw new InvalidEncodingError(
-      `chunk is not valid zstd: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  if (length !== rawSize)
-    throw new InvalidEncodingError(
-      `chunk decodes to ${length} bytes, not ${rawSize}`,
-    );
-  return raw;
 }
 
 export interface ChunkClaim {

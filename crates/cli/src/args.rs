@@ -1,4 +1,4 @@
-use cf_nix_cache_core::{contracts::api as contract, CacheName};
+use crate::protocol::{contracts::api as contract, CacheName};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::num::NonZeroUsize;
 

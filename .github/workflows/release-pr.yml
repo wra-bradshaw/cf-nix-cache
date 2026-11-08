@@ -1,8 +1,8 @@
 name: Release PR
 
-# Every push to main rebuilds the version PR from the new HEAD, so the pinned
-# processor image always matches the code that merging the PR releases. With
-# no pending changesets the job does nothing.
+# Every push to main rebuilds the version PR from the new HEAD, so it always
+# matches the code that merging the PR releases. With no pending changesets the
+# job does nothing.
 on:
   push:
     branches: [main]
@@ -17,33 +17,23 @@ permissions:
 jobs:
   version:
     runs-on: ubuntu-24.04
-    # Docker Hub credentials for publishing the processor image, and the token
-    # that opens and merges the version PR.
+    # The token that opens and merges the version PR.
     environment: release
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: cachix/install-nix-action@v31
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The version command bumps the package, then publishes the processor
-      # image and pins its digest, so the version PR is the whole release.
+      # The version command bumps the package and finalizes the release
+      # manifest, so the version PR is the whole release.
       - name: Create or update the version PR
         id: changesets
         uses: changesets/action@v2
-        env:
-          PROCESSOR_REPOSITORY: ${{ vars.PROCESSOR_REPOSITORY || 'docker.io/willlol/cf-nix-cache' }}
         with:
           # Pushes made with GITHUB_TOKEN do not trigger workflows, so the version
           # PR would get no CI, and merging it would not publish the release.

@@ -6,7 +6,8 @@ import {
 import type { ProcessJob, ProcessResult } from './types';
 import { idStub } from '../../shared/rpc';
 import { gcControl } from '../gc/gc-adapters';
-import { processorFor } from '../processing/durable/container';
+import { processUpload } from './verify-stored';
+import { InvalidEncodingError } from './verifier';
 
 class PermanentWorkflowError extends Error {}
 
@@ -42,38 +43,23 @@ export class ProcessUploadWorkflow extends WorkflowEntrypoint<Env, ProcessJob> {
           `process NAR${suffix}`,
           {
             retries: { limit: 4, delay: '30 seconds', backoff: 'exponential' },
-            // Containers are pooled, so a job may queue behind others.
+            // Verification runs here, in the Worker: about 6.4 ms of CPU per
+            // MiB at worst, so a 10 GiB NAR takes about 66 s of the 300 s
+            // that `limits.cpu_ms` allows a step. See docs/COST_PLAN.md.
             timeout: '30 minutes',
           },
           async () => {
-            const processor = await processorFor(
-              this.env.PROCESSOR!,
-              job.job_id,
-            );
-            const response = await processor.fetch(
-              'https://processor/process',
-              {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify(job),
-              },
-            );
-            // Only a client error says the input itself is bad. Anything else
-            // is infrastructure, and may be a proxy's response, not the
-            // processor's.
-            if (response.status >= 500)
-              throw new Error(
-                `processor temporary failure (${response.status}): ${await response.text()}`,
-              );
-            if (!response.ok)
+            try {
               return {
-                permanent_error: `processor rejected input with ${response.status}: ${await response.text()}`,
+                result: await processUpload(this.env.CACHE_BUCKET, job),
               } as const;
-            // The processor also returns the whole manifest, which can exceed
-            // a step's result limit. Publication re-reads it from R2.
-            const { manifest_key, deduplicated } =
-              await response.json<ProcessResult>();
-            return { result: { manifest_key, deduplicated } } as const;
+            } catch (error) {
+              // Only invalid content is permanent; anything else, such as an
+              // R2 failure, is retried.
+              if (error instanceof InvalidEncodingError)
+                return { permanent_error: error.message } as const;
+              throw error;
+            }
           },
         );
         if ('permanent_error' in processed)

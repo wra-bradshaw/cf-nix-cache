@@ -7,8 +7,6 @@ const repository = path.resolve(
   "..",
 );
 const allowPlaceholder = process.argv.includes("--allow-placeholder");
-const allowZeroDigest =
-  allowPlaceholder || process.argv.includes("--allow-zero-digest");
 const writeGithubOutput = process.argv.includes("--github-output");
 
 const packageJson = JSON.parse(
@@ -26,8 +24,6 @@ const manifest = JSON.parse(
   schemaVersion: number;
   releaseReady?: boolean;
   version: string;
-  processorImage: string;
-  platform: string;
 };
 const templatePackage = JSON.parse(
   await readFile(
@@ -35,15 +31,8 @@ const templatePackage = JSON.parse(
     "utf8",
   ),
 ) as { dependencies?: Record<string, string> };
-const wrangler = await readFile(
-  path.join(repository, "cf-nix-cache-template/wrangler.jsonc"),
-  "utf8",
-);
 
 const failures: string[] = [];
-const imagePattern =
-  /^docker\.io\/[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$/;
-const zeroDigest = /@sha256:0{64}$/;
 
 async function placeholderFiles(directory: string): Promise<string[]> {
   const matches: string[] = [];
@@ -67,24 +56,21 @@ if (cargoVersion !== packageJson.version)
   failures.push(
     `Cargo workspace version ${cargoVersion} does not match package version ${packageJson.version}`,
   );
-if (manifest.schemaVersion !== 1)
+if (manifest.schemaVersion !== 2)
   failures.push(
     `unsupported release manifest schema ${manifest.schemaVersion}`,
   );
-if (!allowZeroDigest && manifest.releaseReady !== true)
-  failures.push(
-    "release manifest has not been finalized by the artifact workflow",
-  );
+if (!allowPlaceholder && manifest.releaseReady !== true)
+  failures.push("release manifest has not been finalized by release:prepare");
 if (manifest.version !== packageJson.version)
   failures.push(
     `release manifest version ${manifest.version} does not match package ${packageJson.version}`,
   );
-if (manifest.platform !== "linux/amd64")
-  failures.push(`unsupported processor platform ${manifest.platform}`);
-if (!imagePattern.test(manifest.processorImage))
-  failures.push("processor image must be an immutable docker.io digest");
-if (!allowZeroDigest && zeroDigest.test(manifest.processorImage))
-  failures.push("processor image still contains the zero-digest placeholder");
+const manifestKeys = Object.keys(manifest).sort().join(",");
+if (manifestKeys !== "releaseReady,schemaVersion,version")
+  failures.push(
+    `release manifest must contain only schemaVersion, releaseReady and version, found ${manifestKeys}`,
+  );
 if (!allowPlaceholder && packageJson.name.includes("our-org"))
   failures.push("npm package name still contains the our-org placeholder");
 if (!allowPlaceholder) {
@@ -103,15 +89,13 @@ if (templatePackage.dependencies?.[packageJson.name] !== packageJson.version)
   failures.push(
     `template dependency must pin ${packageJson.name}@${packageJson.version}`,
   );
-if (!wrangler.includes(`"PROCESSOR_IMAGE": "${manifest.processorImage}"`))
-  failures.push("template Wrangler image does not match the release manifest");
 
 if (failures.length > 0) {
   for (const failure of failures) console.error(`- ${failure}`);
   process.exitCode = 1;
 } else {
   console.log(
-    `release metadata: ${packageJson.name}@${packageJson.version} -> ${manifest.processorImage}`,
+    `release metadata: ${packageJson.name}@${packageJson.version}`,
   );
 }
 
@@ -120,6 +104,6 @@ if (writeGithubOutput && failures.length === 0) {
   if (!output) throw new Error("GITHUB_OUTPUT is not set");
   await appendFile(
     output,
-    `package_name=${packageJson.name}\nversion=${packageJson.version}\nimage=${manifest.processorImage}\n`,
+    `package_name=${packageJson.name}\nversion=${packageJson.version}\n`,
   );
 }

@@ -7,13 +7,14 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
-cf-nix-cache-core = { path = "../core" }
+cf-nix-cache-contracts = { path = "../contracts" }
 clap.workspace = true
 humantime.workspace = true
 reqwest.workspace = true
 reqwest-middleware.workspace = true
 reqwest-retry.workspace = true
 etcetera.workspace = true
+nix-base32.workspace = true
 fastcdc.workspace = true
 futures.workspace = true
 serde.workspace = true

@@ -1,8 +1,8 @@
-//! Client-side encoding: the chunking and compression the processor would
-//! otherwise run, so that only chunks the server lacks are uploaded.
+//! Client-side encoding: each NAR is chunked and compressed here, so that only
+//! the chunks the server lacks are uploaded.
 
+use crate::protocol::{nix_base32, CHUNK_AVG_SIZE, CHUNK_MAX_SIZE, CHUNK_MIN_SIZE, ZSTD_LEVEL};
 use anyhow::{bail, Context, Result};
-use cf_nix_cache_core::{nix_base32, CHUNK_AVG_SIZE, CHUNK_MAX_SIZE, CHUNK_MIN_SIZE, ZSTD_LEVEL};
 use fastcdc::v2020::StreamCDC;
 use sha2::{Digest, Sha256};
 use std::{

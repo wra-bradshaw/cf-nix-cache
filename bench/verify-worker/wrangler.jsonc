@@ -4,5 +4,14 @@
   "compatibility_date": "2026-08-10",
   "workers_dev": true,
   "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "cf-nix-cache-bench" }],
-  "observability": { "enabled": true }
+  // The limit a Workflow step verifying a large NAR would run under.
+  "limits": { "cpu_ms": 300000 },
+  "workflows": [
+    {
+      "name": "cf-nix-cache-bench-verify",
+      "binding": "VERIFY",
+      "class_name": "VerifyWorkflow",
+    },
+  ],
+  "observability": { "enabled": true },
 }

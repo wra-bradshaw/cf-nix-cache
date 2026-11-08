@@ -1,14 +1,14 @@
 //! Helpers shared by uploads: the path metadata the server publishes, and
 //! waiting for an upload to finish.
 
+use crate::protocol::{
+    contracts::api as contract, CacheName, StorePathName, UploadStateResponse, UploadStatus,
+};
 use crate::{
     client::{api_path, Api},
     nix::{basename, nix_hash, store_hash, PathInfo},
 };
 use anyhow::{anyhow, bail, Context, Result};
-use cf_nix_cache_core::{
-    contracts::api as contract, CacheName, StorePathName, UploadStateResponse, UploadStatus,
-};
 use std::{
     fmt::Display,
     num::NonZeroU64,

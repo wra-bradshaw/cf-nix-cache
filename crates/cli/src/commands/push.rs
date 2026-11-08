@@ -1,11 +1,11 @@
 //! `push`: uploads the closure of some installables, skipping paths the server
 //! already has and, by default, paths signed by the cache's upstream caches.
 
-use anyhow::{Context as _, Result};
-use cf_nix_cache_core::{
+use crate::protocol::{
     contracts::{api as contract, responses::CacheUpstreamsResponse},
     CacheName, MissingPathsResponse, UploadStatus,
 };
+use anyhow::{Context as _, Result};
 use reqwest::Method;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -17,9 +17,7 @@ use tokio::task::JoinSet;
 
 use crate::{
     client::Api,
-    encoded_upload::{
-        is_server_too_old, upload_encoded, upload_encoded_batch, BATCH_NAR_SIZE, BATCH_PATHS,
-    },
+    encoded_upload::{upload_encoded, upload_encoded_batch, BATCH_NAR_SIZE, BATCH_PATHS},
     nix::{path_info, signed_by_upstream, store_hash, PathInfo},
     upload::wait_for_state,
 };
@@ -168,12 +166,6 @@ impl Context {
                 }
                 return failures;
             }
-            Err(error) if is_server_too_old(&error) => {
-                return items
-                    .into_iter()
-                    .map(|(path, _)| anyhow::anyhow!("failed to upload {path}: {error:#}"))
-                    .collect();
-            }
             // One bad path fails a whole batch; find it by going one by one.
             Err(error) => {
                 eprintln!("batch upload failed, retrying its paths one by one: {error:#}")
@@ -189,23 +181,14 @@ impl Context {
 }
 
 async fn upstream_key_names(api: &Api, cache: &CacheName) -> Result<Vec<String>> {
-    match api
+    let response = api
         .get::<CacheUpstreamsResponse>(&format!("/api/caches/{cache}/upstreams"))
-        .await
-    {
-        Ok(response) => Ok(response
-            .upstream_cache_key_names
-            .into_iter()
-            .map(String::from)
-            .collect()),
-        // An older server has no such route. Uploading everything is only
-        // wasteful, and a missing cache still fails on the next request.
-        Err(error) if error.to_string().starts_with("API returned 404") => {
-            eprintln!("warning: server did not report upstream caches, so none are skipped");
-            Ok(Vec::new())
-        }
-        Err(error) => Err(error),
-    }
+        .await?;
+    Ok(response
+        .upstream_cache_key_names
+        .into_iter()
+        .map(String::from)
+        .collect())
 }
 
 /// Runs `task` over `items` with at most `limit` running at once. A failure

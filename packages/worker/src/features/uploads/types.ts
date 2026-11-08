@@ -1,6 +1,6 @@
 import type {
   CfNixCacheChunkManifest,
-  CfNixCacheProcessorJob,
+  CfNixCacheUploadJob,
   Manifest,
   UploadStateResponse as GeneratedUploadStateResponse,
   UploadStatus,
@@ -9,7 +9,7 @@ import type {
 export type UploadManifest = Manifest;
 export type UploadState = UploadStatus;
 export type UploadStateResponse = GeneratedUploadStateResponse;
-export type ProcessJob = CfNixCacheProcessorJob;
+export type ProcessJob = CfNixCacheUploadJob;
 export type ChunkManifest = CfNixCacheChunkManifest;
 
 export interface ChunkRef {

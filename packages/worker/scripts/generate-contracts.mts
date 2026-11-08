@@ -12,11 +12,16 @@ const files = (await readdir(schemaDir))
   .sort();
 const output = [
   '// GENERATED FROM schemas/*.json. Do not edit by hand.',
-  '// Regenerate with: pnpm --dir packages/worker contracts:generate',
+  '// Regenerate with: pnpm --dir packages/worker generate',
   '',
 ];
 for (const file of files) {
   const schema = JSON.parse(await readFile(join(schemaDir, file), 'utf8'));
+  if (
+    !schema.$id ||
+    schema.$schema !== 'https://json-schema.org/draft/2020-12/schema'
+  )
+    throw new Error(`${file} is not a draft 2020-12 schema`);
   const types = await compile(
     schema,
     basename(file, '.json').replace(/(^|-)(.)/g, (_, _dash, character) =>

@@ -19,7 +19,6 @@ interface __BaseEnv_Env {
   >;
   CACHE_INDEX: DurableObjectNamespace<import('./src/index').CacheIndexShard>;
   UPLOAD_JOB: DurableObjectNamespace<import('./src/index').UploadJob>;
-  PROCESSOR: DurableObjectNamespace<import('./src/index').ProcessorContainer>;
   GC_CONTROL: DurableObjectNamespace<import('./src/index').GcControl>;
   PROCESS_UPLOAD: Workflow<
     Parameters<import('./src/index').ProcessUploadWorkflow['run']>[0]['payload']
@@ -43,7 +42,6 @@ declare namespace Cloudflare {
       | 'CacheCoordinator'
       | 'CacheIndexShard'
       | 'UploadJob'
-      | 'ProcessorContainer'
       | 'GcControl';
   }
   interface ProductionEnv {
@@ -64,7 +62,6 @@ declare namespace Cloudflare {
     >;
     CACHE_INDEX: DurableObjectNamespace<import('./src/index').CacheIndexShard>;
     UPLOAD_JOB: DurableObjectNamespace<import('./src/index').UploadJob>;
-    PROCESSOR: DurableObjectNamespace<import('./src/index').ProcessorContainer>;
     GC_CONTROL: DurableObjectNamespace<import('./src/index').GcControl>;
     PROCESS_UPLOAD: Workflow<
       Parameters<

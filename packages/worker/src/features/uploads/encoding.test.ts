@@ -1,12 +1,7 @@
 import { zstdCompressSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import {
-  InvalidEncodingError,
-  decodeChunk,
-  nixBase32,
-  sha256Nix,
-  verifyChunk,
-} from './encoding';
+import { nixBase32, sha256Nix, verifyChunk } from './encoding';
+import { InvalidEncodingError, decodeChunk } from './verifier';
 
 const encoder = new TextEncoder();
 

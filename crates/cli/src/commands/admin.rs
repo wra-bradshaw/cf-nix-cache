@@ -1,7 +1,7 @@
 //! Thin API wrappers: the cache, token, audit, and upload admin subcommands.
 
+use crate::protocol::{contracts::api as contract, ENCODING_ID};
 use anyhow::{Context, Result};
-use cf_nix_cache_core::{contracts::api as contract, ENCODING_ID};
 use reqwest::Method;
 use serde_json::Value;
 use std::num::NonZeroU64;

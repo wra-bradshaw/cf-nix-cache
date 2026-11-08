@@ -1,7 +1,7 @@
 //! Command dispatch and the output helpers shared by the command flows.
 
+use crate::protocol::contracts::api as contract;
 use anyhow::{Context, Result};
-use cf_nix_cache_core::contracts::api as contract;
 use serde::Serialize;
 use serde_json::Value;
 use std::num::NonZeroU64;

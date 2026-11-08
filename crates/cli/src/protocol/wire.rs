@@ -61,7 +61,7 @@ pub struct UploadStateResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::responses as generated;
+    use crate::protocol::contracts::responses as generated;
     use serde::de::DeserializeOwned;
     use serde_json::{json, Value};
 

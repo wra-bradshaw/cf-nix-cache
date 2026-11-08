@@ -1,4 +1,5 @@
 import { now } from '../../shared/clock';
+import { DomainError } from '../../shared/errors';
 import { idStub, unwrapRpc } from '../../shared/rpc';
 import type { Allocation } from '../cache/durable/upload-allocations';
 import { coordinator } from '../cache/stubs';
@@ -32,8 +33,12 @@ export async function allocateUpload(
   );
   for (let attempt = 0; allocation.merged; attempt += 1) {
     const access = await idStub(env.UPLOAD_JOB, allocation.id).access();
-    // A staging upload from before client encoding has no session, and can
-    // never finish; replace it instead of waiting for it.
+    if (access.ok && !access.value.encoded)
+      throw new DomainError(
+        'invalid_transition',
+        'upload is no longer supported; push again with a current cf-nix-cache',
+        409,
+      );
     if (
       access.ok &&
       access.value.encoded &&

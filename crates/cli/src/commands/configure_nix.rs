@@ -1,7 +1,7 @@
 //! `configure-nix`: prints the Nix settings for using a cache.
 
+use crate::protocol::CacheName;
 use anyhow::{Context, Result};
-use cf_nix_cache_core::CacheName;
 use etcetera::BaseStrategy;
 use reqwest::Url;
 use std::path::Path;

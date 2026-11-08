@@ -1,4 +1,4 @@
-src/generated/json-contracts.ts
+src/generated/
 dist/
 .wrangler/
 pnpm-lock.yaml

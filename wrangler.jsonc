@@ -27,7 +27,6 @@
       { "name": "CACHE_COORDINATOR", "class_name": "CacheCoordinator" },
       { "name": "CACHE_INDEX", "class_name": "CacheIndexShard" },
       { "name": "UPLOAD_JOB", "class_name": "UploadJob" },
-      { "name": "PROCESSOR", "class_name": "ProcessorContainer" },
       { "name": "GC_CONTROL", "class_name": "GcControl" },
     ],
   },
@@ -38,19 +37,11 @@
     "CacheCoordinator": { "type": "durable-object", "storage": "sqlite" },
     "CacheIndexShard": { "type": "durable-object", "storage": "sqlite" },
     "UploadJob": { "type": "durable-object", "storage": "sqlite" },
-    "ProcessorContainer": { "type": "durable-object", "storage": "sqlite" },
+    // Uploads used to be verified in a container behind this class; they are
+    // now verified in the Worker (crates/verify, as WebAssembly).
+    "ProcessorContainer": { "type": "durable-object", "state": "deleted" },
     "GcControl": { "type": "durable-object", "storage": "sqlite" },
   },
-  "containers": [
-    {
-      "class_name": "ProcessorContainer",
-      // Each ProcessorContainer chooses this image when it starts its
-      // container. PROCESSOR_IMAGE defaults to the locally loaded Nix image;
-      // `nix run .#deploy -- apply` overrides it in the rendered config.
-      "scheduling_policy": "durable_object",
-      "images": { "processor": { "dockerfile": "./Dockerfile" } },
-    },
-  ],
   "workflows": [
     {
       "name": "process-upload",
@@ -82,11 +73,14 @@
   // (see .dev.vars.example).
   "observability": { "enabled": true },
   // A garbage collection run makes one request per index shard and manifest.
-  "limits": { "subrequests": 10000000 },
+  // The upload workflow verifies NARs of up to 10 GiB in one step, roughly
+  // extrapolated as ~66 s of CPU at worst from ~7 s at 1 GiB (not a measured
+  // bound), so steps get the 5 minutes Workers Paid allows.
+  "limits": { "subrequests": 10000000, "cpu_ms": 300000 },
   "env": {
     "production": {
       "name": "cf-nix-cache",
-      "limits": { "subrequests": 10000000 },
+      "limits": { "subrequests": 10000000, "cpu_ms": 300000 },
       "r2_buckets": [
         { "binding": "CACHE_BUCKET", "bucket_name": "cf-nix-cache-prod" },
       ],
@@ -98,7 +92,6 @@
           { "name": "CACHE_COORDINATOR", "class_name": "CacheCoordinator" },
           { "name": "CACHE_INDEX", "class_name": "CacheIndexShard" },
           { "name": "UPLOAD_JOB", "class_name": "UploadJob" },
-          { "name": "PROCESSOR", "class_name": "ProcessorContainer" },
           { "name": "GC_CONTROL", "class_name": "GcControl" },
         ],
       },
@@ -107,13 +100,6 @@
         "TOKEN_AUDIENCE": "cf-nix-cache",
         "NIX_SIGNING_KEY_NAME": "cache.nix-signing",
       },
-      "containers": [
-        {
-          "class_name": "ProcessorContainer",
-          "scheduling_policy": "durable_object",
-          "images": { "processor": { "dockerfile": "./Dockerfile" } },
-        },
-      ],
       "workflows": [
         {
           "name": "process-upload",

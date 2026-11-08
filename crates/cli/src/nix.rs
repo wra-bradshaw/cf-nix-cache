@@ -1,5 +1,5 @@
+use crate::protocol::{nix_base32, validate_store_hash};
 use anyhow::{bail, Context, Result};
-use cf_nix_cache_core::{nix_base32, validate_store_hash};
 use serde::Deserialize;
 use std::{collections::BTreeMap, path::Path, process::Command};
 
