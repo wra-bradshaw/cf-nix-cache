@@ -20,7 +20,16 @@ import type { ChunkManifest, ChunkRef, ProcessResult } from './types';
  * (compressible chunks of a NAR of many small files), so this stays near
  * 13 s, under the default 30 s CPU limit. See docs/COST_PLAN.md.
  */
-export const INLINE_VERIFY_MAX_NAR_SIZE = 256 * 1024 * 1024;
+const INLINE_VERIFY_MAX_NAR_SIZE = 256 * 1024 * 1024;
+
+export function inlineVerifyLimit(
+  env: Pick<Env, 'INLINE_VERIFY_MAX_NAR_SIZE'>,
+): number {
+  const override = Number(env.INLINE_VERIFY_MAX_NAR_SIZE);
+  return env.INLINE_VERIFY_MAX_NAR_SIZE && Number.isSafeInteger(override)
+    ? override
+    : INLINE_VERIFY_MAX_NAR_SIZE;
+}
 
 export interface StoredNar {
   nar_hash: string;

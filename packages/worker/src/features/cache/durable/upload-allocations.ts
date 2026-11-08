@@ -13,9 +13,12 @@ export const INFLIGHT_SCHEMA = `CREATE TABLE IF NOT EXISTS inflight_uploads (
   store_hash TEXT PRIMARY KEY, nar_hash TEXT NOT NULL, upload_id TEXT NOT NULL, created_at INTEGER NOT NULL
 );`;
 
+const chunksKey = (id: string) => `staging/${id}.chunks.json`;
+
 export interface Allocation {
   id: string;
-  staging_key: string;
+  /** Where the upload's chunk list goes (the table's `staging_key`). */
+  chunks_key: string;
   /** A retry of the same idempotency key. */
   repeated: boolean;
   /** Another push's upload of the same NAR, still in flight. */
@@ -72,7 +75,7 @@ export class UploadAllocations {
           );
         return ok({
           id: String(old.upload_id),
-          staging_key: String(old.staging_key),
+          chunks_key: String(old.staging_key),
           repeated: true,
           merged: false,
         });
@@ -89,18 +92,18 @@ export class UploadAllocations {
       if (inflight && inflight.nar_hash === input.nar_hash && input.merge)
         return ok({
           id: inflight.upload_id,
-          staging_key: `staging/${inflight.upload_id}.nar.zst`,
+          chunks_key: chunksKey(inflight.upload_id),
           repeated: false,
           merged: true,
         });
       const id = this.env.UPLOAD_JOB!.newUniqueId().toString();
-      const stagingKey = `staging/${id}.nar.zst`;
+      const key = chunksKey(id);
       this.ctx.storage.sql.exec(
         'INSERT INTO upload_allocations (operation_id, fingerprint, upload_id, staging_key) VALUES (?, ?, ?, ?)',
         input.operation_id,
         input.fingerprint,
         id,
-        stagingKey,
+        key,
       );
       // The first upload of a NAR stays the one others join. A replacement
       // with a different NAR hash takes over.
@@ -114,7 +117,7 @@ export class UploadAllocations {
         );
       return ok({
         id,
-        staging_key: stagingKey,
+        chunks_key: key,
         repeated: false,
         merged: false,
       });

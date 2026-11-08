@@ -79,7 +79,6 @@ pub(crate) fn encode(nar: impl Read) -> Result<EncodedNar> {
     let mut offset = 0u64;
     for chunk in StreamCDC::new(&mut reader, CHUNK_MIN_SIZE, CHUNK_AVG_SIZE, CHUNK_MAX_SIZE) {
         let data = chunk.context("reading NAR")?.data;
-        // The same call as the processor, so both write the same frames.
         let compressed = zstd::encode_all(data.as_slice(), ZSTD_LEVEL)?;
         file.write_all(&compressed)?;
         chunks.push(EncodedChunk {
@@ -159,12 +158,12 @@ mod tests {
         assert_eq!(joined, nar);
     }
 
-    /// The processor pins zstd's output for ENCODING_ID with the same input
-    /// (`compression_output_is_stable_for_the_encoding_profile`). The CLI must
-    /// produce the same frame, so that a chunk is the same object whichever
-    /// side compressed it.
+    /// Pins zstd's output for ENCODING_ID, which every chunk in existing
+    /// caches was written with, so that a zstd upgrade that changes it is
+    /// noticed. Correctness does not depend on it: manifests are built from
+    /// the stored bytes, and a chunk's key is its raw hash.
     #[test]
-    fn compresses_like_the_processor() {
+    fn compression_output_is_stable_for_the_encoding_profile() {
         let mut state = 0x2545_f491_4f6c_dd1d_u64;
         let input: Vec<u8> = (0..1 << 20)
             .map(|index: u32| {

@@ -6,7 +6,6 @@ export type CfNixCacheAPIContract =
   | CreateCache
   | TokenRequest
   | BootstrapRequest
-  | UploadRequest
   | UploadState
   | ConfigureCache
   | Cache
@@ -14,7 +13,6 @@ export type CfNixCacheAPIContract =
   | TokenResponse
   | TokenSummary
   | AuditEvent
-  | CompleteUpload
   | GcRunRequest
   | EncodedUploadRequest
   | EncodedUploadBatch
@@ -65,23 +63,6 @@ export interface BootstrapRequest {
    */
   grants: [Grant, ...Grant[]];
   secret: string;
-}
-export interface UploadRequest {
-  manifest: Manifest;
-  compressed_size: number;
-}
-export interface Manifest {
-  cache: string;
-  store_hash: string;
-  store_path: string;
-  nar_hash: string;
-  nar_size: number;
-  /**
-   * @maxItems 1024
-   */
-  references: string[];
-  deriver?: string | null;
-  ca?: string | null;
 }
 export interface UploadState {
   id: string;
@@ -151,12 +132,6 @@ export interface AuditEvent {
     [k: string]: string;
   };
 }
-export interface CompleteUpload {
-  parts?: {
-    part_number: number;
-    etag: string;
-  }[];
-}
 export interface GcRunRequest {
   /**
    * Report what would be evicted and deleted without changing anything.
@@ -178,6 +153,19 @@ export interface EncodedUploadRequest {
    * @maxItems 16384
    */
   chunks: [EncodedChunk, ...EncodedChunk[]];
+}
+export interface Manifest {
+  cache: string;
+  store_hash: string;
+  store_path: string;
+  nar_hash: string;
+  nar_size: number;
+  /**
+   * @maxItems 1024
+   */
+  references: string[];
+  deriver?: string | null;
+  ca?: string | null;
 }
 export interface EncodedChunk {
   raw_hash: string;
@@ -233,14 +221,13 @@ export interface CfNixCacheChunkManifest {
 // Source: schemas/process-job.json
 export interface CfNixCacheProcessorJob {
   job_id: string;
-  staging_key: string;
   nar_hash: string;
   nar_size: number;
   encoding_id: 'fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1';
   /**
-   * A client-encoded upload: verify the chunks listed here instead of reading staging_key.
+   * The chunk list of a client-encoded upload, whose chunks are already stored.
    */
-  chunks_key?: string;
+  chunks_key: string;
 }
 
 // Source: schemas/responses.json
@@ -249,7 +236,6 @@ export type CfNixCacheAPIResponses =
   | CacheResponse
   | CachePage
   | UploadStateResponse
-  | InitiateUploadResponse
   | TokenIssueResponse
   | TokenPageResponse
   | AuditPage
@@ -303,24 +289,6 @@ export interface UploadStateResponse {
     | 'FAILED'
     | 'ABORTED';
   error: string | null;
-}
-export interface InitiateUploadResponse {
-  id: string;
-  status:
-    | 'CREATED'
-    | 'UPLOADING'
-    | 'COMPLETING'
-    | 'QUEUED'
-    | 'PROCESSING'
-    | 'PUBLISHING'
-    | 'READY'
-    | 'FAILED'
-    | 'ABORTED';
-  error: string | null;
-  parts: {
-    part_number: number;
-    url: string;
-  }[];
 }
 export interface TokenIssueResponse {
   id: string;

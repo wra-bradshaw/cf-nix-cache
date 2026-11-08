@@ -87,10 +87,6 @@ forEachSupportedSystem (
             w r2 bucket lifecycle add "$prod_bucket" \
               abandoned-staging "staging/" --expire-days 1 --force
           fi
-          if ! printf '%s' "$lifecycle" | grep -q "abort-multipart"; then
-            w r2 bucket lifecycle add "$prod_bucket" \
-              abort-multipart "" --abort-multipart-days 1 --force
-          fi
         }
 
         check_secrets() {

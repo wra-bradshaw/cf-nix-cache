@@ -1,7 +1,7 @@
 //! Client-encoded uploads: the CLI chunks and compresses each NAR, the server
 //! says which chunks it lacks, and only those are sent. The server then checks
-//! the stored chunks and publishes the path, with no staging copy and, for
-//! most paths, no processor container.
+//! the stored chunks and publishes the path, for most paths without a
+//! processor container.
 
 use crate::{
     client::{api_path, Api},
@@ -35,29 +35,24 @@ const ENCODE_CONCURRENCY: usize = 8;
 /// Garbage collection closes the upload gate for minutes at most.
 const GATE_WAIT: Duration = Duration::from_secs(30 * 60);
 
-/// The server predates client-encoded uploads, or rejected this client's
-/// encoding; the caller falls back to a staging upload.
-#[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub(crate) struct Unsupported(String);
+const SERVER_TOO_OLD: &str =
+    "the server does not accept client-encoded uploads; upgrade its cf-nix-cache Worker";
 
-fn classify(error: anyhow::Error) -> anyhow::Error {
+/// Names an older server, which has no client-encoded upload routes.
+fn explain(error: anyhow::Error) -> anyhow::Error {
     let message = error.to_string();
-    // An older server has no such route.
-    if message.starts_with("API returned 404") && message.contains("route not found")
-        || message.contains("\"code\":\"invalid_chunk\"")
-    {
-        return Unsupported(message).into();
+    if message.starts_with("API returned 404") && message.contains("route not found") {
+        return error.context(SERVER_TOO_OLD);
     }
     error
 }
 
-fn gate_closed(error: &anyhow::Error) -> bool {
-    error.to_string().contains("\"code\":\"gc_in_progress\"")
+pub(crate) fn is_server_too_old(error: &anyhow::Error) -> bool {
+    error.to_string() == SERVER_TOO_OLD
 }
 
-pub(crate) fn is_unsupported(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<Unsupported>().is_some()
+fn gate_closed(error: &anyhow::Error) -> bool {
+    error.to_string().contains("\"code\":\"gc_in_progress\"")
 }
 
 fn request(
@@ -109,7 +104,7 @@ async fn open<B: serde::Serialize, T: serde::de::DeserializeOwned>(
                 eprintln!("garbage collection is running; waiting to upload");
                 tokio::time::sleep(Duration::from_secs(30)).await;
             }
-            result => return result.map_err(classify),
+            result => return result.map_err(explain),
         }
     }
 }
@@ -144,7 +139,7 @@ pub(crate) async fn upload_encoded(
                 let bytes = nar.chunk_bytes(&hash)?;
                 api.put_chunk(id, &hash, bytes)
                     .await
-                    .map_err(classify)
+                    .map_err(explain)
                     .with_context(|| format!("uploading chunk {hash}"))
             })
             .buffer_unordered(CHUNK_CONCURRENCY)
@@ -154,7 +149,7 @@ pub(crate) async fn upload_encoded(
         api.request(
             Method::POST,
             &api_path(&["uploads", &opened.id, "complete"]),
-            Some(&contract::CompleteUpload { parts: Vec::new() }),
+            None::<&()>,
         )
         .await?
     };
@@ -252,7 +247,7 @@ pub(crate) async fn upload_encoded_batch(
                 files.into_iter().collect(),
             )
             .await
-            .map_err(classify)?;
+            .map_err(explain)?;
         for state in response.uploads {
             completed.insert(state.id.clone(), state);
         }

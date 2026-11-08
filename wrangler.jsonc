@@ -10,7 +10,7 @@
   "workers_dev": true,
   // Custom hostname: add a "routes" entry, e.g.
   // "routes": [{ "pattern": "cache.example.com/*", "zone_id": "<zone-id>" }],
-  // R2 bucket lifecycle rules (staging/multipart expiry) are ensured by
+  // The R2 bucket lifecycle rule (staging expiry) is ensured by
   // `nix run .#deploy -- apply`, not expressed here: wrangler.jsonc has no
   // lifecycle field.
   "r2_buckets": [

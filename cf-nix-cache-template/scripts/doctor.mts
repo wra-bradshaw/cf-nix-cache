@@ -42,7 +42,7 @@ export async function doctor(): Promise<void> {
       );
     const lifecycle = await lifecycleIsConfigured(bucket, configPath);
     if (lifecycle === false)
-      findings.push("R2 staging/multipart lifecycle rules are missing");
+      findings.push("the R2 staging lifecycle rule is missing");
     if (lifecycle === undefined)
       findings.push(
         "cannot verify R2 lifecycle rules; check Wrangler authentication",

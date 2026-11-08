@@ -10,11 +10,7 @@ import type {
   UploadState,
   UploadStateResponse,
 } from '../types';
-import {
-  INLINE_VERIFY_MAX_NAR_SIZE,
-  chunkList,
-  type StoredNar,
-} from '../verify-stored';
+import { chunkList, inlineVerifyLimit, type StoredNar } from '../verify-stored';
 import type { UploadPublisher } from './publish';
 import type { UploadStorage } from './storage';
 import { toProcessJob, toStateResponse, type UploadRow } from './upload-row';
@@ -27,7 +23,7 @@ export interface OpenSessionInput {
   cache: string;
   cache_id: string;
   incarnation: string;
-  staging_key: string;
+  chunks_key: string;
   manifest: UploadManifest;
   compressed_size: number;
   idempotency_key: string;
@@ -175,11 +171,10 @@ export class UploadSession {
           ? new Set(input.chunks.map((chunk) => chunk.raw_hash))
           : await this.presentChunks(input.chunks);
         this.ctx.storage.transactionSync(() => {
-          this.storage.insert({ ...input, upload_id: null });
+          this.storage.insert(input);
           this.sql().exec(
-            'INSERT INTO session (key, lease_token, chunks_key, existing_manifest) VALUES (1, ?, ?, ?)',
+            'INSERT INTO session (key, lease_token, existing_manifest) VALUES (1, ?, ?)',
             token,
-            `staging/${input.job_id}.chunks.json`,
             reused ? 1 : 0,
           );
           input.chunks.forEach((chunk, index) =>
@@ -304,12 +299,12 @@ export class UploadSession {
         return ok({
           kind: 'existing',
           manifest_key: manifestKey(row.manifest.nar_hash),
-          chunks_key: row.chunks_key!,
+          chunks_key: row.chunks_key,
           nar,
         });
-      if (row.manifest.nar_size <= INLINE_VERIFY_MAX_NAR_SIZE)
-        return ok({ kind: 'inline', chunks_key: row.chunks_key!, nar });
-      await writeChunkList(this.env.CACHE_BUCKET, row.chunks_key!, nar);
+      if (row.manifest.nar_size <= inlineVerifyLimit(this.env))
+        return ok({ kind: 'inline', chunks_key: row.chunks_key, nar });
+      await writeChunkList(this.env.CACHE_BUCKET, row.chunks_key, nar);
       // The workflow acquires the lease under the same job ID, replacing this
       // upload's token without a gap in which chunks could be swept.
       this.storage.setQueued(row.job_id);
@@ -351,9 +346,19 @@ export class UploadSession {
       this.storage.setState(row.job_id, ['COMPLETING'], 'PROCESSING');
       const published = await this.publisher.publish(result, manifest);
       if (!published.ok) {
-        // A retryable failure leaves PROCESSING, which the processor workflow
-        // finishes on the next status poll.
-        if (published.error.status >= 500) return published;
+        if (published.error.status >= 500) {
+          // A retryable failure leaves PROCESSING. Start the processor
+          // workflow now, so the publication is finished even if this client
+          // never asks about the upload again.
+          await ensureWorkflow(
+            this.env.PROCESS_UPLOAD!,
+            row.job_id,
+            toProcessJob(this.storage.row() ?? row),
+          ).catch((error: unknown) =>
+            console.error('upload workflow reconciliation failed', error),
+          );
+          return published;
+        }
         this.storage.setError(
           row.job_id,
           `${published.error.code}: ${published.error.message}`,

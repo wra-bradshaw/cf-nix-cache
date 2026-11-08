@@ -1,15 +1,16 @@
+//! Verification of client-encoded uploads too large to check in a Worker
+//! request: the chunks are already stored, and must decode to their keys and
+//! concatenate to a valid NAR with the declared hash. Nothing is written but
+//! the manifest, which is built from the stored bytes.
+
 use anyhow::Context;
-use async_compression::tokio::bufread::ZstdDecoder;
 use cf_nix_cache_core::{
-    nix_base32, ChunkManifest, ChunkRef, ProcessJob, ProcessResult, CHUNK_AVG_SIZE, CHUNK_MAX_SIZE,
-    CHUNK_MIN_SIZE, MAX_COMPRESSED_SIZE, MAX_NAR_SIZE, ZSTD_LEVEL,
+    nix_base32, ChunkManifest, ChunkRef, ProcessJob, ProcessResult, CHUNK_MAX_SIZE,
 };
-use fastcdc::v2020::AsyncStreamCDC;
-use futures::StreamExt;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
     nar::{LimitedReader, NarValidator},
@@ -31,16 +32,16 @@ impl ProcessFailure {
         Self::Permanent(message.into())
     }
 
-    /// A read through the decoder fails for one of two reasons: the connection
-    /// to the store, which is worth retrying, or the content, which is not.
+    /// A read fails for one of two reasons: the connection to the store,
+    /// which is worth retrying, or the content, which is not.
     fn from_stream(error: std::io::Error) -> Self {
         if error
             .get_ref()
             .is_some_and(|inner| inner.is::<ObjectReadError>())
         {
-            Self::Retryable(anyhow::Error::new(error).context("reading staging object"))
+            Self::Retryable(anyhow::Error::new(error).context("reading a chunk"))
         } else {
-            Self::permanent(format!("invalid compressed NAR stream: {error}"))
+            Self::permanent(format!("invalid chunk: {error}"))
         }
     }
 }
@@ -51,199 +52,7 @@ pub(crate) async fn process_job<S: ObjectStore>(
     store: &S,
     job: &ProcessJob,
 ) -> Result<ProcessResult> {
-    if let Some(list_key) = &job.chunks_key {
-        return verify_chunk_list(store, job, list_key).await;
-    }
-    // Validate the complete archive before creating any permanent objects,
-    // so malformed input whose hash or NAR structure is only discovered at
-    // the end of the stream cannot leave content-addressed chunks behind.
-    let (nar_hash, raw_size) = validate_nar(store, job).await?;
-    if nar_hash != job.nar_hash || raw_size != job.nar_size {
-        return Err(ProcessFailure::permanent(
-            "validated NAR does not match declared hash or size",
-        ));
-    }
-
-    let chunked = chunk_and_store(store, job).await?;
-    if chunked.raw_size != raw_size || chunked.raw_hash != nar_hash {
-        return Err(ProcessFailure::permanent(
-            "staging object changed during processing",
-        ));
-    }
-    if chunked.refs.is_empty() {
-        return Err(ProcessFailure::permanent(
-            "validated NAR produced no chunks",
-        ));
-    }
-    publish_manifest(
-        store,
-        ChunkManifest {
-            encoding_id: job.encoding_id.clone(),
-            nar_hash,
-            nar_size: raw_size,
-            file_hash: chunked.file_hash,
-            file_size: chunked.file_size,
-            chunks: chunked.refs,
-            processing_version: env!("CARGO_PKG_VERSION").into(),
-            created_at: now_seconds(),
-        },
-    )
-    .await
-}
-
-/// What [`chunk_and_store`] wrote. `file_hash` and `file_size` cover the
-/// concatenated compressed chunks; `raw_size` and `raw_hash` cover what the
-/// chunker actually read.
-struct ChunkedNar {
-    refs: Vec<ChunkRef>,
-    raw_size: u64,
-    raw_hash: String,
-    file_hash: String,
-    file_size: u64,
-}
-
-/// Re-reads the staging object, writing each compressed chunk to its permanent
-/// content-addressed key.
-async fn chunk_and_store<S: ObjectStore>(store: &S, job: &ProcessJob) -> Result<ChunkedNar> {
-    let source = LimitedReader::new(store.get(&job.staging_key).await?, MAX_COMPRESSED_SIZE);
-    let mut decoder = ZstdDecoder::new(BufReader::new(source));
-    let mut chunker =
-        AsyncStreamCDC::new(&mut decoder, CHUNK_MIN_SIZE, CHUNK_AVG_SIZE, CHUNK_MAX_SIZE);
-    let mut chunks = Box::pin(chunker.as_stream());
-    let mut file_hash = Sha256::new();
-    let mut file_size = 0u64;
-    let mut chunked_raw_size = 0u64;
-    let mut chunked_raw_hash = Sha256::new();
-    let mut refs = Vec::new();
-
-    while let Some(chunk) = chunks.next().await {
-        let bytes = chunk
-            .map_err(|error| ProcessFailure::from_stream(error.into()))?
-            .data;
-        let raw_size = bytes.len() as u64;
-        let raw_hash = sha256_nix(&bytes);
-        chunked_raw_size += raw_size;
-        chunked_raw_hash.update(&bytes);
-        let compressed =
-            tokio::task::spawn_blocking(move || zstd::encode_all(bytes.as_slice(), ZSTD_LEVEL))
-                .await
-                .context("waiting for zstd compression")?
-                .context("unable to compress NAR chunk")?;
-        let compressed_hash = sha256_nix(&compressed);
-        let compressed_size = compressed.len() as u64;
-        file_hash.update(&compressed);
-        file_size += compressed_size;
-        let key = format!("chunks/{}/{raw_hash}.zst", job.encoding_id);
-        store
-            .put_if_absent(&key, compressed, "application/zstd")
-            .await?;
-        refs.push(ChunkRef {
-            raw_hash,
-            raw_size,
-            compressed_hash,
-            compressed_size,
-            key,
-        });
-    }
-    Ok(ChunkedNar {
-        refs,
-        raw_size: chunked_raw_size,
-        raw_hash: format!("sha256:{}", nix_base32(&chunked_raw_hash.finalize())),
-        file_hash: format!("sha256:{}", nix_base32(&file_hash.finalize())),
-        file_size,
-    })
-}
-
-/// Writes `manifest` unless one already exists for this NAR, in which case the
-/// stored manifest wins and the result is marked deduplicated.
-async fn publish_manifest<S: ObjectStore>(
-    store: &S,
-    manifest: ChunkManifest,
-) -> Result<ProcessResult> {
-    manifest
-        .validate()
-        .map_err(|error| ProcessFailure::permanent(error.to_string()))?;
-    let manifest_key = format!(
-        "manifests/{}/{}.json",
-        manifest.encoding_id, manifest.nar_hash
-    );
-    let created = store
-        .put_if_absent(
-            &manifest_key,
-            serde_json::to_vec(&manifest).context("serializing chunk manifest")?,
-            "application/json",
-        )
-        .await?;
-    let stored_manifest = if created {
-        manifest
-    } else {
-        read_stored_manifest(store, &manifest_key).await?
-    };
-    Ok(ProcessResult {
-        manifest_key,
-        manifest: stored_manifest,
-        deduplicated: !created,
-    })
-}
-
-async fn read_stored_manifest<S: ObjectStore>(store: &S, key: &str) -> Result<ChunkManifest> {
-    let mut body = store.get(key).await?;
-    let mut bytes = Vec::new();
-    body.read_to_end(&mut bytes)
-        .await
-        .context("reading deduplicated manifest")?;
-    let existing: ChunkManifest = serde_json::from_slice(&bytes).map_err(|error| {
-        ProcessFailure::permanent(format!("stored manifest is invalid: {error}"))
-    })?;
-    existing
-        .validate()
-        .map_err(|error| ProcessFailure::permanent(error.to_string()))?;
-    Ok(existing)
-}
-
-async fn validate_nar<S: ObjectStore>(store: &S, job: &ProcessJob) -> Result<(String, u64)> {
-    let source = LimitedReader::new(store.get(&job.staging_key).await?, MAX_COMPRESSED_SIZE);
-    let mut decoder = ZstdDecoder::new(BufReader::new(source));
-    let mut validator = NarValidator::spawn();
-    let mut raw_hash = Sha256::new();
-    let mut raw_size = 0u64;
-    let mut buffer = vec![0u8; 1024 * 1024];
-    let invalid_nar = |error: &dyn std::fmt::Display| {
-        ProcessFailure::permanent(format!("invalid NAR archive: {error}"))
-    };
-
-    loop {
-        let read = decoder
-            .read(&mut buffer)
-            .await
-            .map_err(ProcessFailure::from_stream)?;
-        if read == 0 {
-            break;
-        }
-        raw_size += read as u64;
-        if raw_size > MAX_NAR_SIZE {
-            return Err(ProcessFailure::permanent(
-                "decoded NAR exceeds the configured limit",
-            ));
-        }
-        raw_hash.update(&buffer[..read]);
-        // The write fails because the validator has stopped, so what it found
-        // is the real error and the broken pipe is only a symptom.
-        if let Err(write_error) = validator.writer.write_all(&buffer[..read]).await {
-            return Err(match validator.finish().await {
-                Err(error) => invalid_nar(&error),
-                Ok(()) => invalid_nar(&write_error),
-            });
-        }
-    }
-    validator
-        .finish()
-        .await
-        .map_err(|error| invalid_nar(&error))?;
-    Ok((
-        format!("sha256:{}", nix_base32(&raw_hash.finalize())),
-        raw_size,
-    ))
+    verify_chunk_list(store, job, &job.chunks_key).await
 }
 
 /// The chunk list a client-encoded upload leaves in staging.
@@ -267,10 +76,6 @@ struct ListedChunk {
 /// zstd's worst case for a `CHUNK_MAX_SIZE` frame, rounded up.
 const CHUNK_MAX_COMPRESSED_SIZE: u64 = 17 * 1024 * 1024;
 
-/// Verifies a client-encoded upload whose chunks are already stored: they
-/// must decode to their keys and concatenate to a valid NAR with the declared
-/// hash. Nothing is written but the manifest, which is built from the stored
-/// bytes. Used for NARs too large to verify inside a Worker request.
 async fn verify_chunk_list<S: ObjectStore>(
     store: &S,
     job: &ProcessJob,
@@ -377,9 +182,57 @@ async fn verify_chunk_list<S: ObjectStore>(
     .await
 }
 
+/// Writes `manifest` unless one already exists for this NAR, in which case the
+/// stored manifest wins and the result is marked deduplicated.
+async fn publish_manifest<S: ObjectStore>(
+    store: &S,
+    manifest: ChunkManifest,
+) -> Result<ProcessResult> {
+    manifest
+        .validate()
+        .map_err(|error| ProcessFailure::permanent(error.to_string()))?;
+    let manifest_key = format!(
+        "manifests/{}/{}.json",
+        manifest.encoding_id, manifest.nar_hash
+    );
+    let created = store
+        .put_if_absent(
+            &manifest_key,
+            serde_json::to_vec(&manifest).context("serializing chunk manifest")?,
+            "application/json",
+        )
+        .await?;
+    let stored_manifest = if created {
+        manifest
+    } else {
+        read_stored_manifest(store, &manifest_key).await?
+    };
+    Ok(ProcessResult {
+        manifest_key,
+        manifest: stored_manifest,
+        deduplicated: !created,
+    })
+}
+
+async fn read_stored_manifest<S: ObjectStore>(store: &S, key: &str) -> Result<ChunkManifest> {
+    let mut body = store.get(key).await?;
+    let mut bytes = Vec::new();
+    body.read_to_end(&mut bytes)
+        .await
+        .context("reading deduplicated manifest")?;
+    let existing: ChunkManifest = serde_json::from_slice(&bytes).map_err(|error| {
+        ProcessFailure::permanent(format!("stored manifest is invalid: {error}"))
+    })?;
+    existing
+        .validate()
+        .map_err(|error| ProcessFailure::permanent(error.to_string()))?;
+    Ok(existing)
+}
+
 fn sha256_nix(bytes: &[u8]) -> String {
     format!("sha256:{}", nix_base32(&Sha256::digest(bytes)))
 }
+
 fn now_seconds() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -391,61 +244,7 @@ fn now_seconds() -> u64 {
 mod tests {
     use super::*;
     use crate::object_store::memory::MemoryStore;
-    use cf_nix_cache_core::ENCODING_ID;
-
-    /// Chunk objects are keyed by the raw hash and written with put_if_absent,
-    /// while manifests record the size and hash of freshly compressed bytes.
-    /// Compressed output must therefore be byte-identical for the lifetime of
-    /// ENCODING_ID; a libzstd change that alters it needs a new encoding id.
-    #[test]
-    fn compression_output_is_stable_for_the_encoding_profile() {
-        let mut state = 0x2545_f491_4f6c_dd1d_u64;
-        let input: Vec<u8> = (0..1 << 20)
-            .map(|index: u32| {
-                state = state
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
-                // Mix runs of text-like bytes with noise so both literal and
-                // match encoding paths are exercised.
-                if index % 4096 < 3072 {
-                    b"/nix/store/cf-nix-cache-golden-input "[index as usize % 37]
-                } else {
-                    (state >> 56) as u8
-                }
-            })
-            .collect();
-        let compressed = zstd::encode_all(input.as_slice(), ZSTD_LEVEL).unwrap();
-        assert_eq!(
-            (compressed.len(), sha256_nix(&compressed)),
-            (
-                264_109,
-                "sha256:1r75kjlcavpmzdp0kshxs921h98115mrjlr37hflkgk38zffmq1s".to_owned(),
-            ),
-        );
-    }
-
-    #[tokio::test]
-    async fn malformed_nar_does_not_write_permanent_chunks() {
-        let compressed = zstd::encode_all(&b"not a NAR"[..], 3).unwrap();
-        let store = MemoryStore::default();
-        store
-            .objects
-            .lock()
-            .unwrap()
-            .insert("staging/job.nar.zst".into(), compressed);
-        let job = ProcessJob {
-            job_id: "job".into(),
-            staging_key: "staging/job.nar.zst".into(),
-            nar_hash: "sha256:0000000000000000000000000000000000000000000000000000".into(),
-            nar_size: 9,
-            encoding_id: ENCODING_ID.into(),
-            chunks_key: None,
-        };
-
-        let result = process_job(&store, &job).await;
-        assert!(matches!(result, Err(ProcessFailure::Permanent(_))));
-        assert!(store.writes.lock().unwrap().is_empty());
-    }
+    use cf_nix_cache_core::{ENCODING_ID, ZSTD_LEVEL};
 
     /// A NAR holding one regular file.
     fn nar(contents: &[u8]) -> Vec<u8> {
@@ -469,101 +268,10 @@ mod tests {
     fn job_for(raw: &[u8]) -> ProcessJob {
         ProcessJob {
             job_id: "job".into(),
-            staging_key: "staging/job.nar.zst".into(),
+            chunks_key: "staging/job.chunks.json".into(),
             nar_hash: sha256_nix(raw),
             nar_size: raw.len() as u64,
             encoding_id: ENCODING_ID.into(),
-            chunks_key: None,
-        }
-    }
-
-    fn store_with(compressed: Vec<u8>) -> MemoryStore {
-        let store = MemoryStore::default();
-        store
-            .objects
-            .lock()
-            .unwrap()
-            .insert("staging/job.nar.zst".into(), compressed);
-        store
-    }
-
-    #[tokio::test]
-    async fn publishes_a_valid_nar_then_deduplicates_it() {
-        let raw = nar(b"hello world");
-        let store = store_with(zstd::encode_all(raw.as_slice(), ZSTD_LEVEL).unwrap());
-        let job = job_for(&raw);
-
-        let first = process_job(&store, &job).await.unwrap();
-        assert!(!first.deduplicated);
-        assert_eq!(first.manifest.nar_hash, job.nar_hash);
-        assert_eq!(first.manifest.nar_size, job.nar_size);
-
-        let second = process_job(&store, &job).await.unwrap();
-        assert!(second.deduplicated);
-        assert_eq!(second.manifest_key, first.manifest_key);
-    }
-
-    /// Serves `prefix` of the staging object on the chosen read, then fails as
-    /// a dropped connection would.
-    #[derive(Clone)]
-    struct DroppingStore {
-        inner: MemoryStore,
-        prefix: Vec<u8>,
-        drop_on_read: usize,
-        reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    }
-
-    struct FailingReader;
-    impl tokio::io::AsyncRead for FailingReader {
-        fn poll_read(
-            self: std::pin::Pin<&mut Self>,
-            _: &mut std::task::Context<'_>,
-            _: &mut tokio::io::ReadBuf<'_>,
-        ) -> std::task::Poll<std::io::Result<()>> {
-            std::task::Poll::Ready(Err(std::io::Error::other(ObjectReadError(
-                "connection reset".into(),
-            ))))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl ObjectStore for DroppingStore {
-        async fn get(&self, key: &str) -> anyhow::Result<crate::object_store::ObjectBody> {
-            let read = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if read != self.drop_on_read {
-                return self.inner.get(key).await;
-            }
-            Ok(Box::pin(
-                std::io::Cursor::new(self.prefix.clone()).chain(FailingReader),
-            ))
-        }
-
-        async fn put_if_absent(
-            &self,
-            key: &str,
-            body: Vec<u8>,
-            content_type: &str,
-        ) -> anyhow::Result<bool> {
-            self.inner.put_if_absent(key, body, content_type).await
-        }
-    }
-
-    #[tokio::test]
-    async fn a_dropped_connection_is_retryable_in_both_passes() {
-        let raw = nar(b"hello world");
-        let compressed = zstd::encode_all(raw.as_slice(), ZSTD_LEVEL).unwrap();
-        for drop_on_read in [0, 1] {
-            let store = DroppingStore {
-                inner: store_with(compressed.clone()),
-                prefix: compressed[..compressed.len() / 2].to_vec(),
-                drop_on_read,
-                reads: Default::default(),
-            };
-            let result = process_job(&store, &job_for(&raw)).await;
-            assert!(
-                matches!(result, Err(ProcessFailure::Retryable(_))),
-                "read {drop_on_read}: {result:?}",
-            );
         }
     }
 
@@ -586,10 +294,7 @@ mod tests {
                 "raw_hash": raw_hash, "raw_size": bytes.len(), "key": key,
             }));
         }
-        let job = ProcessJob {
-            chunks_key: Some("staging/job.chunks.json".into()),
-            ..job_for(raw)
-        };
+        let job = job_for(raw);
         store.objects.lock().unwrap().insert(
             "staging/job.chunks.json".into(),
             serde_json::to_vec(&serde_json::json!({
@@ -640,11 +345,95 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn truncated_content_remains_permanent() {
+    async fn a_second_upload_of_a_nar_keeps_the_stored_manifest() {
         let raw = nar(b"hello world");
-        let compressed = zstd::encode_all(raw.as_slice(), ZSTD_LEVEL).unwrap();
-        let store = store_with(compressed[..compressed.len() / 2].to_vec());
-        let result = process_job(&store, &job_for(&raw)).await;
+        let store = MemoryStore::default();
+        let job = encoded(&store, &raw, &[]);
+        let first = process_job(&store, &job).await.unwrap();
+        assert!(!first.deduplicated);
+        let second = process_job(&store, &job).await.unwrap();
+        assert!(second.deduplicated);
+        assert_eq!(second.manifest, first.manifest);
+    }
+
+    /// Serves `prefix` of an object on the chosen read, then fails as
+    /// a dropped connection would.
+    #[derive(Clone)]
+    struct DroppingStore {
+        inner: MemoryStore,
+        prefix: Vec<u8>,
+        drop_on_read: usize,
+        reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    struct FailingReader;
+    impl tokio::io::AsyncRead for FailingReader {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            _: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Err(std::io::Error::other(ObjectReadError(
+                "connection reset".into(),
+            ))))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for DroppingStore {
+        async fn get(&self, key: &str) -> anyhow::Result<crate::object_store::ObjectBody> {
+            let read = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if read != self.drop_on_read {
+                return self.inner.get(key).await;
+            }
+            Ok(Box::pin(
+                std::io::Cursor::new(self.prefix.clone()).chain(FailingReader),
+            ))
+        }
+
+        async fn put_if_absent(
+            &self,
+            key: &str,
+            body: Vec<u8>,
+            content_type: &str,
+        ) -> anyhow::Result<bool> {
+            self.inner.put_if_absent(key, body, content_type).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dropped_connection_is_retryable() {
+        let raw = nar(b"hello world");
+        let inner = MemoryStore::default();
+        let job = encoded(&inner, &raw, &[]);
+        let key = format!("chunks/{ENCODING_ID}/{}.zst", sha256_nix(&raw));
+        let chunk = inner.objects.lock().unwrap()[&key].clone();
+        // Read 0 is the chunk list, read 1 the chunk.
+        let store = DroppingStore {
+            inner,
+            prefix: chunk[..chunk.len() / 2].to_vec(),
+            drop_on_read: 1,
+            reads: Default::default(),
+        };
+        let result = process_job(&store, &job).await;
+        assert!(
+            matches!(result, Err(ProcessFailure::Retryable(_))),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_truncated_chunk_is_permanent() {
+        let raw = nar(b"hello world");
+        let store = MemoryStore::default();
+        let job = encoded(&store, &raw, &[]);
+        let key = format!("chunks/{ENCODING_ID}/{}.zst", sha256_nix(&raw));
+        {
+            let mut objects = store.objects.lock().unwrap();
+            let chunk = objects.get_mut(&key).unwrap();
+            chunk.truncate(chunk.len() / 2);
+        }
+        let result = process_job(&store, &job).await;
         assert!(
             matches!(result, Err(ProcessFailure::Permanent(_))),
             "{result:?}"

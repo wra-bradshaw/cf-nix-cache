@@ -8,10 +8,8 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-async-compression.workspace = true
 axum.workspace = true
 cf-nix-cache-core = { path = "../core" }
-fastcdc.workspace = true
 futures.workspace = true
 nix-nar.workspace = true
 serde.workspace = true

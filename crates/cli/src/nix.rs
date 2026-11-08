@@ -1,12 +1,7 @@
 use anyhow::{bail, Context, Result};
-use cf_nix_cache_core::{nix_base32, validate_store_hash, ZSTD_LEVEL};
+use cf_nix_cache_core::{nix_base32, validate_store_hash};
 use serde::Deserialize;
-use std::{
-    collections::BTreeMap,
-    path::Path,
-    process::{Command, Stdio},
-};
-use tempfile::NamedTempFile;
+use std::{collections::BTreeMap, path::Path, process::Command};
 
 /// One entry of `nix path-info --json`. Every field the published narinfo
 /// depends on is required, so that a change of format fails loudly rather than
@@ -124,26 +119,6 @@ pub(crate) fn store_hash(path: &str) -> Result<String> {
         .context("store path does not contain a 32-character Nix store hash")?;
     validate_store_hash(&hash).map_err(|_| anyhow::anyhow!("invalid Nix store hash in {path}"))?;
     Ok(hash)
-}
-
-pub(crate) fn make_nar(path: &str) -> Result<NamedTempFile> {
-    let mut child = Command::new("nix-store")
-        .args(["--dump", path])
-        .stdout(Stdio::piped())
-        .spawn()?;
-    let mut encoder = zstd::Encoder::new(NamedTempFile::new()?, ZSTD_LEVEL)?;
-    std::io::copy(
-        child
-            .stdout
-            .as_mut()
-            .context("nix-store did not provide stdout")?,
-        &mut encoder,
-    )?;
-    let file = encoder.finish()?;
-    if !child.wait()?.success() {
-        bail!("nix-store --dump failed for {path}");
-    }
-    Ok(file)
 }
 
 /// Whether any signature on a `nix path-info` entry uses an upstream key.

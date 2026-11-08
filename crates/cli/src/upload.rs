@@ -1,16 +1,16 @@
+//! Helpers shared by uploads: the path metadata the server publishes, and
+//! waiting for an upload to finish.
+
 use crate::{
     client::{api_path, Api},
-    nix::{basename, make_nar, nix_hash, store_hash, PathInfo},
+    nix::{basename, nix_hash, store_hash, PathInfo},
 };
 use anyhow::{anyhow, bail, Context, Result};
 use cf_nix_cache_core::{
-    contracts::api as contract, CacheName, InitiateUploadResponse, StorePathName,
-    UploadStateResponse, UploadStatus,
+    contracts::api as contract, CacheName, StorePathName, UploadStateResponse, UploadStatus,
 };
-use reqwest::Method;
 use std::{
     fmt::Display,
-    io::{Read, Seek, SeekFrom},
     num::NonZeroU64,
     time::{Duration, Instant},
 };
@@ -48,104 +48,6 @@ pub(crate) fn manifest(
     })
 }
 
-pub(crate) async fn upload_path(
-    api: &Api,
-    cache: &CacheName,
-    path: &str,
-    info: &PathInfo,
-) -> Result<()> {
-    // These run subprocesses and compress the NAR. On the async runtime they
-    // would hold up the network and polling work of the other uploads.
-    let (mut file, manifest) = {
-        let (cache, path, info) = (cache.clone(), path.to_owned(), info.clone());
-        tokio::task::spawn_blocking(move || {
-            Ok::<_, anyhow::Error>((make_nar(&path)?, manifest(&cache, &path, &info)?))
-        })
-        .await??
-    };
-    let size = file.as_file().metadata()?.len();
-    let part_size = cf_nix_cache_core::MULTIPART_PART_SIZE;
-    let init: InitiateUploadResponse = api
-        .request(
-            Method::POST,
-            "/api/uploads",
-            Some(&contract::UploadRequest {
-                compressed_size: NonZeroU64::new(size).context("compressed NAR is empty")?,
-                manifest,
-            }),
-        )
-        .await?;
-    match init.status {
-        UploadStatus::Ready => {
-            println!("already uploaded {path}");
-            return Ok(());
-        }
-        UploadStatus::Queued | UploadStatus::Processing | UploadStatus::Publishing => {
-            drop(file);
-            return wait_for_upload(api, &init.id, path).await;
-        }
-        UploadStatus::Uploading => {}
-        status => bail!("upload {} is not uploadable: {status:?}", init.id),
-    }
-    let expected_parts = size.div_ceil(part_size);
-    if init.parts.len() as u64 != expected_parts {
-        bail!(
-            "server returned {} upload parts for a {size}-byte NAR; expected {expected_parts}",
-            init.parts.len()
-        );
-    }
-    let mut completed = Vec::new();
-    for part in init.parts {
-        let (offset, len) = part_range(part.part_number, part_size, size)?;
-        let mut bytes = vec![0; usize::try_from(len)?];
-        file.seek(SeekFrom::Start(offset))?;
-        file.read_exact(&mut bytes)?;
-        let etag = api
-            .upload_part(&part.url, bytes)
-            .await
-            .with_context(|| format!("upload part {} failed", part.part_number))?;
-        completed.push(contract::CompleteUploadPartsItem {
-            etag: etag.parse()?,
-            part_number: NonZeroU64::new(part.part_number as u64)
-                .context("part numbers start at 1")?,
-        });
-    }
-    // Concurrent uploads shouldn't hold temporary NARs on disk while they wait
-    // for the server.
-    drop(file);
-    let _: UploadStateResponse = api
-        .request(
-            Method::POST,
-            &api_path(&["uploads", &init.id, "complete"]),
-            Some(&contract::CompleteUpload { parts: completed }),
-        )
-        .await?;
-    wait_for_upload(api, &init.id, path).await
-}
-
-/// The `(offset, len)` byte range of 1-based `part_number` in a `size`-byte
-/// file split into `part_size` parts.
-fn part_range(part_number: i32, part_size: u64, size: u64) -> Result<(u64, u64)> {
-    let index = u64::try_from(part_number)
-        .ok()
-        .and_then(|number| number.checked_sub(1))
-        .context("upload part numbers start at 1")?;
-    let offset = index
-        .checked_mul(part_size)
-        .filter(|offset| *offset < size)
-        .with_context(|| format!("upload part {part_number} is past the end of the NAR"))?;
-    Ok((offset, (size - offset).min(part_size)))
-}
-
-async fn wait_for_upload(api: &Api, id: &str, path: &str) -> Result<()> {
-    let state = wait_for_state(api, id, path).await?;
-    if state.status != UploadStatus::Ready {
-        bail!("verification failed: {}", state.error.unwrap_or_default());
-    }
-    println!("uploaded {path}");
-    Ok(())
-}
-
 /// Polls an upload until it is READY, FAILED or ABORTED.
 pub(crate) async fn wait_for_state(api: &Api, id: &str, path: &str) -> Result<UploadStateResponse> {
     let deadline = Instant::now() + Duration::from_secs(60 * 60);
@@ -163,21 +65,5 @@ pub(crate) async fn wait_for_state(api: &Api, id: &str, path: &str) -> Result<Up
             return Ok(state);
         }
         delay = (delay * 2).min(Duration::from_secs(30));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn part_ranges_are_checked() {
-        assert_eq!(part_range(1, 64, 100).unwrap(), (0, 64));
-        assert_eq!(part_range(2, 64, 100).unwrap(), (64, 36));
-        assert_eq!(part_range(1, 64, 64).unwrap(), (0, 64));
-        assert!(part_range(2, 64, 64).is_err());
-        assert!(part_range(0, 64, 100).is_err());
-        assert!(part_range(-1, 64, 100).is_err());
-        assert!(part_range(i32::MAX, u64::MAX, 100).is_err());
     }
 }

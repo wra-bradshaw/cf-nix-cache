@@ -7,7 +7,6 @@
     { "$ref": "#/$defs/cache_response" },
     { "$ref": "#/$defs/cache_page" },
     { "$ref": "#/$defs/upload_state_response" },
-    { "$ref": "#/$defs/initiate_upload_response" },
     { "$ref": "#/$defs/token_issue_response" },
     { "$ref": "#/$defs/token_page_response" },
     { "$ref": "#/$defs/audit_page" },
@@ -64,28 +63,6 @@
         "id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "status": { "enum": ["CREATED", "UPLOADING", "COMPLETING", "QUEUED", "PROCESSING", "PUBLISHING", "READY", "FAILED", "ABORTED"] },
         "error": { "type": ["string", "null"], "maxLength": 2000 }
-      }
-    },
-    "initiate_upload_response": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "status", "error", "parts"],
-      "properties": {
-        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "status": { "enum": ["CREATED", "UPLOADING", "COMPLETING", "QUEUED", "PROCESSING", "PUBLISHING", "READY", "FAILED", "ABORTED"] },
-        "error": { "type": ["string", "null"], "maxLength": 2000 },
-        "parts": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["part_number", "url"],
-            "properties": {
-              "part_number": { "type": "integer", "minimum": 1 },
-              "url": { "type": "string", "minLength": 1 }
-            }
-          }
-        }
       }
     },
     "token_issue_response": {

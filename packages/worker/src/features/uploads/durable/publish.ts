@@ -134,9 +134,9 @@ export class UploadPublisher {
     this.storage.setState(row.job_id, ['PUBLISHING'], 'READY');
     // Not awaited: the bucket's lifecycle rule removes staging objects that
     // are left behind.
-    void this.env.CACHE_BUCKET.delete(
-      row.chunks_key ? [row.staging_key, row.chunks_key] : row.staging_key,
-    ).catch((error: unknown) => console.error('staging cleanup failed', error));
+    void this.env.CACHE_BUCKET.delete(row.chunks_key).catch((error: unknown) =>
+      console.error('staging cleanup failed', error),
+    );
     return ok();
   }
 }

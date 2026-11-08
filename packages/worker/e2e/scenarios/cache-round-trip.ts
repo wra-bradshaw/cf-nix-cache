@@ -334,51 +334,57 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
         .status,
     ).toBe(200);
 
-    // The staging upload, which older CLIs use, still goes through the
-    // processor container. Two pushes of the same path at once share one
-    // upload rather than processing it twice.
-    const stagingCache = 'e2e-staging';
+    // Two pushes of the same closure at once share each path's upload.
+    const concurrentCache = 'e2e-concurrent';
     await expectJson<Cache>(server, base, '/api/caches', 201, {
       method: 'POST',
       headers: {
         ...authHeader,
         'content-type': 'application/json',
-        'Idempotency-Key': 'e2e-staging-create',
+        'Idempotency-Key': 'e2e-concurrent-create',
       },
       body: JSON.stringify({
-        name: stagingCache,
+        name: concurrentCache,
         public: true,
         quota_bytes: 10 * 1024 * 1024 * 1024,
         upstream_cache_key_names: [],
       }),
     });
-    const stagingPushes = await Promise.all(
+    const concurrentPushes = await Promise.all(
       ['a', 'b'].map((suffix) =>
-        runAsync(
-          cli,
-          ['--endpoint', base, 'push', '--staging-upload', stagingCache, hello],
-          {
-            env: {
-              CF_NIX_CACHE_TOKEN: admin.token,
-              XDG_CONFIG_HOME: path.join(fixture.scratch, `config-${suffix}`),
-            },
+        runAsync(cli, ['--endpoint', base, 'push', concurrentCache, hello], {
+          env: {
+            CF_NIX_CACHE_TOKEN: admin.token,
+            XDG_CONFIG_HOME: path.join(fixture.scratch, `config-${suffix}`),
           },
-        ),
+        }),
       ),
     );
-    expect(stagingPushes.join('\n')).toMatch(/uploaded/);
-    const stagingNar = await request(
+    expect(concurrentPushes.join('\n')).toMatch(/uploaded/);
+    const concurrentNar = await request(
       server,
       base,
-      `/cache/${stagingCache}/nar/${storeHash}.nar.zst`,
+      `/cache/${concurrentCache}/nar/${storeHash}.nar.zst`,
     );
-    expect(stagingNar.status).toBe(200);
+    expect(concurrentNar.status).toBe(200);
     expect(
       execFileSync(zstd, ['-d', '-c'], {
-        input: Buffer.from(await stagingNar.arrayBuffer()),
+        input: Buffer.from(await concurrentNar.arrayBuffer()),
         maxBuffer: narBufferBytes,
       }),
     ).toEqual(expectedNar);
+
+    // CLIs from before client encoding are told to upgrade.
+    const stagingUpload = await request(server, base, '/api/uploads', {
+      method: 'POST',
+      headers: {
+        ...authHeader,
+        'content-type': 'application/json',
+        'Idempotency-Key': 'e2e-legacy-upload',
+      },
+      body: '{}',
+    });
+    expect(stagingUpload.status).toBe(410);
 
     // Deleting a cache clears all of its shards and finishes. The new cache
     // gets a new identity, so it must start out empty.

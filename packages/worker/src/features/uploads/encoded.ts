@@ -55,12 +55,11 @@ export async function openEncoded(
     }),
   );
   const fingerprint = JSON.stringify({ encoded: input });
-  const { allocation, state } = await allocateUpload(
-    env,
-    cache,
-    { operation_id: operationId, fingerprint, manifest: input.manifest },
-    true,
-  );
+  const { allocation, state } = await allocateUpload(env, cache, {
+    operation_id: operationId,
+    fingerprint,
+    manifest: input.manifest,
+  });
   if (allocation.merged)
     return {
       id: allocation.id,
@@ -75,7 +74,7 @@ export async function openEncoded(
       cache: cache.name,
       cache_id: cache.reference.id,
       incarnation: cache.reference.incarnation,
-      staging_key: allocation.staging_key,
+      chunks_key: allocation.chunks_key,
       manifest: input.manifest,
       compressed_size: compressedSize,
       idempotency_key: operationId,
@@ -108,7 +107,7 @@ export async function storeChunk(
     await verifyChunk(compressed, claim);
   } catch (error) {
     if (!(error instanceof InvalidEncodingError)) throw error;
-    // The client's encoder is broken; it falls back to a staging upload.
+    // The client's encoder is broken, or the chunk was corrupted on the way.
     unwrapRpc(await job.reject(`chunk ${rawHash}: ${error.message}`));
     throw new DomainError('invalid_chunk', error.message, 422);
   }

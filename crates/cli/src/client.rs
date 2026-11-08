@@ -163,23 +163,6 @@ impl Api {
         let request = self.builder(Method::POST, "/api/bootstrap").json(body);
         Ok(send_checked(request).await?.json().await?)
     }
-
-    /// Uploads one multipart part to its presigned `url`, returning its ETag.
-    pub(crate) async fn upload_part(&self, url: &str, bytes: Vec<u8>) -> Result<String> {
-        let request = self
-            .retry_client
-            .put(url)
-            .bearer_auth(self.token()?)
-            .header("Idempotency-Key", new_idempotency_key())
-            .body(bytes);
-        send_checked(request)
-            .await?
-            .headers()
-            .get("etag")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned)
-            .context("S3 response omitted ETag")
-    }
 }
 
 /// Sends `request`, turning a non-success status into an error that

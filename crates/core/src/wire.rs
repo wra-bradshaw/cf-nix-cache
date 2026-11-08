@@ -52,20 +52,6 @@ pub enum UploadStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UploadPart {
-    pub part_number: i32,
-    pub url: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InitiateUploadResponse {
-    pub id: String,
-    pub status: UploadStatus,
-    pub error: Option<String>,
-    pub parts: Vec<UploadPart>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadStateResponse {
     pub id: String,
     pub status: UploadStatus,
@@ -91,15 +77,6 @@ mod tests {
             json!({ "id": "job", "status": "PUBLISHING", "error": null }),
         );
         assert_eq!(state.status, UploadStatus::Publishing);
-
-        let init: InitiateUploadResponse =
-            readable_from_schema::<generated::InitiateUploadResponse, _>(json!({
-                "id": "job",
-                "status": "UPLOADING",
-                "error": null,
-                "parts": [{ "part_number": 1, "url": "/api/uploads/job/parts/1" }],
-            }));
-        assert_eq!(init.parts[0].part_number, 1);
 
         let missing: MissingPathsResponse = readable_from_schema::<
             generated::MissingPathsResponse,

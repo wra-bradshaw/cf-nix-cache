@@ -53,7 +53,6 @@ pub(crate) async fn run(args: Args, config: Config) -> Result<()> {
             installables,
             jobs,
             ignore_upstream_cache_filter,
-            staging_upload,
         } => {
             push::push(
                 api()?,
@@ -61,7 +60,6 @@ pub(crate) async fn run(args: Args, config: Config) -> Result<()> {
                 installables,
                 jobs,
                 ignore_upstream_cache_filter,
-                staging_upload,
             )
             .await
         }

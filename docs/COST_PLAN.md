@@ -244,9 +244,12 @@ caller's caches, which loses cross-cache deduplication, or document it.
 
 ### Compatibility
 
-Keep the current staging upload path while older CLIs exist, selected by a
-new route or `encoding_id`. The container becomes the fallback for large NARs
-and old clients, and can be removed once neither needs it.
+The staging upload path was removed after the measurements: the server now
+only accepts client-encoded uploads. CLIs from before client encoding get
+`staging_upload_removed` (410) and must be upgraded, and a staging upload left
+in flight by an older CLI is marked FAILED when it is next looked at. The
+container therefore only verifies NARs above the inline limit, or finishes a
+publication interrupted after its Worker request ended.
 
 ## Benchmarks to run first
 
@@ -314,8 +317,8 @@ their upload IDs, and the CLI waits for those, uploading a path itself only if
 the other upload fails. Allocation returns the in-flight upload of the same NAR
 hash (`merged`). An entry ends when its upload reaches a terminal state, is
 replaced when an allocation finds its upload FAILED or ABORTED, and expires
-after an hour. A staging upload from an older CLI joins only an upload past
-`UPLOADING`, because such a client would send its own parts into it.
+after an hour. Only encoded uploads exist, so every client can join an
+in-flight upload of the same NAR.
 
 **Stage 1b.** In the dotfiles, the post-build hook appends `$OUT_PATHS` to
 `/var/lib/cf-nix-cache/queue` and starts a drainer. The drainer takes a lock
@@ -344,8 +347,8 @@ queue stays empty.
   documented in the README.
 - Small paths, under `CHUNK_MIN_SIZE`, are opened 32 to a request and
   completed in a second request that carries their missing chunks.
-- `push --staging-upload` keeps the old path, and the CLI falls back to it on a
-  server without the new routes or when the server rejects its encoding.
+- The CLI only uploads encoded, and names a server without the new routes as
+  too old to be used.
 
 The upload state lives in the existing `UploadJob` Durable Object (new
 `session` and `session_chunks` tables), so no Wrangler migration is needed.
@@ -373,7 +376,7 @@ paths. CPU times are Workers `cpuTime` from `wrangler tail`.
 
 End-to-end pushes after the fixes above:
 
-| Push | Staging upload | Client-encoded |
+| Push | Whole-NAR staging (before removal) | Client-encoded |
 | --- | --- | --- |
 | 20 fresh paths of 30 to 400 KB | 23.0 s | 11.6 s |
 | One 21 MB path | 14.2 s | 10.2 s (inline verification) |

@@ -6,13 +6,10 @@ import type { CacheState } from '../cache/types';
 import type { UploadManifest, UploadState } from './types';
 
 const FINISHED_BADLY: UploadState[] = ['FAILED', 'ABORTED'];
-const RECEIVING: UploadState[] = ['CREATED', 'UPLOADING', 'COMPLETING'];
 
 /**
  * Allocates an upload, joining another push's upload of the same NAR while it
- * is in flight. `joinReceiving` says whether the client can wait for an upload
- * that is still receiving data. Older CLIs cannot: given an upload in
- * UPLOADING, they would send their own parts into it.
+ * is in flight.
  */
 export async function allocateUpload(
   env: Env,
@@ -22,7 +19,6 @@ export async function allocateUpload(
     fingerprint: string;
     manifest: UploadManifest;
   },
-  joinReceiving: boolean,
 ): Promise<{ allocation: Allocation; state?: UploadState }> {
   const stub = coordinator(env, cache.reference);
   const base = {
@@ -36,18 +32,21 @@ export async function allocateUpload(
   );
   for (let attempt = 0; allocation.merged; attempt += 1) {
     const access = await idStub(env.UPLOAD_JOB, allocation.id).access();
-    const state = access.ok ? access.value.state : null;
-    const finished = state === null || FINISHED_BADLY.includes(state);
-    if (!finished && (joinReceiving || !RECEIVING.includes(state)))
-      return { allocation, state };
-    // A failed upload is replaced, so the next push of the path joins this
-    // one. One this client cannot join stays, and this push uploads alone.
+    // A staging upload from before client encoding has no session, and can
+    // never finish; replace it instead of waiting for it.
+    if (
+      access.ok &&
+      access.value.encoded &&
+      !FINISHED_BADLY.includes(access.value.state)
+    )
+      return { allocation, state: access.value.state };
+    // A failed upload is replaced, so the next push of the path joins this one.
     allocation = unwrapRpc(
       await stub.allocateUpload({
         ...base,
         now: now(),
-        merge: finished && attempt < 2,
-        ...(finished ? { replace: allocation.id } : {}),
+        merge: attempt < 2,
+        replace: allocation.id,
       }),
     );
   }

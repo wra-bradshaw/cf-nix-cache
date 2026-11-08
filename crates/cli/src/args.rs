@@ -46,10 +46,6 @@ pub(crate) enum CommandKind {
         /// Also upload paths signed by the cache's upstream caches.
         #[arg(long)]
         ignore_upstream_cache_filter: bool,
-        /// Upload whole compressed NARs for the server to encode, instead of
-        /// encoding them here and sending only the chunks the server lacks.
-        #[arg(long)]
-        staging_upload: bool,
     },
     Token {
         #[command(subcommand)]

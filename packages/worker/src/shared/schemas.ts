@@ -34,7 +34,6 @@ export function parseJsonSchema<T>(
 export {
   BootstrapRequestSchema,
   ChunkManifestSchema,
-  CompleteUploadSchema,
   ConfigureCacheSchema,
   CreateCacheSchema,
   EncodedCompleteBatchSchema,
@@ -44,5 +43,4 @@ export {
   GrantSchema,
   MissingPathsSchema,
   TokenRequestSchema,
-  UploadRequestSchema,
 } from '../generated/json-contracts';

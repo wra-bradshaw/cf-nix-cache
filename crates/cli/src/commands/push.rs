@@ -11,20 +11,17 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
     num::NonZeroUsize,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 use tokio::task::JoinSet;
 
 use crate::{
     client::Api,
     encoded_upload::{
-        is_unsupported, upload_encoded, upload_encoded_batch, BATCH_NAR_SIZE, BATCH_PATHS,
+        is_server_too_old, upload_encoded, upload_encoded_batch, BATCH_NAR_SIZE, BATCH_PATHS,
     },
     nix::{path_info, signed_by_upstream, store_hash, PathInfo},
-    upload::{upload_path, wait_for_state},
+    upload::wait_for_state,
 };
 
 pub(super) async fn push(
@@ -33,7 +30,6 @@ pub(super) async fn push(
     installables: Vec<String>,
     jobs: NonZeroUsize,
     ignore_upstream_cache_filter: bool,
-    staging_upload: bool,
 ) -> Result<()> {
     let mut map = path_info(&installables)?;
     let all_paths = map.len();
@@ -89,12 +85,8 @@ pub(super) async fn push(
         considered - total,
         waits.len(),
     );
-    let work = plan(uploads, waits, staging_upload);
-    let context = Arc::new(Context {
-        api,
-        cache,
-        client_encoding: AtomicBool::new(!staging_upload),
-    });
+    let work = plan(uploads, waits);
+    let context = Arc::new(Context { api, cache });
     let failures = run_concurrently(work, jobs, move |work| {
         let context = Arc::clone(&context);
         async move { context.run(work).await }
@@ -118,13 +110,9 @@ enum Work {
 }
 
 /// Large paths first, so that they do not start last and finish alone.
-fn plan(mut uploads: Vec<(String, PathInfo)>, waits: Vec<Work>, staging_upload: bool) -> Vec<Work> {
+fn plan(mut uploads: Vec<(String, PathInfo)>, waits: Vec<Work>) -> Vec<Work> {
     uploads.sort_by_key(|(_, info)| std::cmp::Reverse(info.nar_size));
-    let split = if staging_upload {
-        uploads.len()
-    } else {
-        uploads.partition_point(|(_, info)| info.nar_size >= BATCH_NAR_SIZE)
-    };
+    let split = uploads.partition_point(|(_, info)| info.nar_size >= BATCH_NAR_SIZE);
     let small = uploads.split_off(split);
     let mut work: Vec<Work> = uploads
         .into_iter()
@@ -142,8 +130,6 @@ fn plan(mut uploads: Vec<(String, PathInfo)>, waits: Vec<Work>, staging_upload: 
 struct Context {
     api: Api,
     cache: CacheName,
-    /// Cleared when the server turns out not to support client encoding.
-    client_encoding: AtomicBool,
 }
 
 impl Context {
@@ -166,34 +152,31 @@ impl Context {
     }
 
     async fn one(&self, path: &str, info: &PathInfo) -> Result<()> {
-        if self.client_encoding.load(Ordering::Relaxed) {
-            match upload_encoded(&self.api, &self.cache, path, info).await {
-                Err(error) if is_unsupported(&error) => self.disable(&error),
-                result => return result.with_context(|| format!("failed to upload {path}")),
-            }
-        }
-        upload_path(&self.api, &self.cache, path, info)
+        upload_encoded(&self.api, &self.cache, path, info)
             .await
             .with_context(|| format!("failed to upload {path}"))
     }
 
     async fn batch(&self, items: Vec<(String, PathInfo)>) -> Vec<anyhow::Error> {
         let mut failures = Vec::new();
-        if self.client_encoding.load(Ordering::Relaxed) {
-            match upload_encoded_batch(&self.api, &self.cache, &items).await {
-                Ok(outcomes) => {
-                    for (path, outcome) in outcomes {
-                        if let Err(error) = outcome {
-                            failures.push(error.context(format!("failed to upload {path}")));
-                        }
+        match upload_encoded_batch(&self.api, &self.cache, &items).await {
+            Ok(outcomes) => {
+                for (path, outcome) in outcomes {
+                    if let Err(error) = outcome {
+                        failures.push(error.context(format!("failed to upload {path}")));
                     }
-                    return failures;
                 }
-                Err(error) if is_unsupported(&error) => self.disable(&error),
-                // One bad path fails a whole batch; find it by going one by one.
-                Err(error) => {
-                    eprintln!("batch upload failed, retrying its paths one by one: {error:#}")
-                }
+                return failures;
+            }
+            Err(error) if is_server_too_old(&error) => {
+                return items
+                    .into_iter()
+                    .map(|(path, _)| anyhow::anyhow!("failed to upload {path}: {error:#}"))
+                    .collect();
+            }
+            // One bad path fails a whole batch; find it by going one by one.
+            Err(error) => {
+                eprintln!("batch upload failed, retrying its paths one by one: {error:#}")
             }
         }
         for (path, info) in items {
@@ -202,12 +185,6 @@ impl Context {
             }
         }
         failures
-    }
-
-    fn disable(&self, error: &anyhow::Error) {
-        if self.client_encoding.swap(false, Ordering::Relaxed) {
-            eprintln!("warning: falling back to staging uploads: {error:#}");
-        }
     }
 }
 
@@ -271,7 +248,7 @@ fn collect_failures(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     #[tokio::test]
