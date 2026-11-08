@@ -5,7 +5,7 @@ import { type RpcResult, failure, ok } from '../../../shared/rpc';
 import { hashSecret } from '../credentials';
 import { AuditOutbox } from '../../audit/outbox';
 import { TokenSigner } from './signer';
-import { first, type SqlRow } from '../../../shared/sql';
+import { first, type SqlRow, text, integer, json } from '../../../shared/sql';
 
 type IssuedToken = {
   id: string;
@@ -175,19 +175,19 @@ export class TokenIssuance {
       ),
     );
     if (!row) return null;
-    if (String(row.fingerprint) !== fingerprint)
+    if (text(row, 'fingerprint') !== fingerprint)
       return failure(
         'idempotency_conflict',
         'idempotency key was reused with different token metadata',
         409,
       );
     return {
-      jti: String(row.jti),
-      subject: String(row.subject),
-      grants: JSON.parse(String(row.grants)) as Grant[],
-      issued_at: Number(row.issued_at),
-      expires_at: Number(row.expires_at),
-      revoked: Number(row.revoked) === 1,
+      jti: text(row, 'jti'),
+      subject: text(row, 'subject'),
+      grants: json<Grant[]>(row, 'grants'),
+      issued_at: integer(row, 'issued_at'),
+      expires_at: integer(row, 'expires_at'),
+      revoked: integer(row, 'revoked') === 1,
     };
   }
 

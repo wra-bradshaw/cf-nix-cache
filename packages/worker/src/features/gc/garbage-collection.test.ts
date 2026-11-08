@@ -157,7 +157,7 @@ class World {
     return cache;
   }
 
-  /** Stores a manifest and chunks, as a processor would. */
+  /** Stores a manifest and chunks, as an upload would. */
   store(manifest: string, chunks: string[], uploaded = OLD): void {
     this.manifests.set(manifest, chunks);
     this.objects.set(manifest, { size: 1, uploaded });

@@ -3,24 +3,35 @@ import type { AuditEvent } from './types';
 import type { RpcResult } from '../../shared/rpc';
 import { AuditOutbox } from './outbox';
 
-type Row = { event_id: string; event: string; created_at: number };
+type Row = { event_id: unknown; event: unknown; created_at: number };
 
 /** Just enough of DurableObjectState for the outbox's own statements. */
 function fakeState() {
-  const rows = new Map<string, Row>();
+  const rows = new Map<number, Row>();
+  let nextRowId = 1;
   const alarms: number[] = [];
   const background: Promise<unknown>[] = [];
   const exec = (query: string, ...args: unknown[]): Iterable<unknown> => {
     if (query.startsWith('INSERT OR IGNORE INTO audit_outbox')) {
       const [event_id, event, created_at] = args as [string, string, number];
-      if (!rows.has(event_id))
-        rows.set(event_id, { event_id, event, created_at });
+      if ([...rows.values()].some((row) => row.event_id === event_id))
+        return [];
+      rows.set(nextRowId++, { event_id, event, created_at });
       return [];
     }
+    if (query.startsWith('SELECT rowid, event_id, event FROM audit_outbox'))
+      return [...rows.entries()]
+        .map(([rowid, row]) => ({ rowid, ...row }))
+        .slice(0, Number(args[0]));
     if (query.startsWith('SELECT event_id, event FROM audit_outbox'))
       return [...rows.values()].slice(0, Number(args[0]));
+    if (query.startsWith('DELETE FROM audit_outbox WHERE rowid = ?')) {
+      rows.delete(Number(args[0]));
+      return [];
+    }
     if (query.startsWith('DELETE FROM audit_outbox')) {
-      rows.delete(String(args[0]));
+      for (const [id, row] of rows)
+        if (row.event_id === String(args[0])) rows.delete(id);
       return [];
     }
     if (query.startsWith('SELECT COUNT(*)')) return [{ count: rows.size }];
@@ -100,5 +111,39 @@ describe('audit outbox', () => {
     await outbox.alarm();
     expect(delivered).toEqual(['a', 'b']);
     expect(outbox.pending()).toBe(0);
+  });
+
+  it('deletes a row with a corrupt event_id by rowid instead of re-reading it', async () => {
+    const state = fakeState();
+    const delivered: string[] = [];
+    // Hold delivery so the row survives long enough to corrupt it: the stub
+    // reports the log as down for the first drain only.
+    const available = { value: false };
+    const outbox = new AuditOutbox(
+      state.ctx,
+      fakeEnv(async (value) => {
+        if (!available.value)
+          return {
+            ok: false,
+            error: { code: 'unavailable', message: 'down', status: 503 },
+          };
+        delivered.push(value.id);
+        return { ok: true, value: undefined };
+      }),
+    );
+    outbox.enqueue(event('good'));
+    await Promise.all(state.background);
+    expect(outbox.pending()).toBe(1);
+    // Corrupt the stored row key directly: it can never be delivered or
+    // deleted by event_id, so the drain must remove it by rowid.
+    for (const row of state.rows.values()) row.event_id = null;
+    await outbox.drain();
+    expect(state.rows.size).toBe(0);
+    expect(outbox.pending()).toBe(0);
+    expect(delivered).toEqual([]);
+    // A second drain must not re-read the poison pill.
+    await outbox.drain();
+    expect(outbox.pending()).toBe(0);
+    expect(delivered).toEqual([]);
   });
 });

@@ -6,7 +6,8 @@ import {
 import { PublicationError } from '../cache/publication-protocol';
 import { coordinator, system, indexShard } from '../cache/stubs';
 import { namedStub, unwrapRpc } from '../../shared/rpc';
-import type { CacheReference, CacheState } from '../cache/types';
+import { collectPages } from '../../shared/sql';
+import type { CacheState } from '../cache/types';
 import type { GcPorts } from './garbage-collection';
 import type { GcCache } from './gc-ports';
 
@@ -51,28 +52,25 @@ export function gcPorts(env: Env, runId: string): GcPorts {
     },
     catalog: {
       liveCaches: async () => {
+        const references = await collectPages(async (after) =>
+          unwrapRpc(await system(env).listCaches({ after, limit: 100 })),
+        );
         const caches: DurableGcCache[] = [];
-        let after: string | null = null;
-        do {
-          const page: { items: CacheReference[]; next_after: string | null } =
-            unwrapRpc(await system(env).listCaches({ after, limit: 100 }));
-          for (const reference of page.items) {
-            // Once deleting, a cache never serves again, so its paths must not
-            // keep objects alive.
-            if (reference.lifecycle === 'DELETING') continue;
-            const config = unwrapRpc(
-              await coordinator(env, reference).getCache(),
-            );
-            if (config.lifecycle === 'DELETING') continue;
-            caches.push({
-              name: reference.name,
-              incarnation: reference.incarnation,
-              retention_days: config.retention_days,
-              state: { ...config, reference },
-            });
-          }
-          after = page.next_after;
-        } while (after);
+        for (const reference of references) {
+          // Once deleting, a cache never serves again, so its paths must not
+          // keep objects alive.
+          if (reference.lifecycle === 'DELETING') continue;
+          const config = unwrapRpc(
+            await coordinator(env, reference).getCache(),
+          );
+          if (config.lifecycle === 'DELETING') continue;
+          caches.push({
+            name: reference.name,
+            incarnation: reference.incarnation,
+            retention_days: config.retention_days,
+            state: { ...config, reference },
+          });
+        }
         return caches;
       },
       manifestKeys: async (cache, prefix, after, limit) =>

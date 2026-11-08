@@ -1,22 +1,54 @@
-import type { CacheConfig, CacheReference } from '../types';
-import { type RpcResult, failure, ok } from '../../../shared/rpc';
-import { first, type SqlRow } from '../../../shared/sql';
+import { ENCODING_ID, type CacheConfig, type CacheReference } from '../types';
+import { type RpcResult, conflict, failure, ok } from '../../../shared/rpc';
+import { first, type SqlRow, text, integer, json } from '../../../shared/sql';
+
+function encodingId(value: string): CacheConfig['encoding_id'] {
+  // Allow-list from schemas/api.json (`encoding_id` const) and ENCODING_ID:
+  // only one chunking/compression scheme is deployed, so any other stored
+  // value is a corrupt row, not a migration to preserve.
+  if (value !== ENCODING_ID)
+    throw new Error(`cache encoding ${value} is not a known encoding`);
+  return value;
+}
+
+function publicFlag(value: number): boolean {
+  // SQLite has no boolean type: `public` is stored as 0/1. An allow-list
+  // keeps a corrupt 2/-1 from coercing to false via `=== 1`; any other
+  // integer throws so callers map it to `corrupt_cache` 500.
+  if (value === 1) return true;
+  if (value === 0) return false;
+  throw new Error(`cache public flag ${value} is not 0 or 1`);
+}
 
 function toCache(row: SqlRow): CacheConfig {
+  const lifecycle = text(row, 'lifecycle');
+  if (
+    lifecycle !== 'CREATING' &&
+    lifecycle !== 'ACTIVE' &&
+    lifecycle !== 'DELETING'
+  )
+    throw new Error('cache lifecycle is not a known lifecycle');
   return {
-    id: String(row.cache_id),
-    name: String(row.name),
-    public: Number(row.public) === 1,
-    quota_bytes: Number(row.quota_bytes),
-    logical_bytes: Number(row.logical_bytes),
-    encoding_id: String(row.encoding_id) as CacheConfig['encoding_id'],
-    created_at: Number(row.created_at),
-    lifecycle: String(row.lifecycle) as CacheConfig['lifecycle'],
-    retention_days: Number(row.retention_days ?? 0),
-    upstream_cache_key_names: JSON.parse(
-      String(row.upstream_cache_key_names),
-    ) as string[],
+    id: text(row, 'cache_id'),
+    name: text(row, 'name'),
+    public: publicFlag(integer(row, 'public')),
+    quota_bytes: integer(row, 'quota_bytes'),
+    logical_bytes: integer(row, 'logical_bytes'),
+    encoding_id: encodingId(text(row, 'encoding_id')),
+    created_at: integer(row, 'created_at'),
+    lifecycle,
+    retention_days:
+      row.retention_days == null ? 0 : integer(row, 'retention_days'),
+    upstream_cache_key_names: json<string[]>(row, 'upstream_cache_key_names'),
   };
+}
+
+function toCacheResult(row: SqlRow): RpcResult<CacheConfig> {
+  try {
+    return ok(toCache(row));
+  } catch {
+    return failure('corrupt_cache', 'cache record is corrupt', 500);
+  }
 }
 
 export class CoordinatorLifecycle {
@@ -36,25 +68,48 @@ export class CoordinatorLifecycle {
     created_at: number;
     upstream_cache_key_names: string[];
   }): Promise<RpcResult<CacheConfig>> {
+    if (input.encoding_id !== ENCODING_ID)
+      return failure(
+        'invalid_encoding_id',
+        'encoding_id is not a supported encoding',
+        400,
+      );
+    // Mirrors SystemControl.createCache: the HTTP schema constrains
+    // quota_bytes, but recovery (getCacheForDeletion) and tests call this
+    // directly. Reject a non-positive or unsafe quota before writing the
+    // coordinator row, so quota arithmetic downstream stays exact.
+    if (
+      !Number.isSafeInteger(input.quota_bytes) ||
+      input.quota_bytes < 1 ||
+      input.quota_bytes > Number.MAX_SAFE_INTEGER
+    )
+      return failure(
+        'invalid_quota',
+        'quota_bytes must be an integer between 1 and 9007199254740991',
+        400,
+      );
     const upstreams = JSON.stringify(input.upstream_cache_key_names);
     return this.ctx.storage.transactionSync(() => {
       const existing = this.row();
       if (existing) {
-        if (
-          String(existing.cache_id) !== input.reference.id ||
-          String(existing.incarnation) !== input.reference.incarnation ||
-          Number(existing.quota_bytes) !== input.quota_bytes ||
-          Number(existing.public) !== (input.public ? 1 : 0) ||
-          String(existing.encoding_id) !== input.encoding_id ||
-          String(existing.upstream_cache_key_names) !== upstreams
-        ) {
-          return failure(
-            'coordinator_conflict',
-            'cache coordinator is already assigned to another incarnation',
-            409,
-          );
+        try {
+          if (
+            text(existing, 'cache_id') !== input.reference.id ||
+            text(existing, 'incarnation') !== input.reference.incarnation ||
+            integer(existing, 'quota_bytes') !== input.quota_bytes ||
+            publicFlag(integer(existing, 'public')) !== input.public ||
+            text(existing, 'encoding_id') !== input.encoding_id ||
+            text(existing, 'upstream_cache_key_names') !== upstreams
+          ) {
+            return conflict(
+              'coordinator_conflict',
+              'cache coordinator is already assigned to another incarnation',
+            );
+          }
+        } catch {
+          return failure('corrupt_cache', 'cache record is corrupt', 500);
         }
-        return ok(toCache(existing));
+        return toCacheResult(existing);
       }
       this.ctx.storage.sql.exec(
         "INSERT INTO cache (cache_id, name, incarnation, public, quota_bytes, encoding_id, created_at, lifecycle, upstream_cache_key_names) VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATING', ?)",
@@ -73,7 +128,7 @@ export class CoordinatorLifecycle {
         public: input.public,
         quota_bytes: input.quota_bytes,
         logical_bytes: 0,
-        encoding_id: input.encoding_id as CacheConfig['encoding_id'],
+        encoding_id: encodingId(input.encoding_id),
         created_at: input.created_at,
         lifecycle: 'CREATING',
         retention_days: 0,
@@ -84,9 +139,8 @@ export class CoordinatorLifecycle {
 
   async getCache(): Promise<RpcResult<CacheConfig>> {
     const row = this.row();
-    return row
-      ? ok(toCache(row))
-      : failure('not_found', 'cache not found', 404);
+    if (!row) return failure('not_found', 'cache not found', 404);
+    return toCacheResult(row);
   }
 
   async configure(input: {
@@ -94,26 +148,82 @@ export class CoordinatorLifecycle {
     retention_days?: number;
     upstream_cache_key_names?: string[];
   }): Promise<RpcResult<CacheConfig>> {
+    // RPC inputs arrive unvalidated: a truthy non-boolean such as the string
+    // "false" must not coerce to 1. Null is rejected here rather than treated
+    // as absent, so an explicit null surfaces as a caller bug (400) instead
+    // of silently keeping the stored configuration.
+    if (input.public !== undefined && typeof input.public !== 'boolean')
+      return failure('invalid_public', 'public must be a boolean', 400);
+    if (
+      input.retention_days !== undefined &&
+      (!Number.isInteger(input.retention_days) ||
+        input.retention_days < 0 ||
+        input.retention_days > 36500)
+    )
+      return failure(
+        'invalid_retention_days',
+        'retention_days must be an integer between 0 and 36500',
+        400,
+      );
+    if (input.upstream_cache_key_names !== undefined) {
+      const names = input.upstream_cache_key_names;
+      if (
+        !Array.isArray(names) ||
+        names.length > 32 ||
+        !names.every(
+          (name) =>
+            typeof name === 'string' &&
+            name.length >= 1 &&
+            name.length <= 128 &&
+            !/[:\s]/.test(name),
+        )
+      )
+        return failure(
+          'invalid_upstream_cache_key_names',
+          'upstream_cache_key_names must be an array of up to 32 key names',
+          400,
+        );
+    }
     return this.ctx.storage.transactionSync(() => {
       const row = this.row();
       if (!row) return failure('not_found', 'cache not found', 404);
-      if (String(row.lifecycle) === 'DELETING')
-        return failure('cache_deleting', 'cache is being deleted', 410);
-      const next = {
-        ...row,
-        public: input.public === undefined ? row.public : input.public ? 1 : 0,
-        retention_days: input.retention_days ?? row.retention_days,
-        upstream_cache_key_names: input.upstream_cache_key_names
-          ? JSON.stringify(input.upstream_cache_key_names)
-          : row.upstream_cache_key_names,
-      };
+      let next: SqlRow;
+      try {
+        if (text(row, 'lifecycle') === 'DELETING')
+          return failure('cache_deleting', 'cache is being deleted', 410);
+        // Null cannot reach here: it is rejected as 400 above, so only
+        // undefined keeps the stored value. publicFlag allow-lists the stored
+        // 0/1 so a corrupt 2/-1 maps to corrupt_cache instead of coercing.
+        next = {
+          ...row,
+          public:
+            input.public === undefined
+              ? publicFlag(integer(row, 'public'))
+                ? 1
+                : 0
+              : input.public === true
+                ? 1
+                : 0,
+          retention_days:
+            input.retention_days === undefined
+              ? row.retention_days == null
+                ? 0
+                : integer(row, 'retention_days')
+              : input.retention_days,
+          upstream_cache_key_names: input.upstream_cache_key_names
+            ? JSON.stringify(input.upstream_cache_key_names)
+            : text(row, 'upstream_cache_key_names'),
+        };
+      } catch {
+        return failure('corrupt_cache', 'cache record is corrupt', 500);
+      }
       this.ctx.storage.sql.exec(
         'UPDATE cache SET public = ?, retention_days = ?, upstream_cache_key_names = ?',
         next.public,
         next.retention_days,
         next.upstream_cache_key_names,
       );
-      return ok(toCache(next));
+      return toCacheResult(next);
     });
   }
 
@@ -121,12 +231,28 @@ export class CoordinatorLifecycle {
     return this.ctx.storage.transactionSync(() => {
       const row = this.row();
       if (!row) return failure('not_found', 'cache not found', 404);
-      if (String(row.lifecycle) === 'DELETING')
-        return failure('cache_deleting', 'cache is being deleted', 410);
-      this.ctx.storage.sql.exec(
-        "UPDATE cache SET lifecycle = 'ACTIVE' WHERE lifecycle = 'CREATING'",
-      );
-      return ok(toCache({ ...row, lifecycle: 'ACTIVE' }));
+      let lifecycle: string;
+      try {
+        lifecycle = text(row, 'lifecycle');
+        if (lifecycle === 'DELETING')
+          return failure('cache_deleting', 'cache is being deleted', 410);
+        if (lifecycle !== 'CREATING' && lifecycle !== 'ACTIVE')
+          return failure('corrupt_cache', 'cache record is corrupt', 500);
+      } catch {
+        return failure('corrupt_cache', 'cache record is corrupt', 500);
+      }
+      // rowsWritten is a number in workerd; the node test fake returns a bare
+      // array, so an explicit undefined reads as 0 (no row updated) rather
+      // than failing open. Without this a DELETING row with undefined
+      // rowsWritten would skip the 410 below and report success.
+      const changed = (
+        this.ctx.storage.sql.exec(
+          "UPDATE cache SET lifecycle = 'ACTIVE' WHERE lifecycle = 'CREATING'",
+        ) as unknown as { rowsWritten?: unknown }
+      ).rowsWritten ?? 0;
+      if (lifecycle === 'CREATING' && changed === 0)
+        return failure('corrupt_cache', 'cache record is corrupt', 500);
+      return toCacheResult({ ...row, lifecycle: 'ACTIVE' });
     });
   }
 
@@ -134,9 +260,13 @@ export class CoordinatorLifecycle {
     return this.ctx.storage.transactionSync(() => {
       const row = this.row();
       if (!row) return failure('not_found', 'cache not found', 404);
-      if (String(row.lifecycle) !== 'DELETING')
-        this.ctx.storage.sql.exec("UPDATE cache SET lifecycle = 'DELETING'");
-      return ok(toCache({ ...row, lifecycle: 'DELETING' }));
+      try {
+        if (text(row, 'lifecycle') !== 'DELETING')
+          this.ctx.storage.sql.exec("UPDATE cache SET lifecycle = 'DELETING'");
+      } catch {
+        return failure('corrupt_cache', 'cache record is corrupt', 500);
+      }
+      return toCacheResult({ ...row, lifecycle: 'DELETING' });
     });
   }
 
@@ -144,26 +274,45 @@ export class CoordinatorLifecycle {
     return this.ctx.storage.transactionSync(() => {
       const row = this.row();
       if (!row) return ok();
-      if (row.lifecycle !== 'DELETING')
-        return failure(
-          'cache_not_deleting',
-          'cache must be deleting before removal',
-          409,
+      try {
+        if (text(row, 'lifecycle') !== 'DELETING')
+          return failure(
+            'cache_not_deleting',
+            'cache must be deleting before removal',
+            409,
+          );
+        const pendingAudit = first(
+          this.ctx.storage.sql.exec<SqlRow>(
+            'SELECT COUNT(*) AS count FROM audit_outbox',
+          ),
         );
-      const pendingAudit = first(
-        this.ctx.storage.sql.exec<{ count: number }>(
-          'SELECT COUNT(*) AS count FROM audit_outbox',
-        ),
-      );
-      if (pendingAudit && Number(pendingAudit.count) > 0)
-        return failure(
-          'audit_pending',
-          'cache audit events must be delivered before removal',
-          503,
-        );
-      this.ctx.storage.sql.exec(
-        'DELETE FROM audit_outbox; DELETE FROM clear_operations; DELETE FROM quota_operations; DELETE FROM upload_allocations; DELETE FROM cache;',
-      );
+        // COUNT(*) always returns exactly one row in SQLite, so a missing
+        // row means the query itself is corrupt. Fail closed like
+        // quota/ledger: proceeding would delete the cache while audit events
+        // may still be undelivered.
+        if (!pendingAudit)
+          return failure('corrupt_cache', 'cache record is corrupt', 500);
+        if (integer(pendingAudit, 'count') > 0)
+          return failure(
+            'audit_pending',
+            'cache audit events must be delivered before removal',
+            503,
+          );
+      } catch {
+        return failure('corrupt_cache', 'cache record is corrupt', 500);
+      }
+      // Atomicity comes from the surrounding transactionSync, not from a
+      // single multi-statement exec: one statement per exec keeps failures
+      // attributable and avoids drivers that reject embedded semicolons.
+      // inflight_uploads is coordinator-local merge state for the same
+      // allocation keys; the coordinator DO is abandoned after removal, but
+      // clearing it keeps a reused coordinator from joining a stale upload.
+      this.ctx.storage.sql.exec('DELETE FROM audit_outbox');
+      this.ctx.storage.sql.exec('DELETE FROM clear_operations');
+      this.ctx.storage.sql.exec('DELETE FROM quota_operations');
+      this.ctx.storage.sql.exec('DELETE FROM upload_allocations');
+      this.ctx.storage.sql.exec('DELETE FROM inflight_uploads');
+      this.ctx.storage.sql.exec('DELETE FROM cache');
       return ok();
     });
   }

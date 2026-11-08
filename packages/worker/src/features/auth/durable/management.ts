@@ -4,10 +4,10 @@ import {
   type PageResponse,
 } from '../../../shared/cursors';
 import type { TokenSummary } from '../types';
-import { type RpcResult, failure, ok } from '../../../shared/rpc';
+import { type RpcResult, conflict, failure, ok } from '../../../shared/rpc';
 import { toTokenSummary } from './token-summary';
 import { AuditOutbox } from '../../audit/outbox';
-import { first, type SqlRow } from '../../../shared/sql';
+import { first, type SqlRow, text, integer } from '../../../shared/sql';
 import { now } from '../../../shared/clock';
 
 export class TokenManagement {
@@ -21,19 +21,23 @@ export class TokenManagement {
     exp: number;
   }): Promise<RpcResult<{ active: boolean }>> {
     const row = first(
-      this.ctx.storage.sql.exec<{ revoked: number; expires_at: number }>(
+      this.ctx.storage.sql.exec<SqlRow>(
         'SELECT revoked, expires_at FROM tokens WHERE jti = ?',
         input.jti,
       ),
     );
-    return ok({
-      active: Boolean(
-        row &&
-        Number(row.revoked) === 0 &&
-        Number(row.expires_at) >= now() &&
-        Number(row.expires_at) === input.exp,
-      ),
-    });
+    if (!row) return ok({ active: false });
+    try {
+      return ok({
+        active: Boolean(
+          !revokedFlag(integer(row, 'revoked')) &&
+            integer(row, 'expires_at') >= now() &&
+            integer(row, 'expires_at') === input.exp,
+        ),
+      });
+    } catch {
+      return failure('corrupt_token', 'token record is corrupt', 500);
+    }
   }
 
   async revoke(input: {
@@ -43,17 +47,20 @@ export class TokenManagement {
   }): Promise<RpcResult<void>> {
     return this.ctx.storage.transactionSync(() => {
       const old = first(
-        this.ctx.storage.sql.exec<{ jti: string }>(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT jti FROM token_operations WHERE operation_id = ?',
           input.operation_id,
         ),
       );
-      if (old && old.jti !== input.jti)
-        return failure(
-          'idempotency_conflict',
-          'revocation operation changed token',
-          409,
-        );
+      try {
+        if (old && text(old, 'jti') !== input.jti)
+          return conflict(
+            'idempotency_conflict',
+            'revocation operation changed token',
+          );
+      } catch {
+        return failure('corrupt_token', 'token record is corrupt', 500);
+      }
       this.ctx.storage.sql.exec(
         'UPDATE tokens SET revoked = 1 WHERE jti = ?',
         input.jti,
@@ -101,16 +108,43 @@ export class TokenManagement {
             input.limit + 1,
           ),
         ];
-    const items = rows.slice(0, input.limit).map(toTokenSummary);
+    const items = (() => {
+      try {
+        return rows.slice(0, input.limit).map((row) => {
+          // Allow-list the stored 0/1 before toTokenSummary: its
+          // `=== 1` check would coerce a corrupt 2 to "not revoked".
+          // Throwing here maps to `corrupt_token` 500 below.
+          revokedFlag(integer(row, 'revoked'));
+          return toTokenSummary(row);
+        });
+      } catch {
+        return null;
+      }
+    })();
+    if (!items) return failure('corrupt_token', 'token record is corrupt', 500);
     const last = rows.length > input.limit ? rows[input.limit - 1] : null;
-    return ok({
-      items,
-      next_cursor: last
-        ? encodeCursor({
-            issued_at: Number(last.issued_at),
-            jti: String(last.jti),
-          })
-        : null,
-    });
+    try {
+      return ok({
+        items,
+        next_cursor: last
+          ? encodeCursor({
+              issued_at: integer(last, 'issued_at'),
+              jti: text(last, 'jti'),
+            })
+          : null,
+      });
+    } catch {
+      return failure('corrupt_token', 'token record is corrupt', 500);
+    }
   }
+}
+
+function revokedFlag(value: number): boolean {
+  // SQLite has no boolean type: `revoked` is stored as 0/1. An allow-list
+  // keeps a corrupt 2/-1 from coercing (=== 0 reads 2 as revoked, === 1
+  // reads 2 as active); any other integer throws so callers map it to
+  // `corrupt_token` 500.
+  if (value === 1) return true;
+  if (value === 0) return false;
+  throw new Error(`token revoked flag ${value} is not 0 or 1`);
 }

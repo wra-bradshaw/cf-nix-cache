@@ -1,8 +1,32 @@
-import type { CacheConfig, CacheReference } from '../types';
-import { type RpcResult, failure, ok } from '../../../shared/rpc';
-import { first, type SqlRow } from '../../../shared/sql';
+import { ENCODING_ID, type CacheConfig, type CacheReference } from '../types';
+import { type RpcResult, conflict, failure, ok } from '../../../shared/rpc';
+import {
+  first,
+  type SqlRow,
+  text,
+  integer,
+  pageCursor,
+} from '../../../shared/sql';
 import { now } from '../../../shared/clock';
 import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
+
+function encodingId(value: string): CacheConfig['encoding_id'] {
+  // Allow-list from schemas/api.json (`encoding_id` const) and ENCODING_ID:
+  // only one chunking/compression scheme is deployed, so any other stored
+  // value is a corrupt catalog row, not a migration to preserve.
+  if (value !== ENCODING_ID)
+    throw new Error(`cache encoding ${value} is not a known encoding`);
+  return value;
+}
+
+function publicFlag(value: number): boolean {
+  // SQLite has no boolean type: `public` is stored as 0/1. An allow-list
+  // keeps a corrupt 2/-1 from coercing to false via `=== 1`; any other
+  // integer throws so callers map it to `corrupt_catalog` 500.
+  if (value === 1) return true;
+  if (value === 0) return false;
+  throw new Error(`cache public flag ${value} is not 0 or 1`);
+}
 
 export class SystemControl extends RpcOnlyDurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -34,6 +58,26 @@ export class SystemControl extends RpcOnlyDurableObject {
     quota_bytes: number;
     encoding_id: string;
   }): Promise<RpcResult<{ reference: CacheReference; repeated: boolean }>> {
+    if (input.encoding_id !== ENCODING_ID)
+      return failure(
+        'invalid_encoding_id',
+        'encoding_id is not a supported encoding',
+        400,
+      );
+    // Defense in depth: the HTTP schema already constrains quota_bytes, but
+    // direct RPC callers (workflows, tests) bypass it. A zero/negative quota
+    // would make every reservation fail, and an unsafe integer would corrupt
+    // the quota arithmetic, so reject here before any row is written.
+    if (
+      !Number.isSafeInteger(input.quota_bytes) ||
+      input.quota_bytes < 1 ||
+      input.quota_bytes > Number.MAX_SAFE_INTEGER
+    )
+      return failure(
+        'invalid_quota',
+        'quota_bytes must be an integer between 1 and 9007199254740991',
+        400,
+      );
     return this.ctx.storage.transactionSync(() => {
       const oldOperation = first(
         this.ctx.storage.sql.exec<SqlRow>(
@@ -42,25 +86,44 @@ export class SystemControl extends RpcOnlyDurableObject {
         ),
       );
       if (oldOperation) {
-        if (String(oldOperation.fingerprint) !== input.fingerprint)
+        let fingerprint: string;
+        let cacheId: string;
+        try {
+          fingerprint = text(oldOperation, 'fingerprint');
+          cacheId = text(oldOperation, 'cache_id');
+        } catch {
           return failure(
+            'corrupt_catalog',
+            'cache catalog record is corrupt',
+            500,
+          );
+        }
+        if (fingerprint !== input.fingerprint)
+          return conflict(
             'idempotency_conflict',
             'idempotency key was reused with different cache configuration',
-            409,
           );
         const row = first(
           this.ctx.storage.sql.exec<SqlRow>(
             'SELECT cache_id, name, incarnation, coordinator_id, lifecycle FROM caches WHERE cache_id = ?',
-            oldOperation.cache_id,
+            cacheId,
           ),
         );
-        return row
-          ? ok({ reference: reference(row), repeated: true })
-          : failure(
-              'operation_not_found',
-              'cache creation record is missing',
-              503,
-            );
+        if (!row)
+          return failure(
+            'corrupt_catalog',
+            'cache catalog record is corrupt',
+            500,
+          );
+        try {
+          return ok({ reference: reference(row), repeated: true });
+        } catch {
+          return failure(
+            'corrupt_catalog',
+            'cache catalog record is corrupt',
+            500,
+          );
+        }
       }
       const existing = first(
         this.ctx.storage.sql.exec<SqlRow>(
@@ -73,26 +136,65 @@ export class SystemControl extends RpcOnlyDurableObject {
         // before the coordinator is initialized/activated. Treat a new
         // request for the same name as a recovery attempt, while fencing it
         // to the original creation configuration.
-        if (String(existing.lifecycle) === 'CREATING') {
+        let lifecycle: string;
+        let existingId: string;
+        try {
+          lifecycle = text(existing, 'lifecycle');
+          existingId = text(existing, 'cache_id');
+        } catch {
+          return failure(
+            'corrupt_catalog',
+            'cache catalog record is corrupt',
+            500,
+          );
+        }
+        if (lifecycle === 'CREATING') {
           const config = first(
             this.ctx.storage.sql.exec<SqlRow>(
               'SELECT public, quota_bytes, encoding_id FROM cache_creation_config WHERE cache_id = ?',
-              existing.cache_id,
+              existingId,
             ),
           );
-          if (
-            config &&
-            (Number(config.public) !== (input.public ? 1 : 0) ||
-              Number(config.quota_bytes) !== input.quota_bytes ||
-              String(config.encoding_id) !== input.encoding_id)
-          )
+          try {
+            // The catalogue row and its creation config are written in one
+            // transaction, so a missing config row means the record is
+            // corrupt rather than a match: returning repeated:true here
+            // would let recovery proceed with unknown configuration.
+            if (!config)
+              return failure(
+                'corrupt_catalog',
+                'cache catalog record is corrupt',
+                500,
+              );
+            if (
+              publicFlag(integer(config, 'public')) !== input.public ||
+              integer(config, 'quota_bytes') !== input.quota_bytes ||
+              text(config, 'encoding_id') !== input.encoding_id
+            )
+              return failure(
+                'cache_creation_conflict',
+                'cache creation is already in progress with different configuration',
+                409,
+              );
+            return ok({ reference: reference(existing), repeated: true });
+          } catch {
             return failure(
-              'cache_creation_conflict',
-              'cache creation is already in progress with different configuration',
-              409,
+              'corrupt_catalog',
+              'cache catalog record is corrupt',
+              500,
             );
-          return ok({ reference: reference(existing), repeated: true });
+          }
         }
+        if (
+          lifecycle !== 'CREATING' &&
+          lifecycle !== 'ACTIVE' &&
+          lifecycle !== 'DELETING'
+        )
+          return failure(
+            'corrupt_catalog',
+            'cache catalog record is corrupt',
+            500,
+          );
         return failure('cache_exists', 'cache name is already registered', 409);
       }
       const value: CacheReference = {
@@ -134,9 +236,12 @@ export class SystemControl extends RpcOnlyDurableObject {
         name,
       ),
     );
-    return row
-      ? ok(reference(row))
-      : failure('not_found', 'cache not found', 404);
+    if (!row) return failure('not_found', 'cache not found', 404);
+    try {
+      return ok(reference(row));
+    } catch {
+      return failure('corrupt_catalog', 'cache catalog record is corrupt', 500);
+    }
   }
 
   /**
@@ -148,47 +253,73 @@ export class SystemControl extends RpcOnlyDurableObject {
   ): Promise<RpcResult<CacheConfig>> {
     const row = first(
       this.ctx.storage.sql.exec<SqlRow>(
-        'SELECT c.created_at, f.public, f.quota_bytes, f.encoding_id FROM caches c JOIN cache_creation_config f ON f.cache_id = c.cache_id WHERE c.cache_id = ? AND c.incarnation = ?',
+        'SELECT c.name, c.created_at, c.lifecycle, f.public, f.quota_bytes, f.encoding_id FROM caches c JOIN cache_creation_config f ON f.cache_id = c.cache_id WHERE c.cache_id = ? AND c.incarnation = ?',
         value.id,
         value.incarnation,
       ),
     );
     if (!row) return failure('not_found', 'cache not found', 404);
-    return ok({
-      id: value.id,
-      name: value.name,
-      public: Number(row.public) === 1,
-      quota_bytes: Number(row.quota_bytes),
-      logical_bytes: 0,
-      encoding_id: String(row.encoding_id) as CacheConfig['encoding_id'],
-      created_at: Number(row.created_at),
-      lifecycle: value.lifecycle,
-      retention_days: 0,
-      upstream_cache_key_names: [],
-    });
+    try {
+      const lifecycle = text(row, 'lifecycle');
+      if (
+        lifecycle !== 'CREATING' &&
+        lifecycle !== 'ACTIVE' &&
+        lifecycle !== 'DELETING'
+      )
+        throw new Error('catalog lifecycle is not a known lifecycle');
+      return ok({
+        id: value.id,
+        // Authoritative: the stored name, not the caller-supplied
+        // `value.name`, so a stale or forged reference cannot rename the
+        // recovered config used by getCacheForDeletion.
+        name: text(row, 'name'),
+        public: publicFlag(integer(row, 'public')),
+        quota_bytes: integer(row, 'quota_bytes'),
+        logical_bytes: 0,
+        encoding_id: encodingId(text(row, 'encoding_id')),
+        created_at: integer(row, 'created_at'),
+        lifecycle: lifecycle as CacheConfig['lifecycle'],
+        retention_days: 0,
+        upstream_cache_key_names: [],
+      });
+    } catch {
+      return failure('corrupt_catalog', 'cache catalog record is corrupt', 500);
+    }
   }
 
   async activateCache(value: CacheReference): Promise<RpcResult<void>> {
     const result = this.ctx.storage.transactionSync(() => {
-      const changed = this.ctx.storage.sql.exec(
-        "UPDATE caches SET lifecycle = 'ACTIVE' WHERE cache_id = ? AND incarnation = ? AND lifecycle = 'CREATING'",
-        value.id,
-        value.incarnation,
-      ).rowsWritten;
+      // rowsWritten is a number in workerd; the node test fake returns a bare
+      // array, so an explicit undefined reads as 0 (no row updated) rather
+      // than failing open. Without this a DELETING row with undefined
+      // rowsWritten would skip the 410 below and report success.
+      const changed =
+        (this.ctx.storage.sql.exec(
+          "UPDATE caches SET lifecycle = 'ACTIVE' WHERE cache_id = ? AND incarnation = ? AND lifecycle = 'CREATING'",
+          value.id,
+          value.incarnation,
+        ) as unknown as { rowsWritten?: unknown }).rowsWritten ?? 0;
       const row = first(
-        this.ctx.storage.sql.exec<{ lifecycle: string }>(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT lifecycle FROM caches WHERE cache_id = ? AND incarnation = ?',
           value.id,
           value.incarnation,
         ),
       );
       if (!row) return failure('not_found', 'cache not found', 404);
-      if (row.lifecycle !== 'ACTIVE' && changed === 0)
+      try {
+        // changed === 0 with no ACTIVE row means DELETING: a CREATING row
+        // would have been updated above. Report 410 like the coordinator so
+        // deletion fencing reads the same code on both sides.
+        if (text(row, 'lifecycle') !== 'ACTIVE' && changed === 0)
+          return failure('cache_deleting', 'cache is being deleted', 410);
+      } catch {
         return failure(
-          'cache_unavailable',
-          'cache could not be activated',
-          503,
+          'corrupt_catalog',
+          'cache catalog record is corrupt',
+          500,
         );
+      }
       return ok();
     });
     return result;
@@ -200,7 +331,7 @@ export class SystemControl extends RpcOnlyDurableObject {
   }): Promise<RpcResult<{ operation_id: string; repeated: boolean }>> {
     return this.ctx.storage.transactionSync(() => {
       const row = first(
-        this.ctx.storage.sql.exec<{ lifecycle: string }>(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT lifecycle FROM caches WHERE cache_id = ? AND incarnation = ?',
           input.reference.id,
           input.reference.incarnation,
@@ -208,31 +339,46 @@ export class SystemControl extends RpcOnlyDurableObject {
       );
       if (!row) return failure('not_found', 'cache not found', 404);
       const operationOnCache = first(
-        this.ctx.storage.sql.exec<{ cache_id: string }>(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT cache_id FROM delete_operations WHERE operation_id = ?',
           input.operation_id,
         ),
       );
-      if (
-        operationOnCache &&
-        String(operationOnCache.cache_id) !== input.reference.id
-      )
+      try {
+        if (
+          operationOnCache &&
+          text(operationOnCache, 'cache_id') !== input.reference.id
+        )
+          return conflict(
+            'idempotency_conflict',
+            'idempotency key is already assigned to another cache deletion',
+          );
+      } catch {
         return failure(
-          'idempotency_conflict',
-          'idempotency key is already assigned to another cache deletion',
-          409,
+          'corrupt_catalog',
+          'cache catalog record is corrupt',
+          500,
         );
+      }
       const existing = first(
-        this.ctx.storage.sql.exec<{ operation_id: string }>(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT operation_id FROM delete_operations WHERE cache_id = ?',
           input.reference.id,
         ),
       );
       if (existing)
-        return ok({
-          operation_id: String(existing.operation_id),
-          repeated: true,
-        });
+        try {
+          return ok({
+            operation_id: text(existing, 'operation_id'),
+            repeated: true,
+          });
+        } catch {
+          return failure(
+            'corrupt_catalog',
+            'cache catalog record is corrupt',
+            500,
+          );
+        }
       this.ctx.storage.sql.exec(
         "UPDATE caches SET lifecycle = 'DELETING' WHERE cache_id = ? AND incarnation = ?",
         input.reference.id,
@@ -250,7 +396,7 @@ export class SystemControl extends RpcOnlyDurableObject {
   async removeCache(value: CacheReference): Promise<RpcResult<void>> {
     return this.ctx.storage.transactionSync(() => {
       const row = first(
-        this.ctx.storage.sql.exec<{ lifecycle: string }>(
+        this.ctx.storage.sql.exec<SqlRow>(
           'SELECT lifecycle FROM caches WHERE cache_id = ? AND incarnation = ?',
           value.id,
           value.incarnation,
@@ -260,12 +406,20 @@ export class SystemControl extends RpcOnlyDurableObject {
       // catalog mutation to be submitted again after it already committed;
       // absence is therefore the desired idempotent result.
       if (!row) return ok();
-      if (row.lifecycle !== 'DELETING')
+      try {
+        if (text(row, 'lifecycle') !== 'DELETING')
+          return failure(
+            'cache_not_deleting',
+            'cache must be deleting before removal',
+            409,
+          );
+      } catch {
         return failure(
-          'cache_not_deleting',
-          'cache must be deleting before removal',
-          409,
+          'corrupt_catalog',
+          'cache catalog record is corrupt',
+          500,
         );
+      }
       this.ctx.storage.sql.exec(
         'DELETE FROM create_operations WHERE cache_id = ?',
         value.id,
@@ -293,29 +447,46 @@ export class SystemControl extends RpcOnlyDurableObject {
   }): Promise<
     RpcResult<{ items: CacheReference[]; next_after: string | null }>
   > {
-    const limit = Math.min(Math.max(Math.trunc(input.limit), 1), 100);
+    // Caller-supplied limits are validated, not clamped: silently clamping a
+    // mistyped limit would hide a caller bug, while a NaN limit would throw
+    // on the LIMIT bind instead of returning a usable error.
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100)
+      return failure('invalid_limit', 'limit must be between 1 and 100', 400);
+    if (input.after !== null && typeof input.after !== 'string')
+      return failure('invalid_after', 'after must be a string or null', 400);
+    const limit = input.limit;
     const rows = [
       ...this.ctx.storage.sql.exec<SqlRow>(
-        input.after
+        input.after !== null
           ? 'SELECT cache_id, name, incarnation, coordinator_id, lifecycle FROM caches WHERE name > ? ORDER BY name LIMIT ?'
           : 'SELECT cache_id, name, incarnation, coordinator_id, lifecycle FROM caches ORDER BY name LIMIT ?',
-        ...(input.after ? [input.after, limit + 1] : [limit + 1]),
+        ...(input.after !== null ? [input.after, limit + 1] : [limit + 1]),
       ),
     ];
-    const page = rows.slice(0, limit).map(reference);
-    return ok({
-      items: page,
-      next_after: rows.length > limit ? (page.at(-1)?.name ?? null) : null,
-    });
+    try {
+      return ok({
+        items: rows.slice(0, limit).map(reference),
+        next_after: pageCursor(rows, limit, (row) => text(row, 'name')),
+      });
+    } catch {
+      return failure('corrupt_catalog', 'cache catalog record is corrupt', 500);
+    }
   }
 }
 
 function reference(row: SqlRow): CacheReference {
+  const lifecycle = text(row, 'lifecycle');
+  if (
+    lifecycle !== 'CREATING' &&
+    lifecycle !== 'ACTIVE' &&
+    lifecycle !== 'DELETING'
+  )
+    throw new Error('catalog lifecycle is not a known lifecycle');
   return {
-    id: String(row.cache_id),
-    name: String(row.name),
-    incarnation: String(row.incarnation),
-    coordinator_id: String(row.coordinator_id),
-    lifecycle: String(row.lifecycle) as CacheReference['lifecycle'],
+    id: text(row, 'cache_id'),
+    name: text(row, 'name'),
+    incarnation: text(row, 'incarnation'),
+    coordinator_id: text(row, 'coordinator_id'),
+    lifecycle,
   };
 }

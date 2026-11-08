@@ -16,6 +16,7 @@ import {
   UploadAllocations,
 } from './upload-allocations';
 import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
+import { type SqlRow, text } from '../../../shared/sql';
 
 const schema = `CREATE TABLE IF NOT EXISTS cache (
   cache_id TEXT PRIMARY KEY, name TEXT NOT NULL, incarnation TEXT NOT NULL,
@@ -40,11 +41,18 @@ const ADDED_COLUMNS: Record<string, string> = {
 };
 
 function addMissingColumns(ctx: DurableObjectState): void {
-  const present = new Set(
-    [...ctx.storage.sql.exec<{ name: string }>('PRAGMA table_info(cache)')].map(
-      (column) => column.name,
-    ),
-  );
+  let present: Set<string>;
+  try {
+    present = new Set(
+      [...ctx.storage.sql.exec<SqlRow>('PRAGMA table_info(cache)')].map(
+        (column) => text(column, 'name'),
+      ),
+    );
+  } catch (error) {
+    throw new Error('corrupt_cache: cache schema record is corrupt', {
+      cause: error,
+    });
+  }
   for (const [name, definition] of Object.entries(ADDED_COLUMNS))
     if (!present.has(name))
       ctx.storage.sql.exec(
@@ -159,14 +167,38 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
 
   /** Delivers every pending audit event; cache removal waits on this. */
   async flushAudit(): Promise<RpcResult<void>> {
-    while (this.audit.pending() > 0)
-      if (!(await this.audit.drain()))
+    for (;;) {
+      let depth: number;
+      try {
+        depth = this.audit.pending();
+      } catch {
         return failure(
           'audit_unavailable',
           'audit log is unavailable; retry before removing the cache',
           503,
         );
-    return ok();
+      }
+      if (depth <= 0) return ok();
+      let drained: boolean;
+      try {
+        drained = await this.audit.drain();
+      } catch {
+        // drain's SELECT, DELETE, or alarm scheduling threw (storage error
+        // or poison-pill cleanup failure): fail closed so removal retries
+        // rather than trusting an unknown backlog as drained.
+        return failure(
+          'audit_unavailable',
+          'audit log is unavailable; retry before removing the cache',
+          503,
+        );
+      }
+      if (!drained)
+        return failure(
+          'audit_unavailable',
+          'audit log is unavailable; retry before removing the cache',
+          503,
+        );
+    }
   }
 
   alarm(): Promise<void> {
