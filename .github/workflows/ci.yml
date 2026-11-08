@@ -9,32 +9,82 @@ on:
 permissions:
   contents: read
 
+env:
+  CACHE_NAME: ${{ vars.CACHE_NAME || 'will' }}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
+      - name: Check out the repository
+        uses: actions/checkout@v7
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+      - name: Configure the Nix cache
+        env:
+          CF_NIX_CACHE_ENDPOINT: ${{ secrets.CF_NIX_CACHE_ENDPOINT }}
+          CF_NIX_CACHE_PUBLIC_KEY: ${{ secrets.CF_NIX_CACHE_PUBLIC_KEY }}
+          CF_NIX_CACHE_PULL_TOKEN: ${{ secrets.CF_NIX_CACHE_PULL_TOKEN }}
+        run: |
+          if [ -z "$CF_NIX_CACHE_ENDPOINT" ] || [ -z "$CF_NIX_CACHE_PUBLIC_KEY" ] || [ -z "$CF_NIX_CACHE_PULL_TOKEN" ]; then
+            echo "::warning::cf-nix-cache secrets are unavailable; building without the cache"
+            exit 0
+          fi
+          endpoint="${CF_NIX_CACHE_ENDPOINT%/}"
+          host="${endpoint#*://}"
+          host="${host%%/*}"
+          sudo mkdir -p /etc/determinate
+          netrc="$RUNNER_TEMP/cf-nix-cache-netrc"
+          (umask 077; printf 'machine %s login token password %s\n' "$host" "$CF_NIX_CACHE_PULL_TOKEN" > "$netrc")
+          jq -n --arg netrc "$netrc" '{authentication: {additionalNetrcSources: [$netrc]}}' \
+            | sudo tee /etc/determinate/config.json >/dev/null
+          printf 'extra-substituters = %s/cache/%s\nextra-trusted-public-keys = %s\n' \
+            "$endpoint" "$CACHE_NAME" "$CF_NIX_CACHE_PUBLIC_KEY" \
+            | sudo tee -a /etc/nix/nix.custom.conf >/dev/null
+          sudo systemctl restart nix-daemon.service
+          for _ in $(seq 1 30); do
+            nix store info >/dev/null 2>&1 && break
+            sleep 1
+          done
       - name: Install the pnpm workspace
         run: nix develop --command pnpm install --frozen-lockfile
-      - name: Warm verifier wasm build
+      - name: Generate worker contracts and verifier wasm (runs once)
         run: nix develop --command pnpm --dir packages/worker generate
       - name: Check encoding constants stay in sync
         run: nix develop --command node bench/verify-worker/upload-nar.mts --check-drift
       - name: Check release metadata
-        run: |
-          nix develop --command pnpm release:check --allow-placeholder
+        run: nix develop --command pnpm release:check --allow-placeholder
       - name: Check Rust
         run: |
           nix develop --command cargo fmt --check
           nix develop --command cargo clippy --workspace --all-targets -- -D warnings
           nix develop --command cargo test --workspace
+      - name: Verify worker CI commands stay in sync with package.json
+        run: |
+          check="$(node -p "require('./packages/worker/package.json').scripts.check")"
+          for cmd in tsc eslint prettier boundaries knip; do
+            case "$check" in
+              *"$cmd"*) ;;
+              *) echo "::error::packages/worker 'check' script no longer mentions '$cmd'; update the exec list below" >&2; exit 1 ;;
+            esac
+          done
       - name: Check Worker and npm package
         run: |
-          nix develop --command pnpm --dir packages/worker check
-          nix develop --command pnpm --dir packages/worker test
-          nix develop --command pnpm --dir packages/worker build
-          nix develop --command npm pack ./packages/worker --dry-run
+          nix develop --command pnpm --dir packages/worker exec tsc --noEmit
+          nix develop --command pnpm --dir packages/worker exec tsc -p tsconfig.node.json
+          nix develop --command pnpm --dir packages/worker exec eslint .
+          nix develop --command pnpm --dir packages/worker exec prettier --check .
+          nix develop --command pnpm --dir packages/worker exec node scripts/check-boundaries.mts
+          nix develop --command pnpm --dir packages/worker exec knip
+          nix develop --command pnpm --dir packages/worker exec vitest run --config vitest.config.ts
+          nix develop --command pnpm --dir packages/worker exec vitest run --config vitest.node.config.ts
+          nix develop --command pnpm --dir packages/worker exec vite build
+          nix develop --command pnpm --dir packages/worker exec node scripts/package.mts
+          nix develop --command npm pack ./packages/worker --dry-run --ignore-scripts
       - name: Check deployment template config
         run: scripts/ci-check-template.sh
       - name: Check generated contracts are deterministic
@@ -50,4 +100,15 @@ jobs:
           nix flake check
           nix build .#cli
       - name: Run the end-to-end upload test
-        run: nix develop --command pnpm --dir packages/worker e2e
+        run: nix develop --command pnpm --dir packages/worker exec vitest run --config vitest.e2e.config.ts
+      - name: Push Nix outputs to the cache
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          CF_NIX_CACHE_ENDPOINT: ${{ secrets.CF_NIX_CACHE_ENDPOINT }}
+          CF_NIX_CACHE_TOKEN: ${{ secrets.CF_NIX_CACHE_TOKEN }}
+        run: |
+          if [ -z "$CF_NIX_CACHE_ENDPOINT" ] || [ -z "$CF_NIX_CACHE_TOKEN" ]; then
+            echo "::error::CF_NIX_CACHE_ENDPOINT and CF_NIX_CACHE_TOKEN secrets are required to push"
+            exit 1
+          fi
+          ./result/bin/cf-nix-cache push "$CACHE_NAME" ./result

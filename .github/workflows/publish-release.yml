@@ -17,6 +17,9 @@ permissions:
   contents: write
   id-token: write
 
+env:
+  CACHE_NAME: ${{ vars.CACHE_NAME || 'will' }}
+
 jobs:
   publish:
     runs-on: ubuntu-24.04
@@ -26,17 +29,50 @@ jobs:
       package_name: ${{ steps.release.outputs.package_name }}
       version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out the repository
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: cachix/install-nix-action@v31
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+      - name: Configure the Nix cache
+        env:
+          CF_NIX_CACHE_ENDPOINT: ${{ secrets.CF_NIX_CACHE_ENDPOINT }}
+          CF_NIX_CACHE_PUBLIC_KEY: ${{ secrets.CF_NIX_CACHE_PUBLIC_KEY }}
+          CF_NIX_CACHE_PULL_TOKEN: ${{ secrets.CF_NIX_CACHE_PULL_TOKEN }}
+        run: |
+          if [ -z "$CF_NIX_CACHE_ENDPOINT" ] || [ -z "$CF_NIX_CACHE_PUBLIC_KEY" ] || [ -z "$CF_NIX_CACHE_PULL_TOKEN" ]; then
+            echo "::warning::cf-nix-cache secrets are unavailable; building without the cache"
+            exit 0
+          fi
+          endpoint="${CF_NIX_CACHE_ENDPOINT%/}"
+          host="${endpoint#*://}"
+          host="${host%%/*}"
+          sudo mkdir -p /etc/determinate
+          netrc="$RUNNER_TEMP/cf-nix-cache-netrc"
+          (umask 077; printf 'machine %s login token password %s\n' "$host" "$CF_NIX_CACHE_PULL_TOKEN" > "$netrc")
+          jq -n --arg netrc "$netrc" '{authentication: {additionalNetrcSources: [$netrc]}}' \
+            | sudo tee /etc/determinate/config.json >/dev/null
+          printf 'extra-substituters = %s/cache/%s\nextra-trusted-public-keys = %s\n' \
+            "$endpoint" "$CACHE_NAME" "$CF_NIX_CACHE_PUBLIC_KEY" \
+            | sudo tee -a /etc/nix/nix.custom.conf >/dev/null
+          sudo systemctl restart nix-daemon.service
+          for _ in $(seq 1 30); do
+            nix store info >/dev/null 2>&1 && break
+            sleep 1
+          done
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.15.0
+      - name: Set up Node
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
-      - run: pnpm install --frozen-lockfile
+      - name: Install the pnpm workspace
+        run: pnpm install --frozen-lockfile
 
       - name: Determine whether a pinned release is ready
         id: release
@@ -74,13 +110,11 @@ jobs:
           jq -S . packages/worker/release-manifest.json > "$package_dir/expected.json"
           diff -u "$package_dir/expected.json" "$package_dir/published.json"
 
-      - name: Build and test the npm artifact
+      - name: Build the npm artifact
         if: steps.release.outputs.ready == 'true' && steps.npm.outputs.published == 'false'
         run: |
-          nix develop --command pnpm --dir packages/worker check
-          nix develop --command pnpm --dir packages/worker test
           nix develop --command pnpm --dir packages/worker build
-          nix develop --command npm pack ./packages/worker --dry-run
+          nix develop --command npm pack ./packages/worker --dry-run --ignore-scripts
 
       - name: Publish npm package with trusted publishing
         if: steps.release.outputs.ready == 'true' && steps.npm.outputs.published == 'false'
@@ -122,10 +156,12 @@ jobs:
           repository: ${{ vars.TEMPLATE_REPOSITORY }}
           token: ${{ secrets.TEMPLATE_REPO_TOKEN }}
           path: template
-      - uses: pnpm/action-setup@v6
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
         with:
           version: 11.15.0
-      - uses: actions/setup-node@v7
+      - name: Set up Node
+        uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Refresh the standalone template and lockfile

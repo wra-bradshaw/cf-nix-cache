@@ -33,9 +33,7 @@ if (( ${#tarballs[@]} == 0 )); then
   exit 1
 fi
 tarball="${tarballs[0]}"
-test -f "$tarball"
 nix develop --command pnpm --dir cf-nix-cache-template install --no-frozen-lockfile
 nix develop --command pnpm --dir cf-nix-cache-template add "file:$tarball"
 nix develop --command pnpm --dir cf-nix-cache-template run check:ci
-# Needs no Cloudflare credentials.
 nix develop --command pnpm --dir cf-nix-cache-template exec wrangler deploy --dry-run
