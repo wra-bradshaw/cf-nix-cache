@@ -34,18 +34,13 @@ jobs:
         run: |
           pnpm release:check --allow-placeholder
           node bench/verify-worker/upload-nar.mts --check-drift
-      - name: Check Rust
-        run: |
-          cargo fmt --check
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace
+      - name: Build Nix outputs
+        shell: bash
+        run: nix flake check && nix build .#cli
       - name: Check, test and build the Worker
         run: pnpm --dir packages/worker check:all
       - name: Check the deployment template
         run: scripts/check-template.sh
-      - name: Build Nix outputs
-        shell: bash
-        run: nix flake check && nix build .#cli
       - name: Push Nix outputs to the cache
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         shell: bash
