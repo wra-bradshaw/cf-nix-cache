@@ -1,34 +1,30 @@
 /**
- * Builds `crates/verify` for wasm32 into src/generated/verify.wasm.
+ * Copies the Nix-built `crates/verify` wasm into src/generated/verify.wasm.
  * Rebuild before worker tests: `src/generated/` is gitignored, so a stale
  * `verify.wasm` may predate `crates/verify/src/ffi.rs`.
+ *
+ * The wasm is built by the `verifier` Nix package (crane, release profile);
+ * this script only copies it into place so the file is writable.
  */
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryRoot = join(packageRoot, '../..');
-execFileSync(
-  'cargo',
-  [
-    'build',
-    '--quiet',
-    '--release',
-    '--package',
-    'cf-nix-cache-verify',
-    '--target',
-    'wasm32-unknown-unknown',
-  ],
-  { cwd: repositoryRoot, stdio: 'inherit' },
-);
-mkdirSync(join(packageRoot, 'src/generated'), { recursive: true });
-copyFileSync(
-  join(
-    repositoryRoot,
-    'target/wasm32-unknown-unknown/release/cf_nix_cache_verify.wasm',
-  ),
-  join(packageRoot, 'src/generated/verify.wasm'),
-);
+const wasmPath = execFileSync(
+  'nix',
+  ['build', '.#verifier', '--no-link', '--print-out-paths'],
+  { cwd: repositoryRoot, encoding: 'utf8' },
+)
+  .trim()
+  .split(/\r?\n/)
+  .at(-1);
+if (!wasmPath) throw new Error('nix build .#verifier printed no path');
+const generatedDir = join(packageRoot, 'src/generated');
+mkdirSync(generatedDir, { recursive: true });
+const destination = join(generatedDir, 'verify.wasm');
+copyFileSync(join(wasmPath, 'verify.wasm'), destination);
+chmodSync(destination, 0o644);
 console.log('built the chunk verifier');

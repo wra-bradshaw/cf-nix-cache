@@ -19,6 +19,7 @@ export type E2eFixture = {
   readonly scratch: string;
   readonly bootstrapSecret: string;
   readonly publicKey: string;
+  readonly cli: string;
   clientStore?: string;
 };
 
@@ -26,10 +27,25 @@ function generatedWranglerConfig(): string {
   return path.resolve(workerDirectory, 'dist/cf_nix_cache/wrangler.json');
 }
 
+function resolveCli(): string {
+  const outPath = run('nix', [
+    'build',
+    '.#cli',
+    '--no-link',
+    '--print-out-paths',
+  ])
+    .trim()
+    .split(/\r?\n/)
+    .at(-1);
+  if (!outPath) throw new Error('nix build .#cli printed no path');
+  return path.join(outPath, 'bin/cf-nix-cache');
+}
+
 export async function createFixture(): Promise<E2eFixture> {
-  for (const command of ['nix', 'nix-store', 'cargo'])
-    run(command, ['--version']);
+  for (const command of ['nix', 'nix-store']) run(command, ['--version']);
   resolveZstd();
+
+  const cli = resolveCli();
 
   const scratch = await mkdtemp(path.join(tmpdir(), 'cf-nix-cache-e2e-'));
   const auth = keyMaterial();
@@ -54,13 +70,13 @@ export async function createFixture(): Promise<E2eFixture> {
     workers: [{ configPath: generatedWranglerConfig(), vars }],
   });
   const initial = await server.listen();
-  run('cargo', ['build', '-q', '-p', 'cf-nix-cache']);
   return {
     server,
     base: initial.url.origin,
     scratch,
     bootstrapSecret,
     publicKey,
+    cli,
   };
 }
 
