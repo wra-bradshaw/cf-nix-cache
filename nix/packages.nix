@@ -30,9 +30,18 @@ forEachSupportedSystem (
         '';
       }
     );
+    cli-release = import ./release.nix {
+      inherit
+        inputs
+        pkgs
+        system
+        rust
+        cli
+        ;
+    };
   in
   {
-    inherit cli verifier;
+    inherit cli cli-release verifier;
     default = cli;
   }
 )
