@@ -1,5 +1,11 @@
 # cf-nix-cache
 
+## 0.9.1
+
+### Patch Changes
+
+- 3874f9d: Verify uploads without holding every chunk in memory. Verification kept each compressed chunk it read until the whole NAR was checked, so a NAR whose chunks barely compress (a large `.tar.gz`, for example) exceeded the Worker's 128 MB memory limit and the upload failed with Cloudflare error 1102. Each chunk is now released once it has been checked; a repeated chunk is read again.
+
 ## 0.9.0
 
 ### Minor Changes
