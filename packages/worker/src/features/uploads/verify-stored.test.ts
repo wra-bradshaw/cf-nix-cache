@@ -128,6 +128,23 @@ describe('verifying stored chunks', () => {
     );
   });
 
+  it('reads each chunk occurrence from storage instead of keeping chunks in memory', async () => {
+    const nar = narOfFile(encoder.encode('h'.repeat(6000)));
+    const { objects, nar: claim } = await stored(nar, [500, 1500, 2500]);
+    expect(claim.chunks[1]!.raw_hash).toBe(claim.chunks[2]!.raw_hash);
+    const store = bucket(objects);
+    const get = vi.spyOn(store, 'get');
+    const manifest = await verifyStoredNar(store, claim);
+    expect(get).toHaveBeenCalledTimes(claim.chunks.length);
+    expect(manifest.nar_hash).toBe(claim.nar_hash);
+    expect(manifest.chunks[1]!.compressed_hash).toBe(
+      manifest.chunks[2]!.compressed_hash,
+    );
+    expect(manifest.chunks[1]!.compressed_size).toBe(
+      manifest.chunks[2]!.compressed_size,
+    );
+  });
+
   it('rejects chunks that do not make up the declared NAR', async () => {
     const nar = narOfFile(encoder.encode('hello'));
     const { objects, nar: claim } = await stored(nar, []);

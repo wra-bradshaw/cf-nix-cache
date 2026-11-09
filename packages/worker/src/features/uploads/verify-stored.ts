@@ -82,7 +82,6 @@ export async function verifyStoredNar(
   const narWriter = narDigest.getWriter();
   const fileWriter = fileDigest.getWriter();
   const refs: ChunkRef[] = [];
-  const fetched = new Map<string, Uint8Array>();
   let narSize: number;
   let fileSize = 0;
   try {
@@ -97,20 +96,16 @@ export async function verifyStoredNar(
           `chunk ${chunk.raw_hash} has an invalid size`,
         );
       const key = chunkKey(chunk.raw_hash);
-      let compressed = fetched.get(key);
-      if (!compressed) {
-        const object = await bucket.get(key);
-        if (!object) throw new InvalidEncodingError(`chunk ${key} is missing`);
-        if (
-          typeof object.size === 'number' &&
-          object.size > CHUNK_MAX_COMPRESSED_SIZE
-        )
-          throw new InvalidEncodingError(`chunk ${key} is too large`);
-        compressed = new Uint8Array(await object.arrayBuffer());
-        if (compressed.byteLength > CHUNK_MAX_COMPRESSED_SIZE)
-          throw new InvalidEncodingError(`chunk ${key} is too large`);
-        fetched.set(key, compressed);
-      }
+      const object = await bucket.get(key);
+      if (!object) throw new InvalidEncodingError(`chunk ${key} is missing`);
+      if (
+        typeof object.size === 'number' &&
+        object.size > CHUNK_MAX_COMPRESSED_SIZE
+      )
+        throw new InvalidEncodingError(`chunk ${key} is too large`);
+      const compressed = new Uint8Array(await object.arrayBuffer());
+      if (compressed.byteLength > CHUNK_MAX_COMPRESSED_SIZE)
+        throw new InvalidEncodingError(`chunk ${key} is too large`);
       const raw = verifier.chunk(compressed, chunk.raw_size);
       const [rawHash, compressedHash] = await Promise.all([
         sha256Nix(raw),
