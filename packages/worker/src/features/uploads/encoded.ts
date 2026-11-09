@@ -10,7 +10,9 @@ import { allocateUpload } from './allocate';
 import {
   CHUNK_MAX_COMPRESSED_SIZE,
   CHUNK_MAX_RAW_SIZE,
+  chunkClaimsConflict,
   chunkKey,
+  uniqueCompressedSize,
   verifyChunk,
 } from './encoding';
 import { InvalidEncodingError, RAW_HASH } from './verifier';
@@ -113,11 +115,8 @@ export async function openEncoded(
     )
   )
     throw invalid('chunk has an invalid raw hash');
-  if (
-    new Set(input.chunks.map((chunk) => chunk.raw_hash)).size !==
-    input.chunks.length
-  )
-    throw invalid('upload declares duplicate chunks');
+  const conflict = chunkClaimsConflict(input.chunks);
+  if (conflict !== null) throw invalid(conflict);
   const rawSize = input.chunks.reduce((sum, chunk) => sum + chunk.raw_size, 0);
   if (
     !Number.isSafeInteger(input.manifest.nar_size) ||
@@ -127,10 +126,7 @@ export async function openEncoded(
     throw invalid('upload declares an invalid NAR size');
   if (rawSize !== input.manifest.nar_size)
     throw invalid('chunk sizes do not add up to the NAR size');
-  const compressedSize = input.chunks.reduce(
-    (sum, chunk) => sum + chunk.compressed_size,
-    0,
-  );
+  const compressedSize = uniqueCompressedSize(input.chunks);
   unwrapRpc(
     await coordinator(env, cache.reference).checkQuota({
       delta: compressedSize,

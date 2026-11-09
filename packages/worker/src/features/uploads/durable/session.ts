@@ -6,6 +6,7 @@ import { gcControl } from '../../gc/gc-adapters';
 import {
   CHUNK_MAX_COMPRESSED_SIZE,
   CHUNK_MAX_RAW_SIZE,
+  chunkClaimsConflict,
   chunkKey,
   manifestKey,
   type ChunkClaim,
@@ -222,11 +223,8 @@ export class UploadSession {
           422,
         );
     }
-    if (
-      new Set(input.chunks.map((chunk) => chunk.raw_hash)).size !==
-      input.chunks.length
-    )
-      return failure('invalid_input', 'upload declares duplicate chunks', 422);
+    const conflict = chunkClaimsConflict(input.chunks);
+    if (conflict !== null) return failure('invalid_input', conflict, 422);
     if (
       input.chunks.reduce((sum, chunk) => sum + chunk.raw_size, 0) !==
       input.manifest.nar_size

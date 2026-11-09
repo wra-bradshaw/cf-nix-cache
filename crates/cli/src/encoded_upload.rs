@@ -98,6 +98,10 @@ pub(crate) async fn upload_encoded(
         &request(cache, path, info, &encoded)?,
     )
     .await?;
+    // missing_chunks should already be unique; never upload a chunk twice.
+    let mut missing = opened.missing_chunks.clone();
+    missing.sort();
+    missing.dedup();
     let state = if opened.merged || opened.status != UploadStatus::Uploading {
         UploadStateResponse {
             id: opened.id,
@@ -109,7 +113,7 @@ pub(crate) async fn upload_encoded(
         let id = opened.id.as_str();
         // Owned hashes: a borrowed one makes the future fail the Send check
         // that spawning the upload needs.
-        futures::stream::iter(opened.missing_chunks.clone())
+        futures::stream::iter(missing.clone())
             .map(|hash| async move {
                 let bytes = nar.chunk_bytes(&hash)?;
                 api.put_chunk(id, &hash, bytes)
@@ -127,7 +131,7 @@ pub(crate) async fn upload_encoded(
         )
         .await?
     };
-    finish(api, state, path, opened.missing_chunks.len()).await
+    finish(api, state, path, missing.len()).await
 }
 
 async fn finish(api: &Api, state: UploadStateResponse, path: &str, sent: usize) -> Result<()> {

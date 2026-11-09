@@ -198,6 +198,155 @@ describe('upload session flow through real DOs', () => {
     expect(state.value.error).toBeNull();
   }, 60000);
 
+  it('accepts repeated chunks and publishes with one stored copy', async () => {
+    const { reference, coordinator } = await setupCache(
+      'flow-repeat',
+      'repeat1',
+    );
+    const nar = narOfFile(encoder.encode('h'.repeat(6000)));
+    const raws: Uint8Array[] = [];
+    let offset = 0;
+    for (const end of [500, 1500, 2500, nar.length]) {
+      raws.push(nar.slice(offset, end));
+      offset = end;
+    }
+    const chunks = await Promise.all(
+      raws.map(async (raw) => {
+        const compressed = new Uint8Array(zstdCompressSync(raw));
+        return {
+          claim: {
+            raw_hash: await sha256Nix(raw),
+            raw_size: raw.length,
+            compressed_hash: await sha256Nix(compressed),
+            compressed_size: compressed.length,
+          },
+          compressed,
+        };
+      }),
+    );
+    expect(chunks[1]!.claim.raw_hash).toBe(chunks[2]!.claim.raw_hash);
+    const rawHash = await sha256Nix(nar);
+    const manifest = {
+      cache: 'flow-repeat',
+      store_hash: '1'.repeat(32),
+      store_path: `/nix/store/${'1'.repeat(32)}-hello`,
+      nar_hash: rawHash,
+      nar_size: nar.length,
+      references: [],
+      deriver: null,
+      ca: null,
+    };
+    const allocation = await coordinator.allocateUpload({
+      operation_id: 'op-upload-repeat1',
+      fingerprint: 'fpupload-repeat1',
+      store_hash: manifest.store_hash,
+      nar_hash: manifest.nar_hash,
+      now: 2,
+      merge: false,
+    });
+    if (!allocation.ok)
+      throw new Error('allocate: ' + JSON.stringify(allocation.error));
+    const jobId = allocation.value.id;
+    const job = env.UPLOAD_JOB.get(env.UPLOAD_JOB.idFromString(jobId));
+    const opened = await job.openSession({
+      job_id: jobId,
+      cache: 'flow-repeat',
+      cache_id: reference.id,
+      incarnation: reference.incarnation,
+      chunks_key: allocation.value.chunks_key,
+      manifest,
+      compressed_size: chunks.reduce(
+        (sum, chunk) => sum + chunk.claim.compressed_size,
+        0,
+      ),
+      idempotency_key: 'idem-repeat1',
+      fingerprint: 'fp-repeat1',
+      chunks: chunks.map((chunk) => chunk.claim),
+    });
+    if (!opened.ok) throw new Error('open: ' + JSON.stringify(opened.error));
+    const unique = [...new Map(chunks.map((c) => [c.claim.raw_hash, c]))];
+    expect(opened.value.missing_chunks).toEqual(
+      unique.map(([hash]) => hash).sort(),
+    );
+    for (const [, chunk] of unique) {
+      await env.CACHE_BUCKET.put(
+        chunkKey(chunk.claim.raw_hash),
+        chunk.compressed,
+      );
+      expect((await job.chunkStored(chunk.claim.raw_hash)).ok).toBe(true);
+    }
+    const plan = await job.beginComplete();
+    if (!plan.ok || plan.value.kind !== 'inline')
+      throw new Error('plan: ' + JSON.stringify(plan));
+    expect(plan.value.nar.chunks.map((chunk) => chunk.raw_hash)).toEqual(
+      chunks.map((chunk) => chunk.claim.raw_hash),
+    );
+    const verified = await verifyStoredNar(env.CACHE_BUCKET, plan.value.nar);
+    expect(verified.nar_hash).toBe(rawHash);
+    const { result } = await storeManifest(env.CACHE_BUCKET, verified);
+    const published = await job.publishVerified(result, verified);
+    if (!published.ok)
+      throw new Error('publish: ' + JSON.stringify(published.error));
+    expect(published.value.status).toBe('READY');
+  }, 60000);
+
+  it('rejects conflicting declarations for the same chunk', async () => {
+    const { reference, coordinator } = await setupCache(
+      'flow-conflict',
+      'conflict1',
+    );
+    const { nar, compressed, rawHash } = await openUpload(
+      'flow-conflict',
+      reference,
+      coordinator,
+      'conflict1',
+    );
+    void nar;
+    void compressed;
+    const allocation = await coordinator.allocateUpload({
+      operation_id: 'op-upload-conflict1',
+      fingerprint: 'fpupload-conflict1',
+      store_hash: '2'.repeat(32),
+      nar_hash: rawHash,
+      now: 2,
+      merge: false,
+    });
+    if (!allocation.ok)
+      throw new Error('allocate: ' + JSON.stringify(allocation.error));
+    const jobId = allocation.value.id;
+    const job = env.UPLOAD_JOB.get(env.UPLOAD_JOB.idFromString(jobId));
+    const claim = {
+      raw_hash: rawHash,
+      raw_size: nar.length,
+      compressed_hash: await sha256Nix(compressed),
+      compressed_size: compressed.length,
+    };
+    const opened = await job.openSession({
+      job_id: jobId,
+      cache: 'flow-conflict',
+      cache_id: reference.id,
+      incarnation: reference.incarnation,
+      chunks_key: allocation.value.chunks_key,
+      manifest: {
+        cache: 'flow-conflict',
+        store_hash: '2'.repeat(32),
+        store_path: `/nix/store/${'2'.repeat(32)}-hello`,
+        nar_hash: rawHash,
+        nar_size: nar.length * 2,
+        references: [],
+        deriver: null,
+        ca: null,
+      },
+      compressed_size: compressed.length * 2,
+      idempotency_key: 'idem-conflict1',
+      fingerprint: 'fp-conflict1',
+      chunks: [claim, { ...claim, raw_size: claim.raw_size + 1 }],
+    });
+    expect(opened.ok).toBe(false);
+    if (opened.ok) throw new Error('expected conflicting chunks failure');
+    expect(opened.error.message).toMatch('conflicting');
+  }, 60000);
+
   it('rejects chunks that are not part of the upload', async () => {
     const { reference, coordinator } = await setupCache(
       'flow-unknown',

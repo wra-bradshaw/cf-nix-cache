@@ -82,6 +82,7 @@ export async function verifyStoredNar(
   const narWriter = narDigest.getWriter();
   const fileWriter = fileDigest.getWriter();
   const refs: ChunkRef[] = [];
+  const fetched = new Map<string, Uint8Array>();
   let narSize: number;
   let fileSize = 0;
   try {
@@ -96,16 +97,20 @@ export async function verifyStoredNar(
           `chunk ${chunk.raw_hash} has an invalid size`,
         );
       const key = chunkKey(chunk.raw_hash);
-      const object = await bucket.get(key);
-      if (!object) throw new InvalidEncodingError(`chunk ${key} is missing`);
-      if (
-        typeof object.size === 'number' &&
-        object.size > CHUNK_MAX_COMPRESSED_SIZE
-      )
-        throw new InvalidEncodingError(`chunk ${key} is too large`);
-      const compressed = new Uint8Array(await object.arrayBuffer());
-      if (compressed.byteLength > CHUNK_MAX_COMPRESSED_SIZE)
-        throw new InvalidEncodingError(`chunk ${key} is too large`);
+      let compressed = fetched.get(key);
+      if (!compressed) {
+        const object = await bucket.get(key);
+        if (!object) throw new InvalidEncodingError(`chunk ${key} is missing`);
+        if (
+          typeof object.size === 'number' &&
+          object.size > CHUNK_MAX_COMPRESSED_SIZE
+        )
+          throw new InvalidEncodingError(`chunk ${key} is too large`);
+        compressed = new Uint8Array(await object.arrayBuffer());
+        if (compressed.byteLength > CHUNK_MAX_COMPRESSED_SIZE)
+          throw new InvalidEncodingError(`chunk ${key} is too large`);
+        fetched.set(key, compressed);
+      }
       const raw = verifier.chunk(compressed, chunk.raw_size);
       const [rawHash, compressedHash] = await Promise.all([
         sha256Nix(raw),
@@ -190,11 +195,13 @@ async function readChunkList(
     )
       throw new InvalidEncodingError('invalid chunk in chunk list');
   }
-  if (
-    new Set(list.chunks.map((chunk) => chunk.raw_hash)).size !==
-    list.chunks.length
-  )
-    throw new InvalidEncodingError('chunk list declares duplicate chunks');
+  const chunkSizes = new Map<string, number>();
+  for (const chunk of list.chunks) {
+    const known = chunkSizes.get(chunk.raw_hash);
+    if (known === undefined) chunkSizes.set(chunk.raw_hash, chunk.raw_size);
+    else if (known !== chunk.raw_size)
+      throw new InvalidEncodingError('chunk list declares conflicting chunks');
+  }
   if (
     list.chunks.reduce((sum, chunk) => sum + chunk.raw_size, 0) !==
     list.nar_size
@@ -262,7 +269,7 @@ export async function readManifest(
     throw new InvalidEncodingError(
       `stored manifest ${key} has too many chunks (max ${CHUNK_LIST_MAX_CHUNKS})`,
     );
-  const seen = new Set<string>();
+  const seen = new Map<string, (typeof manifest.chunks)[number]>();
   let rawTotal = 0;
   for (const chunk of manifest.chunks) {
     assertValidRawHash(chunk.raw_hash);
@@ -284,11 +291,16 @@ export async function readManifest(
       chunk.compressed_size > CHUNK_MAX_COMPRESSED_SIZE
     )
       throw new InvalidEncodingError(`stored manifest ${key} is invalid`);
-    if (seen.has(chunk.raw_hash))
-      throw new InvalidEncodingError(
-        `stored manifest ${key} declares duplicate chunks`,
-      );
-    seen.add(chunk.raw_hash);
+    const known = seen.get(chunk.raw_hash);
+    if (known !== undefined) {
+      if (
+        known.raw_size !== chunk.raw_size ||
+        known.compressed_hash !== chunk.compressed_hash ||
+        known.compressed_size !== chunk.compressed_size ||
+        known.key !== chunk.key
+      )
+        throw new InvalidEncodingError(`stored manifest ${key} is invalid`);
+    } else seen.set(chunk.raw_hash, chunk);
     rawTotal += chunk.raw_size;
   }
   if (rawTotal !== manifest.nar_size)

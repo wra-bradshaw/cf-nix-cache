@@ -40,6 +40,35 @@ export interface ChunkClaim {
   compressed_size: number;
 }
 
+export function chunkClaimsConflict(chunks: ChunkClaim[]): string | null {
+  const seen = new Map<string, ChunkClaim>();
+  for (const chunk of chunks) {
+    const known = seen.get(chunk.raw_hash);
+    if (!known) {
+      seen.set(chunk.raw_hash, chunk);
+      continue;
+    }
+    if (
+      known.raw_size !== chunk.raw_size ||
+      known.compressed_hash !== chunk.compressed_hash ||
+      known.compressed_size !== chunk.compressed_size
+    )
+      return 'upload declares conflicting chunks';
+  }
+  return null;
+}
+
+export function uniqueCompressedSize(chunks: ChunkClaim[]): number {
+  const seen = new Set<string>();
+  let size = 0;
+  for (const chunk of chunks) {
+    if (seen.has(chunk.raw_hash)) continue;
+    seen.add(chunk.raw_hash);
+    size += chunk.compressed_size;
+  }
+  return size;
+}
+
 export async function verifyChunk(
   compressed: Uint8Array,
   claim: ChunkClaim,

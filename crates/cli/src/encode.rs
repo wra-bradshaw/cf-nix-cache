@@ -179,6 +179,38 @@ mod tests {
     }
 
     #[test]
+    fn repeated_chunks_are_uploaded_once_and_reassemble_in_order() {
+        use std::io::Write;
+        let raw = b"repeated-chunk-payload";
+        let compressed = zstd::encode_all(&raw[..], ZSTD_LEVEL).unwrap();
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&compressed).unwrap();
+        file.write_all(&compressed).unwrap();
+        let hash = sha256_nix(raw);
+        let compressed_hash = sha256_nix(&compressed);
+        let chunk = |offset: u64| EncodedChunk {
+            raw_hash: hash.clone(),
+            raw_size: raw.len() as u64,
+            compressed_hash: compressed_hash.clone(),
+            compressed_size: compressed.len() as u64,
+            offset,
+        };
+        let nar = EncodedNar {
+            file,
+            chunks: vec![chunk(0), chunk(compressed.len() as u64)],
+            nar_hash: String::new(),
+            nar_size: 0,
+        };
+        assert_eq!(nar.chunk_bytes(&hash).unwrap(), compressed);
+        let mut joined = Vec::new();
+        for chunk in &nar.chunks {
+            let bytes = nar.chunk_bytes(&chunk.raw_hash).unwrap();
+            joined.extend(zstd::decode_all(bytes.as_slice()).unwrap());
+        }
+        assert_eq!(joined, [raw.as_slice(), raw.as_slice()].concat());
+    }
+
+    #[test]
     fn a_small_nar_is_one_chunk() {
         let encoded = encode(&b"small"[..]).unwrap();
         assert_eq!(encoded.chunks.len(), 1);

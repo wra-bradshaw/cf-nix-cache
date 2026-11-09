@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { expect } from 'vitest';
 import type {
@@ -367,6 +368,49 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
         maxBuffer: narBufferBytes,
       }),
     ).toEqual(expectedNar);
+
+    const repeatedFile = path.join(fixture.scratch, 'repeated.bin');
+    writeFileSync(
+      repeatedFile,
+      Buffer.concat(
+        Array.from({ length: 6 }, (_, index) =>
+          Buffer.alloc(1024 * 1024, `abcdef${index % 2}`),
+        ),
+      ),
+    );
+    const added = run('nix', [
+      'store',
+      'add',
+      '--mode',
+      'flat',
+      '--name',
+      'repeated-content',
+      repeatedFile,
+    ]).trim();
+    expect(added).toMatch(/^\/nix\/store\//);
+    await runAsync(cli, ['--endpoint', base, 'push', cacheName, added], {
+      env: {
+        CF_NIX_CACHE_TOKEN: admin.token,
+        XDG_CONFIG_HOME: path.join(fixture.scratch, 'config-repeated'),
+      },
+    });
+    const addedHash = path.basename(added).slice(0, 32);
+    const addedNar = await request(
+      server,
+      base,
+      `/cache/${cacheName}/nar/${addedHash}.nar.zst`,
+    );
+    expect(addedNar.status).toBe(200);
+    expect(
+      execFileSync(zstd, ['-d', '-c'], {
+        input: Buffer.from(await addedNar.arrayBuffer()),
+        maxBuffer: narBufferBytes,
+      }),
+    ).toEqual(
+      execFileSync('nix-store', ['--dump', added], {
+        maxBuffer: narBufferBytes,
+      }),
+    );
 
     // CLIs from before client encoding are told to upgrade.
     const stagingUpload = await request(server, base, '/api/uploads', {

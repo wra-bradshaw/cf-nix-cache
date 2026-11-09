@@ -100,6 +100,34 @@ describe('verifying stored chunks', () => {
     ]);
   });
 
+  it('accepts a repeated chunk and reads back byte-identical', async () => {
+    const nar = narOfFile(encoder.encode('h'.repeat(6000)));
+    const { objects, nar: claim } = await stored(nar, [500, 1500, 2500]);
+    expect(claim.chunks).toHaveLength(4);
+    expect(claim.chunks[1]!.raw_hash).toBe(claim.chunks[2]!.raw_hash);
+    const store = bucket(objects);
+    const manifest = await verifyStoredNar(store, claim);
+    expect(manifest.chunks.map((chunk) => chunk.raw_hash)).toEqual(
+      claim.chunks.map((chunk) => chunk.raw_hash),
+    );
+    expect(manifest.nar_hash).toBe(claim.nar_hash);
+    expect(manifest.file_size).toBe(
+      manifest.chunks.reduce((sum, chunk) => sum + chunk.compressed_size, 0),
+    );
+    const { result, manifest: reread } = await storeManifest(store, manifest);
+    expect(result.deduplicated).toBe(false);
+    expect(reread.chunks).toHaveLength(4);
+    const roundTripped = await readManifest(
+      store,
+      result.manifest_key,
+      claim.nar_hash,
+      claim.nar_size,
+    );
+    expect(roundTripped.chunks.map((chunk) => chunk.raw_hash)).toEqual(
+      claim.chunks.map((chunk) => chunk.raw_hash),
+    );
+  });
+
   it('rejects chunks that do not make up the declared NAR', async () => {
     const nar = narOfFile(encoder.encode('hello'));
     const { objects, nar: claim } = await stored(nar, []);
@@ -183,6 +211,32 @@ describe('processing an upload from its chunk list', () => {
     expect(await processUpload(bucket(objects), job(claim))).toMatchObject({
       deduplicated: true,
     });
+  });
+
+  it('verifies a chunk list that repeats a chunk', async () => {
+    const nar = narOfFile(encoder.encode('h'.repeat(6000)));
+    const { objects, nar: claim } = await stored(nar, [500, 1500, 2500]);
+    expect(claim.chunks[1]!.raw_hash).toBe(claim.chunks[2]!.raw_hash);
+    objects.set('staging/job.chunks.json', JSON.stringify(chunkList(claim)));
+    const result = await processUpload(bucket(objects), job(claim));
+    expect(result.deduplicated).toBe(false);
+  });
+
+  it('rejects a chunk list that repeats a chunk inconsistently', async () => {
+    const nar = narOfFile(encoder.encode('h'.repeat(6000)));
+    const { objects, nar: claim } = await stored(nar, [500, 1500, 2500]);
+    const store = bucket(objects);
+    const list = chunkList(claim);
+    const conflicting = {
+      ...list,
+      chunks: list.chunks.map((chunk, index) =>
+        index === 2 ? { ...chunk, raw_size: chunk.raw_size + 1 } : chunk,
+      ),
+    };
+    objects.set('staging/job.chunks.json', JSON.stringify(conflicting));
+    await expect(processUpload(store, job(claim))).rejects.toThrow(
+      'conflicting',
+    );
   });
 
   it('rejects a chunk list that does not match the upload', async () => {

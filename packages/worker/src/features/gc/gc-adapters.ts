@@ -124,7 +124,7 @@ export function gcPorts(env: Env, runId: string): GcPorts {
           ChunkManifestSchema,
           await object.json<unknown>(),
         );
-        return manifest.chunks.map((chunk) => chunk.key);
+        return [...new Set(manifest.chunks.map((chunk) => chunk.key))];
       },
       list: async (prefix, cursor, limit) => {
         const page = await env.CACHE_BUCKET.list({
