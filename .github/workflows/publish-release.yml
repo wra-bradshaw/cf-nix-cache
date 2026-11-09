@@ -26,9 +26,9 @@ jobs:
       version: ${{ steps.release.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-nix
+      - uses: ./
         with:
-          cache-name: ${{ vars.CACHE_NAME }}
+          cache: ${{ vars.CACHE_NAME || 'will' }}
           endpoint: ${{ secrets.CF_NIX_CACHE_ENDPOINT }}
           public-key: ${{ secrets.CF_NIX_CACHE_PUBLIC_KEY }}
           pull-token: ${{ secrets.CF_NIX_CACHE_PULL_TOKEN }}
@@ -79,6 +79,35 @@ jobs:
         run: |
           gh release view "$TAG" >/dev/null 2>&1 \
             || gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes --title "$TAG"
+
+  binaries:
+    name: Release binary (${{ matrix.system }})
+    needs: publish
+    if: needs.publish.outputs.ready == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - { system: x86_64-linux, runner: ubuntu-24.04 }
+          - { system: aarch64-linux, runner: ubuntu-24.04-arm }
+          - { system: aarch64-darwin, runner: macos-latest }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./
+        with:
+          cache: ${{ vars.CACHE_NAME || 'will' }}
+          endpoint: ${{ secrets.CF_NIX_CACHE_ENDPOINT }}
+          public-key: ${{ secrets.CF_NIX_CACHE_PUBLIC_KEY }}
+          pull-token: ${{ secrets.CF_NIX_CACHE_PULL_TOKEN }}
+      - name: Upload the CLI to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET: cf-nix-cache-${{ matrix.system }}
+          TAG: v${{ needs.publish.outputs.version }}
+        run: |
+          nix build --print-build-logs .#cli-release
+          cp result/bin/cf-nix-cache "$ASSET"
+          gh release upload "$TAG" "$ASSET" --clobber
 
   update-template:
     name: Update public deployment template

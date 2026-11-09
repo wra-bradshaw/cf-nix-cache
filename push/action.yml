@@ -1,0 +1,14 @@
+name: cf-nix-cache push
+description: >-
+  Push what is left of the paths queued since the cf-nix-cache action, and fail
+  if any could not be pushed. Use `if: always()` so failed jobs push too.
+
+runs:
+  using: composite
+  steps:
+    - name: Finish pushing built paths
+      shell: bash
+      run: |
+        spool="$RUNNER_TEMP/cf-nix-cache"
+        [ -e "$spool/pid" ] || exit 0
+        "$spool/bin/cf-nix-cache" watch stop --spool "$spool"

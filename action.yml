@@ -1,0 +1,60 @@
+name: cf-nix-cache
+description: >-
+  Install Determinate Nix with a cf-nix-cache as a substituter and, given a push
+  token, push every path the job builds as it is built. End the job with
+  cf-nix-cache/push.
+branding:
+  icon: database
+  color: orange
+
+inputs:
+  cache:
+    description: Cache name.
+    required: true
+  endpoint:
+    description: Worker URL. If empty, Nix is installed without the cache.
+  public-key:
+    description: The cache's Nix signing public key.
+  pull-token:
+    description: Read token, for private caches.
+  push-token:
+    description: Token that can push to the cache. Without it, nothing is pushed.
+  extra-conf:
+    description: More nix.conf lines.
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare cf-nix-cache
+      id: prepare
+      shell: bash
+      env:
+        CACHE: ${{ inputs.cache }}
+        ENDPOINT: ${{ inputs.endpoint }}
+        PUBLIC_KEY: ${{ inputs.public-key }}
+        PULL_TOKEN: ${{ inputs.pull-token }}
+        PUSH_TOKEN: ${{ inputs.push-token }}
+      run: '"$GITHUB_ACTION_PATH/action/prepare.sh"'
+
+    - uses: DeterminateSystems/determinate-nix-action@v3
+      with:
+        extra-conf: |
+          ${{ steps.prepare.outputs.conf }}
+          ${{ inputs.extra-conf }}
+
+    - name: Start pushing built paths
+      if: steps.prepare.outputs.push == 'true'
+      shell: bash
+      env:
+        CACHE: ${{ inputs.cache }}
+        CF_NIX_CACHE_ENDPOINT: ${{ inputs.endpoint }}
+        CF_NIX_CACHE_TOKEN: ${{ inputs.push-token }}
+      run: |
+        set -euo pipefail
+        spool="$RUNNER_TEMP/cf-nix-cache"
+        if [ ! -x "$spool/bin/cf-nix-cache" ]; then
+          nix build --print-build-logs --out-link "$spool/cli" "$GITHUB_ACTION_PATH#cli"
+          mkdir -p "$spool/bin"
+          ln -sf "$spool/cli/bin/cf-nix-cache" "$spool/bin/cf-nix-cache"
+        fi
+        "$spool/bin/cf-nix-cache" watch start "$CACHE" --spool "$spool"

@@ -143,6 +143,32 @@ tell from the chunks a push reports missing whether content exists in any cache,
 not only in theirs. That is no concern when one owner runs the installation;
 give push tokens to others only if that is acceptable.
 
+## GitHub Actions
+
+The action installs Determinate Nix with the cache as a substituter. Given a
+push token, it pushes each path the job builds as soon as it is built, and
+`cf-nix-cache/push` at the end of the job pushes the rest, including after a
+failed build, and fails if any path couldn't be pushed. At a release tag the
+action downloads that release's CLI; at any other ref it builds the CLI.
+
+```yaml
+steps:
+  - uses: actions/checkout@v7
+  - uses: wra-bradshaw/cf-nix-cache@vX.Y.Z
+    with:
+      cache: my-cache
+      endpoint: ${{ secrets.CF_NIX_CACHE_ENDPOINT }}
+      public-key: ${{ secrets.CF_NIX_CACHE_PUBLIC_KEY }}
+      pull-token: ${{ secrets.CF_NIX_CACHE_PULL_TOKEN }} # private caches
+      push-token: ${{ secrets.CF_NIX_CACHE_TOKEN }}
+  - run: nix build --keep-going .#default
+  - uses: wra-bradshaw/cf-nix-cache/push@vX.Y.Z
+    if: always()
+```
+
+Outside Actions, `cf-nix-cache watch run my-cache --spool DIR` does the same
+for any Nix daemon whose `post-build-hook` appends `$OUT_PATHS` to `DIR/queue`.
+
 ## Upstream caches
 
 `push` skips paths signed with the key of a cache's upstreams, because clients can
