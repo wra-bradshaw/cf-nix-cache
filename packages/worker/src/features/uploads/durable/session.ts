@@ -72,6 +72,8 @@ export async function writeChunkList(
   });
 }
 
+export const INLINE_VERIFY_STALL_MS = 10 * 60 * 1000;
+
 const IN_PROGRESS: UploadState[] = ['QUEUED', 'PROCESSING', 'PUBLISHING'];
 const TERMINAL: UploadState[] = ['READY', 'FAILED', 'ABORTED'];
 
@@ -520,35 +522,71 @@ export class UploadSession {
           chunks_key: row.chunks_key,
           nar,
         });
-      if (row.manifest.nar_size <= inlineVerifyLimit(this.env))
+      if (row.manifest.nar_size <= inlineVerifyLimit(this.env)) {
+        await this.ctx.storage.setAlarm(Date.now() + INLINE_VERIFY_STALL_MS);
         return ok({ kind: 'inline', chunks_key: row.chunks_key, nar });
-      await writeChunkList(this.env.CACHE_BUCKET, row.chunks_key, nar);
-      if (!this.storage.setQueued(row.job_id)) {
-        await this.env.CACHE_BUCKET.delete(row.chunks_key).catch(
-          (error: unknown) => console.error('chunk list cleanup failed', error),
-        );
-        const current = this.storage.row();
-        if (!current) return failure('not_found', 'upload not found', 404);
-        return ok({
-          kind: 'done',
-          state: toStateResponse(current),
-        });
       }
-      const queued = this.storage.row();
-      if (!queued) return failure('not_found', 'upload not found', 404);
-      try {
-        await ensureWorkflow(
-          this.env.PROCESS_UPLOAD!,
-          row.job_id,
-          toProcessJob(queued),
-        );
-      } catch (error) {
-        console.error('upload workflow reconciliation failed', error);
-      }
-      const done = this.storage.row();
-      if (!done) return failure('not_found', 'upload not found', 404);
-      return ok({ kind: 'done', state: toStateResponse(done) });
+      return this.handOffToWorkflow(row);
     });
+  }
+
+  scheduleStallRecovery(): Promise<void> {
+    return this.serialized(async () => {
+      if (this.storage.row()?.state !== 'COMPLETING' || !this.isSession())
+        return;
+      if ((await this.ctx.storage.getAlarm()) === null)
+        await this.ctx.storage.setAlarm(Date.now() + INLINE_VERIFY_STALL_MS);
+    });
+  }
+
+  recoverStalledCompletion(): Promise<void> {
+    return this.serialized(async () => {
+      const row = this.storage.row();
+      if (row?.state !== 'COMPLETING' || !this.isSession()) return;
+      console.warn({
+        message: 'inline verification stalled; handing it to the workflow',
+        job_id: row.job_id,
+        nar_size: row.manifest.nar_size,
+      });
+      const handedOff = await this.handOffToWorkflow(row);
+      if (!handedOff.ok)
+        console.error({
+          message: 'handing a stalled upload to the workflow failed',
+          job_id: row.job_id,
+          error: handedOff.error,
+        });
+    });
+  }
+
+  private async handOffToWorkflow(
+    row: UploadRow,
+  ): Promise<RpcResult<CompletionPlan>> {
+    await writeChunkList(this.env.CACHE_BUCKET, row.chunks_key, this.nar(row));
+    if (!this.storage.setQueued(row.job_id)) {
+      await this.env.CACHE_BUCKET.delete(row.chunks_key).catch(
+        (error: unknown) => console.error('chunk list cleanup failed', error),
+      );
+      const current = this.storage.row();
+      if (!current) return failure('not_found', 'upload not found', 404);
+      return ok({
+        kind: 'done',
+        state: toStateResponse(current),
+      });
+    }
+    const queued = this.storage.row();
+    if (!queued) return failure('not_found', 'upload not found', 404);
+    try {
+      await ensureWorkflow(
+        this.env.PROCESS_UPLOAD!,
+        row.job_id,
+        toProcessJob(queued),
+      );
+    } catch (error) {
+      console.error('upload workflow reconciliation failed', error);
+    }
+    const done = this.storage.row();
+    if (!done) return failure('not_found', 'upload not found', 404);
+    return ok({ kind: 'done', state: toStateResponse(done) });
   }
 
   publishVerified(

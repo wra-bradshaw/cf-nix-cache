@@ -109,14 +109,20 @@ export class UploadJob extends RpcOnlyDurableObject {
     return result;
   }
 
-  state(): Promise<RpcResult<UploadStateResponse>> {
+  async state(): Promise<RpcResult<UploadStateResponse>> {
+    await this.session.scheduleStallRecovery();
     return this.lifecycle.state();
+  }
+
+  async alarm(): Promise<void> {
+    await this.session.recoverStalledCompletion();
   }
 
   private async settled<T>(result: Promise<T>): Promise<T> {
     const value = await result;
     const row = this.storage.row();
     if (row && TERMINAL.includes(row.state)) {
+      await this.ctx.storage.deleteAlarm();
       try {
         const cache = await getCache(this.env, row.cache);
         if (cache.reference.id === row.cache_id)

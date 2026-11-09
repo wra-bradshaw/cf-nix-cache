@@ -1,10 +1,13 @@
 import { zstdCompressSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { env } from 'cloudflare:workers';
+import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { chunkKey, sha256Nix } from '../encoding';
-import { verifyStoredNar, storeManifest } from '../verify-stored';
+import { chunkList, verifyStoredNar, storeManifest } from '../verify-stored';
 import { narOfFile } from '../test-helpers';
 import type { CacheCoordinator } from '../../cache/durable/coordinator';
+import type { UploadJob } from './job';
+import { INLINE_VERIFY_STALL_MS } from './session';
 
 const encoder = new TextEncoder();
 
@@ -405,5 +408,132 @@ describe('upload session flow through real DOs', () => {
     if (!rejected.ok) throw new Error('reject: ' + JSON.stringify(rejected));
     expect(rejected.value.status).toBe('FAILED');
     expect(rejected.value.error).toContain('bad chunk');
+  }, 60000);
+});
+
+type JobStub = DurableObjectStub<UploadJob>;
+
+async function driveToInlineCompleting(tag: string) {
+  const cache = `flow-stall-${tag}`;
+  const { reference, coordinator } = await setupCache(cache, `stall-${tag}`);
+  const driven = await openUpload(
+    cache,
+    reference,
+    coordinator,
+    `stall-${tag}`,
+  );
+  await env.CACHE_BUCKET.put(chunkKey(driven.rawHash), driven.compressed);
+  expect((await driven.job.chunkStored(driven.rawHash)).ok).toBe(true);
+  const plan = await driven.job.beginComplete();
+  if (!plan.ok || plan.value.kind !== 'inline')
+    throw new Error('plan: ' + JSON.stringify(plan));
+  return { ...driven, chunksKey: plan.value.chunks_key, nar: plan.value.nar };
+}
+
+async function readAlarm(job: JobStub): Promise<number | null> {
+  return runInDurableObject(
+    job,
+    async (_instance: unknown, state: DurableObjectState) => {
+      return state.storage.getAlarm();
+    },
+  );
+}
+
+async function clearAlarm(job: JobStub): Promise<void> {
+  await runInDurableObject(
+    job,
+    async (_instance: unknown, state: DurableObjectState) => {
+      await state.storage.deleteAlarm();
+    },
+  );
+}
+
+async function settleState(job: JobStub) {
+  const state = await job.state();
+  if (!state.ok) throw new Error('state: ' + JSON.stringify(state.error));
+  return state.value;
+}
+
+describe('inline verification stall recovery', () => {
+  it('schedules an alarm when inline completion starts', async () => {
+    const { job } = await driveToInlineCompleting('alarm-set');
+    const alarm = await readAlarm(job);
+    expect(alarm).not.toBeNull();
+    expect(
+      Math.abs(alarm! - (Date.now() + INLINE_VERIFY_STALL_MS)),
+    ).toBeLessThan(60_000);
+  }, 60000);
+
+  it('hands a stalled inline completion to the workflow when the alarm fires', async () => {
+    const { job, jobId, chunksKey, nar } =
+      await driveToInlineCompleting('alarm-fire');
+    expect(await runDurableObjectAlarm(job)).toBe(true);
+    expect((await settleState(job)).status).toBe('QUEUED');
+    const stored = await env.CACHE_BUCKET.get(chunksKey);
+    expect(stored).not.toBeNull();
+    expect(await stored!.json()).toEqual(chunkList(nar));
+    const instance = await env.PROCESS_UPLOAD.get(jobId);
+    expect((await instance.status()).status).toBe('running');
+  }, 60000);
+
+  it('clears the alarm once the upload finishes and ignores a stray one', async () => {
+    const ready = await driveToInlineCompleting('alarm-ready');
+    const verified = await verifyStoredNar(env.CACHE_BUCKET, ready.nar);
+    const { result } = await storeManifest(env.CACHE_BUCKET, verified);
+    const published = await ready.job.publishVerified(result, verified);
+    if (!published.ok)
+      throw new Error('publish: ' + JSON.stringify(published.error));
+    expect(published.value.status).toBe('READY');
+    expect(await runDurableObjectAlarm(ready.job)).toBe(false);
+    await runInDurableObject(
+      ready.job,
+      (_instance, state: DurableObjectState) =>
+        state.storage.setAlarm(Date.now() + 60_000),
+    );
+    expect(await runDurableObjectAlarm(ready.job)).toBe(true);
+    expect((await settleState(ready.job)).status).toBe('READY');
+
+    const failed = await driveToInlineCompleting('alarm-failed');
+    const rejected = await failed.job.reject('stalled test');
+    if (!rejected.ok)
+      throw new Error('reject: ' + JSON.stringify(rejected.error));
+    expect(rejected.value.status).toBe('FAILED');
+    expect(await runDurableObjectAlarm(failed.job)).toBe(false);
+    await runInDurableObject(
+      failed.job,
+      (_instance, state: DurableObjectState) =>
+        state.storage.setAlarm(Date.now() + 60_000),
+    );
+    expect(await runDurableObjectAlarm(failed.job)).toBe(true);
+    expect((await settleState(failed.job)).status).toBe('FAILED');
+    expect(await env.CACHE_BUCKET.get(failed.chunksKey)).toBeNull();
+  }, 60000);
+
+  it('reschedules a missing alarm from state() without moving an existing one', async () => {
+    const { job } = await driveToInlineCompleting('alarm-reschedule');
+    await clearAlarm(job);
+    expect(await readAlarm(job)).toBeNull();
+    expect((await settleState(job)).status).toBe('COMPLETING');
+    const first = await readAlarm(job);
+    expect(first).not.toBeNull();
+    expect(
+      Math.abs(first! - (Date.now() + INLINE_VERIFY_STALL_MS)),
+    ).toBeLessThan(60_000);
+    expect((await settleState(job)).status).toBe('COMPLETING');
+    expect(await readAlarm(job)).toBe(first);
+  }, 60000);
+
+  it('keeps a workflow-owned upload queued when publishVerified arrives late', async () => {
+    const driven = await driveToInlineCompleting('late-publish');
+    const verified = await verifyStoredNar(env.CACHE_BUCKET, driven.nar);
+    const { result } = await storeManifest(env.CACHE_BUCKET, verified);
+    expect(await runDurableObjectAlarm(driven.job)).toBe(true);
+    expect((await settleState(driven.job)).status).toBe('QUEUED');
+    const published = await driven.job.publishVerified(result, verified);
+    if (!published.ok)
+      throw new Error('publish: ' + JSON.stringify(published.error));
+    expect(['QUEUED', 'PROCESSING', 'PUBLISHING', 'READY']).toContain(
+      published.value.status,
+    );
   }, 60000);
 });
