@@ -1,5 +1,11 @@
 # cf-nix-cache
 
+## 0.9.0
+
+### Minor Changes
+
+- 8102264: Allow uploads whose chunk list repeats a chunk. NARs with repeated content chunk to the same bytes more than once, which the Worker rejected; the ordered list now keeps repeats for reconstruction while storage, quota, and verification account each distinct chunk once.
+
 ## 0.8.0
 
 ### Minor Changes
