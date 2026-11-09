@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::{args::PageArgs, config::Config};
 
+#[derive(Clone)]
 pub(crate) struct Api {
     client: ClientWithMiddleware,
     retry_client: ClientWithMiddleware,

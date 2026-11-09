@@ -67,6 +67,39 @@ pub(crate) enum CommandKind {
     ConfigureNix {
         cache: CacheName,
     },
+    /// Push the paths a Nix post-build hook queues as builds finish.
+    ///
+    /// The hook appends each build's $OUT_PATHS to SPOOL/queue.
+    Watch {
+        #[command(subcommand)]
+        command: WatchCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum WatchCommand {
+    /// Push queued paths until `watch stop`.
+    Run(WatchArgs),
+    /// `watch run` in the background, logging to SPOOL/log.
+    Start(WatchArgs),
+    /// Push what is left, wait for the watcher, and fail if any path wasn't pushed.
+    Stop {
+        #[arg(long)]
+        spool: std::path::PathBuf,
+    },
+}
+
+#[derive(clap::Args)]
+pub(crate) struct WatchArgs {
+    pub(crate) cache: CacheName,
+    #[arg(long)]
+    pub(crate) spool: std::path::PathBuf,
+    /// Store paths to upload at the same time.
+    #[arg(long, short, default_value = "16")]
+    pub(crate) jobs: NonZeroUsize,
+    /// How often to check an empty queue.
+    #[arg(long, default_value = "5s")]
+    pub(crate) interval: humantime::Duration,
 }
 
 #[derive(Subcommand)]

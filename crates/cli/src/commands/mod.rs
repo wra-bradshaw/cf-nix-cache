@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::num::NonZeroU64;
 
 use crate::{
-    args::{Args, CommandKind, TokenOutput},
+    args::{Args, CommandKind, TokenOutput, WatchCommand},
     client::Api,
     config::{config_path, save_config, Config},
 };
@@ -14,6 +14,7 @@ mod admin;
 mod configure_nix;
 mod gc;
 mod push;
+mod watch;
 
 pub(crate) async fn run(args: Args, config: Config) -> Result<()> {
     let api = || Api::new(args.endpoint.clone(), &config);
@@ -62,6 +63,38 @@ pub(crate) async fn run(args: Args, config: Config) -> Result<()> {
             .await
         }
         CommandKind::ConfigureNix { cache } => configure_nix::configure_nix(api()?, cache).await,
+        CommandKind::Watch { command } => match command {
+            WatchCommand::Run(watch) => {
+                watch::run(
+                    api()?,
+                    watch.cache,
+                    watch.spool,
+                    watch.jobs,
+                    watch.interval.into(),
+                )
+                .await
+            }
+            WatchCommand::Start(watch) => {
+                api()?;
+                let mut run_args = Vec::new();
+                if let Some(endpoint) = &args.endpoint {
+                    run_args.extend(["--endpoint".into(), endpoint.clone()]);
+                }
+                run_args.extend([
+                    "watch".into(),
+                    "run".into(),
+                    watch.cache.to_string(),
+                    "--spool".into(),
+                    watch.spool.display().to_string(),
+                    "--jobs".into(),
+                    watch.jobs.to_string(),
+                    "--interval".into(),
+                    watch.interval.to_string(),
+                ]);
+                watch::start(&run_args, &watch.spool)
+            }
+            WatchCommand::Stop { spool } => watch::stop(&spool).await,
+        },
     }
 }
 
