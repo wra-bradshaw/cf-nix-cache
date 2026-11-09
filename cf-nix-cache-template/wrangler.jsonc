@@ -58,6 +58,15 @@
       "schedules": ["0 3 * * SUN"],
       "limits": { "steps": 25000 },
     },
+    {
+      "name": "evict-cache",
+      "binding": "EVICT_CACHE",
+      "class_name": "EvictCacheWorkflow",
+      // Daily at 04:00 UTC: retention eviction, and a check that no cache
+      // over its quota watermark was missed.
+      "schedules": ["0 4 * * *"],
+      "limits": { "steps": 25000 },
+    },
   ],
   "vars": {
     "CF_NIX_CACHE_CONFIG_SCHEMA": "1",

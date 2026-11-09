@@ -21,7 +21,13 @@ export interface PathRecord {
 
 export type CacheMutation =
   | { kind: 'upsert'; record: PathRecord }
-  | { kind: 'delete'; store_hash: string }
+  | {
+      kind: 'delete';
+      store_hash: string;
+      // Eviction only: refuse the delete if the path was used at or after this
+      // time, so a path read while it is being evicted stays.
+      unused_before?: number;
+    }
   | { kind: 'clear' };
 
 export interface PreparedMutation {

@@ -120,6 +120,11 @@ upgrading from a release without it, copy these from this template's
 workflow are present. The first scheduled run deletes objects left unreferenced
 by earlier path and cache deletions; preview it with `cf-nix-cache gc run --dry-run`.
 
+Quota eviction needs the `evict-cache` workflow, which older deployments also
+lack. Add it to your `wrangler.jsonc` from this template: name `evict-cache`,
+binding `EVICT_CACHE`, class `EvictCacheWorkflow`, schedule `["0 4 * * *"]` and
+`limits.steps` 25000. Deploys fail until it is present.
+
 ### Upgrading from a release with the processor container
 
 Earlier releases verified large uploads in a Cloudflare Container. Uploads are

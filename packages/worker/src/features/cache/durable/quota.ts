@@ -2,6 +2,14 @@ import type { QuotaReservation } from '../types';
 import { type RpcResult, failure, ok, conflict } from '../../../shared/rpc';
 import { first, text, integer, type SqlRow } from '../../../shared/sql';
 import { lifecycleFailure } from '../access';
+import type { CoordinatorEviction } from './coordinator-eviction';
+
+// `quota_reserved` is a partial index on RESERVED rows, so this reads only
+// the reservations in flight, not every operation the cache has had.
+export const QUOTA_RESERVED_INDEX =
+  "CREATE INDEX IF NOT EXISTS quota_reserved ON quota_operations(status) WHERE status = 'RESERVED';";
+const PENDING_RESERVATIONS =
+  "SELECT COALESCE(SUM(delta), 0) AS value FROM quota_operations WHERE status = 'RESERVED' AND delta > 0";
 
 function quotaStatus(value: string): QuotaReservation['status'] {
   if (value === 'RESERVED' || value === 'FINALIZED' || value === 'ABORTED')
@@ -10,7 +18,10 @@ function quotaStatus(value: string): QuotaReservation['status'] {
 }
 
 export class CoordinatorQuota {
-  constructor(private readonly ctx: DurableObjectState) {}
+  constructor(
+    private readonly ctx: DurableObjectState,
+    private readonly eviction: CoordinatorEviction,
+  ) {}
 
   async reserve(input: {
     operation_id: string;
@@ -64,9 +75,7 @@ export class CoordinatorQuota {
         )
           throw new Error('quota_bytes is not a valid quota');
         const pendingRow = first(
-          this.ctx.storage.sql.exec<SqlRow>(
-            "SELECT COALESCE(SUM(CASE WHEN status = 'RESERVED' AND delta > 0 THEN delta ELSE 0 END), 0) AS value FROM quota_operations",
-          ),
+          this.ctx.storage.sql.exec<SqlRow>(PENDING_RESERVATIONS),
         );
         if (!pendingRow) throw new Error('quota pending total is missing');
         pending = integer(pendingRow, 'value');
@@ -118,9 +127,7 @@ export class CoordinatorQuota {
       )
         throw new Error('quota_bytes is not a valid quota');
       const pendingRow = first(
-        this.ctx.storage.sql.exec<SqlRow>(
-          "SELECT COALESCE(SUM(CASE WHEN status = 'RESERVED' AND delta > 0 THEN delta ELSE 0 END), 0) AS value FROM quota_operations",
-        ),
+        this.ctx.storage.sql.exec<SqlRow>(PENDING_RESERVATIONS),
       );
       if (!pendingRow) throw new Error('quota pending total is missing');
       const pending = integer(pendingRow, 'value');
@@ -135,6 +142,12 @@ export class CoordinatorQuota {
   }
 
   async finalize(input: { operation_id: string }): Promise<RpcResult<void>> {
+    const result = this.finalizeOperation(input);
+    if (result.ok) await this.eviction.afterGrowth();
+    return result;
+  }
+
+  private finalizeOperation(input: { operation_id: string }): RpcResult<void> {
     return this.ctx.storage.transactionSync(() => {
       const row = first(
         this.ctx.storage.sql.exec<SqlRow>(
@@ -206,6 +219,44 @@ export class CoordinatorQuota {
         return failure('corrupt_cache', 'cache quota record is corrupt', 500);
       return ok();
     });
+  }
+
+  // Of these operations, those no longer reserved (or never recorded): their
+  // index rows can go, since a retry could not be charged twice.
+  async settledOperations(input: {
+    operation_ids: string[];
+  }): Promise<RpcResult<string[]>> {
+    const settled: string[] = [];
+    for (const operationId of input.operation_ids) {
+      const row = first(
+        this.ctx.storage.sql.exec<SqlRow>(
+          'SELECT status FROM quota_operations WHERE operation_id = ?',
+          operationId,
+        ),
+      );
+      try {
+        if (!row || quotaStatus(text(row, 'status')) !== 'RESERVED')
+          settled.push(operationId);
+      } catch {
+        return failure('corrupt_cache', 'cache quota record is corrupt', 500);
+      }
+    }
+    return ok(settled);
+  }
+
+  // Called only after the index shard has forgotten the same operations, so
+  // no committed index row is left whose charge a retry could repeat.
+  async forgetOperations(input: {
+    operation_ids: string[];
+  }): Promise<RpcResult<void>> {
+    this.ctx.storage.transactionSync(() => {
+      for (const operationId of input.operation_ids)
+        this.ctx.storage.sql.exec(
+          "DELETE FROM quota_operations WHERE operation_id = ? AND status != 'RESERVED'",
+          operationId,
+        );
+    });
+    return ok();
   }
 
   private finalizeRow(

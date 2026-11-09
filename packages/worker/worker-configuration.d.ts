@@ -31,6 +31,9 @@ interface __BaseEnv_Env {
       import('./src/index').GarbageCollectWorkflow['run']
     >[0]['payload']
   >;
+  EVICT_CACHE: Workflow<
+    Parameters<import('./src/index').EvictCacheWorkflow['run']>[0]['payload']
+  >;
 }
 declare namespace Cloudflare {
   interface GlobalProps {
@@ -75,6 +78,9 @@ declare namespace Cloudflare {
       Parameters<
         import('./src/index').GarbageCollectWorkflow['run']
       >[0]['payload']
+    >;
+    EVICT_CACHE: Workflow<
+      Parameters<import('./src/index').EvictCacheWorkflow['run']>[0]['payload']
     >;
   }
   interface Env extends __BaseEnv_Env {}

@@ -60,15 +60,35 @@ should not upload paths signed with these keys, and the server does not enforce
 it. `GET /api/caches/{cache}/upstreams` returns the list to anyone with a push
 grant.
 
-`PATCH /api/caches/{cache}/config` accepts `public`, `retention_days` and
-`upstream_cache_key_names`, and changes only the fields it is given. With `retention_days` above zero, garbage
-collection evicts paths not used for that many days; the default of 0 keeps them
-indefinitely. `POST /api/gc` requires an admin grant for `*` and starts a run,
-accepting optional `dry_run` and `grace_seconds`. It returns `202` with a
-`run_id`. A run does nothing if another is active. `GET /api/gc` reports the
-active run and the last finished one. In a dry-run summary, `deleted_objects`
-and `deleted_bytes` are what would be deleted, not counting objects that the
-reported evictions would also free.
+`PATCH /api/caches/{cache}/config` accepts `public`, `retention_days`,
+`eviction_min_age_days` and `upstream_cache_key_names`, and changes only the
+fields it is given. `retention_days` evicts paths not used for that many days;
+the default of 0 keeps them indefinitely. `eviction_min_age_days` (default 30)
+is the youngest a path may be and still be evicted when the cache nears its
+quota; 0 turns quota eviction off.
+
+A cache response also carries `eviction_min_age_days` and `last_eviction`: the
+last `evict-cache` run's result, or null. The result has `run_id`,
+`started_at`, `finished_at`, `target_bytes`, `cutoff`, `evicted_paths`,
+`evicted_bytes`, `skipped_paths` and `floor_reached`.
+
+When a finalized publication puts a cache over 90% of its quota, the
+`evict-cache` Workflow starts a run that evicts least recently used paths until
+the cache is back under 80%, never evicting a path used within
+`eviction_min_age_days`. A path read during a run stays, and a push never waits
+for the run. If every path old enough is evicted and the cache is still over
+its target, `floor_reached` is true, and pushes fail with `quota_exceeded` at
+100%. A daily run at 04:00 UTC applies `retention_days` and checks every cache
+for a missed quota trigger. Eviction removes index rows, so quota is free at
+once; garbage collection deletes the objects later.
+
+`POST /api/gc` requires an admin grant for `*` and starts a run, accepting
+optional `dry_run` and `grace_seconds`. It returns `202` with a `run_id`. A run
+does nothing if another is active. `GET /api/gc` reports the active run and the
+last finished one. Garbage collection only deletes objects that no cache
+indexes; it does not evict paths. In a dry-run summary, `deleted_objects` and
+`deleted_bytes` are what would be deleted, and `evicted_paths` and
+`skipped_paths` are always 0.
 
 ## Uploads
 

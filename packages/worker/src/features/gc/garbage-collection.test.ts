@@ -47,14 +47,25 @@ interface Path {
   last_accessed: number;
 }
 
+interface Operation {
+  prefix: string;
+  id: string;
+  settled: boolean;
+}
+
 class World {
   readonly ledger = realLedger();
   readonly objects = new Map<string, { size: number; uploaded: number }>();
   readonly manifests = new Map<string, string[]>();
   readonly caches = new Map<GcCache, Path[]>();
   readonly deletions: string[][] = [];
-  readonly events: string[] = [];
-  readonly busy = new Set<string>();
+  // Index and quota operation rows the catalog reports as stale.
+  readonly operations: Operation[] = [];
+  readonly forgottenShard: { prefix: string; ids: string[] }[] = [];
+  readonly forgottenQuota: string[][] = [];
+  // Upload jobs and allocation rows the catalog reports as stale.
+  readonly uploads = new Map<string, { running: boolean }>();
+  readonly forgottenUploads: string[][] = [];
   onStep: (name: string) => void = () => undefined;
   private clock = NOW;
 
@@ -92,34 +103,56 @@ class World {
             .map((path) => path.manifest),
           next_after: null,
         }),
-        expiredPaths: async (cache, prefix, before, after, limit) => {
-          const hashes = this.caches
-            .get(cache)!
+        staleOperations: async (_cache, prefix, _before, after, limit) => {
+          const ids = this.operations
             .filter(
-              (path) =>
-                path.hash.startsWith(prefix) &&
-                path.last_accessed < before &&
-                path.hash > (after ?? ''),
+              (operation) =>
+                operation.prefix === prefix && operation.id > (after ?? ''),
             )
-            .map((path) => path.hash)
+            .map((operation) => operation.id)
             .sort()
             .slice(0, limit);
           return {
-            hashes,
-            next_after: hashes.length === limit ? hashes.at(-1)! : null,
+            operation_ids: ids,
+            next_after: ids.length === limit ? ids.at(-1)! : null,
           };
         },
-        evict: async (cache, hash) => {
-          if (this.busy.has(hash)) return false;
-          const paths = this.caches.get(cache)!;
-          this.caches.set(
-            cache,
-            paths.filter((path) => path.hash !== hash),
-          );
+        settledOperations: async (_cache, operationIds) =>
+          operationIds.filter(
+            (id) =>
+              this.operations.find((operation) => operation.id === id)
+                ?.settled ?? true,
+          ),
+        forgetShardOperations: async (_cache, prefix, operationIds) => {
+          this.forgottenShard.push({ prefix, ids: operationIds });
+          for (const id of operationIds) {
+            const index = this.operations.findIndex(
+              (operation) => operation.prefix === prefix && operation.id === id,
+            );
+            if (index >= 0) this.operations.splice(index, 1);
+          }
+        },
+        forgetQuotaOperations: async (_cache, operationIds) => {
+          this.forgottenQuota.push(operationIds);
+        },
+        staleUploads: async (_cache, _before, after, limit) => {
+          const ids = [...this.uploads.keys()]
+            .filter((id) => id > (after ?? ''))
+            .sort()
+            .slice(0, limit);
+          return {
+            upload_ids: ids,
+            next_after: ids.length === limit ? ids.at(-1)! : null,
+          };
+        },
+        purgeUpload: async (uploadId) => {
+          const upload = this.uploads.get(uploadId)!;
+          if (upload.running) return false;
+          this.uploads.delete(uploadId);
           return true;
         },
-        auditEviction: async (cache, _id, paths) => {
-          this.events.push(`audit ${cache.name} ${paths}`);
+        forgetUploads: async (_cache, uploadIds) => {
+          this.forgottenUploads.push(uploadIds);
         },
       },
       objects: {
@@ -150,8 +183,8 @@ class World {
     };
   }
 
-  cache(retention_days = 0, name = 'cache'): GcCache {
-    const cache = { name, incarnation: `${name}-inc`, retention_days };
+  cache(name = 'cache'): GcCache {
+    const cache = { name, incarnation: `${name}-inc` };
     this.caches.set(cache, []);
     return cache;
   }
@@ -231,8 +264,8 @@ describe('garbage collection', () => {
 
   it('keeps objects shared with another cache', async () => {
     const world = new World();
-    const first = world.cache(0, 'first');
-    const second = world.cache(0, 'second');
+    const first = world.cache('first');
+    const second = world.cache('second');
     world.store('manifests/m', ['chunks/c']);
     world.publish(first, 'aa', 'manifests/m');
     world.publish(second, 'bb', 'manifests/m');
@@ -260,7 +293,7 @@ describe('garbage collection', () => {
 
   it('changes nothing in a dry run, and reports what it would do', async () => {
     const world = new World();
-    const cache = world.cache(7);
+    const cache = world.cache();
     world.store('manifests/old', ['chunks/old']);
     world.publish(cache, 'ab', 'manifests/old', OLD);
     world.store('manifests/dead', ['chunks/dead']);
@@ -269,10 +302,12 @@ describe('garbage collection', () => {
 
     expect(world.deletions).toEqual([]);
     expect(world.caches.get(cache)).toHaveLength(1);
-    expect(world.events).toEqual([]);
+    expect(world.forgottenShard).toEqual([]);
+    expect(world.forgottenQuota).toEqual([]);
+    expect(world.forgottenUploads).toEqual([]);
     expect(summary).toMatchObject({
       dry_run: true,
-      evicted_paths: 1,
+      evicted_paths: 0,
       deleted_objects: 2,
     });
   });
@@ -297,109 +332,81 @@ describe('garbage collection', () => {
   });
 });
 
-describe('retention', () => {
-  it('evicts only expired paths, and sweeps what they alone used', async () => {
+describe('pruning old operations', () => {
+  it('forgets settled operations from the shard and the quota ledger', async () => {
     const world = new World();
-    const cache = world.cache(7);
-    world.store('manifests/old', ['chunks/old', 'chunks/shared']);
-    world.store('manifests/new', ['chunks/new', 'chunks/shared']);
-    world.publish(cache, 'aa', 'manifests/old', OLD);
-    world.publish(cache, 'bb', 'manifests/new', NOW);
+    world.cache(); // Pruning runs once per live cache.
+    world.operations.push(
+      { prefix: 'ab', id: 'op-a', settled: true },
+      { prefix: 'ab', id: 'op-b', settled: true },
+    );
 
-    const summary = await world.run();
+    await world.run();
 
-    expect(world.caches.get(cache)!.map((path) => path.manifest)).toEqual([
-      'manifests/new',
+    expect(world.forgottenShard).toEqual([
+      { prefix: 'ab', ids: ['op-a', 'op-b'] },
     ]);
-    world.assertServable('manifests/new');
-    expect(world.objects.has('manifests/old')).toBe(false);
-    expect(world.objects.has('chunks/old')).toBe(false);
-    expect(summary).toMatchObject({ evicted_paths: 1 });
-    expect(world.events).toEqual(['audit cache 1']);
+    expect(world.forgottenQuota).toEqual([['op-a', 'op-b']]);
+    expect(world.operations).toEqual([]);
   });
 
-  it('leaves a cache without retention alone', async () => {
+  it('keeps operations whose quota row is still reserved', async () => {
     const world = new World();
-    const cache = world.cache(0);
-    world.store('manifests/old', ['chunks/old']);
-    world.publish(cache, 'aa', 'manifests/old', OLD);
+    world.cache(); // Pruning runs once per live cache.
+    world.operations.push(
+      { prefix: 'ab', id: 'op-reserved', settled: false },
+      { prefix: 'ab', id: 'op-settled', settled: true },
+    );
+
     await world.run();
-    expect(world.caches.get(cache)).toHaveLength(1);
-    world.assertServable('manifests/old');
+
+    expect(world.forgottenShard).toEqual([
+      { prefix: 'ab', ids: ['op-settled'] },
+    ]);
+    expect(world.forgottenQuota).toEqual([['op-settled']]);
+    expect(world.operations.map((operation) => operation.id)).toEqual([
+      'op-reserved',
+    ]);
+  });
+
+  it('forgets nothing in a dry run', async () => {
+    const world = new World();
+    world.cache(); // Pruning runs once per live cache.
+    world.operations.push({ prefix: 'ab', id: 'op-a', settled: true });
+    world.uploads.set('upload-a', { running: false });
+
+    await world.run({ dry_run: true });
+
+    expect(world.forgottenShard).toEqual([]);
+    expect(world.forgottenQuota).toEqual([]);
+    expect(world.forgottenUploads).toEqual([]);
+    expect(world.uploads.has('upload-a')).toBe(true);
+    expect(world.operations).toHaveLength(1);
   });
 });
 
-describe('retention at scale', () => {
-  const PATHS = 1203;
-  const expiredInOneShard = (world: World, cache: GcCache): string[] => {
-    world.store('manifests/old', ['chunks/old']);
-    const hashes = Array.from(
-      { length: PATHS },
-      (_, index) => `ab${String(index).padStart(30, '0')}`,
-    );
-    world.caches.set(
-      cache,
-      hashes.map((hash) => ({
-        hash,
-        manifest: 'manifests/old',
-        last_accessed: OLD,
-      })),
-    );
-    return hashes;
-  };
-
-  it('evicts every expired path in a shard in a single run', async () => {
+describe('pruning old uploads', () => {
+  it('purges a finished upload and forgets its allocation', async () => {
     const world = new World();
-    const cache = world.cache(7);
-    expiredInOneShard(world, cache);
-    const summary = await world.run();
-    expect(world.caches.get(cache)).toEqual([]);
-    expect(summary).toMatchObject({ evicted_paths: PATHS });
-    expect(world.events).toEqual([`audit cache ${PATHS}`]);
+    world.cache(); // Pruning runs once per live cache.
+    world.uploads.set('upload-a', { running: false });
+
+    await world.run();
+
+    expect(world.uploads.has('upload-a')).toBe(false);
+    expect(world.forgottenUploads).toEqual([['upload-a']]);
   });
 
-  it('reports the exact count in a dry run', async () => {
+  it('keeps an upload that is still running', async () => {
     const world = new World();
-    const cache = world.cache(7);
-    expiredInOneShard(world, cache);
-    const summary = await world.run({ dry_run: true });
-    expect(summary).toMatchObject({ evicted_paths: PATHS });
-    expect(world.caches.get(cache)).toHaveLength(PATHS);
-  });
+    world.cache(); // Pruning runs once per live cache.
+    world.uploads.set('upload-running', { running: true });
+    world.uploads.set('upload-done', { running: false });
 
-  it('passes over busy paths rather than retrying them forever', async () => {
-    const world = new World();
-    const cache = world.cache(7);
-    const hashes = expiredInOneShard(world, cache);
-    for (const hash of hashes.slice(0, 600)) world.busy.add(hash);
-    const summary = await world.run();
-    expect(summary).toMatchObject({
-      evicted_paths: PATHS - 600,
-      skipped_paths: 600,
-    });
-    expect(world.caches.get(cache)).toHaveLength(600);
-    world.assertServable('manifests/old');
-  });
+    await world.run();
 
-  it('reaches every shard when some need several pages', async () => {
-    const world = new World();
-    const cache = world.cache(7);
-    world.store('manifests/old', ['chunks/old']);
-    const paths = shardPrefixes().map((prefix) => ({
-      hash: HASH(prefix),
-      manifest: 'manifests/old',
-      last_accessed: OLD,
-    }));
-    for (let index = 0; index < 1100; index += 1)
-      paths.push({
-        hash: `00${String(index + 1).padStart(30, '0')}`,
-        manifest: 'manifests/old',
-        last_accessed: OLD,
-      });
-    world.caches.set(cache, paths);
-    const summary = await world.run();
-    expect(summary).toMatchObject({ evicted_paths: 1024 + 1100 });
-    expect(world.caches.get(cache)).toEqual([]);
+    expect(world.uploads.has('upload-running')).toBe(true);
+    expect(world.forgottenUploads).toEqual([['upload-done']]);
   });
 });
 

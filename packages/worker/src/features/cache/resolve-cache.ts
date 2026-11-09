@@ -103,10 +103,13 @@ export function publicCache(cache: CacheState): CacheConfig {
     created_at: cache.created_at,
     lifecycle: cache.lifecycle,
     retention_days: cache.retention_days,
+    eviction_min_age_days: cache.eviction_min_age_days,
+    last_eviction: cache.last_eviction,
     upstream_cache_key_names: cache.upstream_cache_key_names,
   };
 }
 
+// Looking a path up records it as used, which keeps it from eviction.
 export async function getPath(
   env: Env,
   cache: CacheState,
@@ -115,17 +118,4 @@ export async function getPath(
   assertStoreHash(storeHash);
   const shard = indexShard(env, cache.reference.incarnation, storeHash);
   return unwrapRpc(await shard.lookup(storeHash));
-}
-
-export async function touchPath(
-  env: Env,
-  cache: CacheState,
-  storeHash: string,
-): Promise<void> {
-  try {
-    const shard = indexShard(env, cache.reference.incarnation, storeHash);
-    await shard.touch(storeHash);
-  } catch (error) {
-    console.error('cache touch failed', error);
-  }
 }

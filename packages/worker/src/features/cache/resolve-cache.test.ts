@@ -27,6 +27,8 @@ const config: CacheConfig = {
   created_at: 1,
   lifecycle: 'CREATING',
   retention_days: 0,
+  eviction_min_age_days: 30,
+  last_eviction: null,
   upstream_cache_key_names: [],
 };
 

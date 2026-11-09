@@ -11,7 +11,11 @@ import type {
 const DEFAULT_GRACE_SECONDS = 24 * 60 * 60;
 const SWEPT_PREFIXES = ['manifests/', 'chunks/'];
 const SHARDS_PER_STEP = 128;
-const SHARDS_PER_EVICTION_STEP = 32;
+const PRUNE_SHARDS_PER_STEP = 16;
+const PRUNE_PAGE = 200;
+// Longer than any retry of an operation: Workflow step retries and CLI
+// retries end within hours.
+const PRUNE_AFTER_SECONDS = 7 * 24 * 60 * 60;
 const SHARD_PAGE = 500;
 const MANIFESTS_PER_STEP = 256;
 const CONCURRENCY = 16;
@@ -37,11 +41,6 @@ function batches<T>(items: readonly T[], size: number): T[][] {
   for (let start = 0; start < items.length; start += size)
     result.push(items.slice(start, start + size));
   return result;
-}
-
-interface ShardCursor {
-  prefix: string;
-  after: string | null;
 }
 
 export interface GcPorts {
@@ -101,11 +100,9 @@ export async function runGarbageCollection(
     }
   };
 
+  let caches: GcCache[];
   try {
-    const caches = await step.do('list caches', () => catalog.liveCaches());
-
-    for (const cache of caches)
-      if (cache.retention_days > 0) await evict(cache);
+    caches = await step.do('list caches', () => catalog.liveCaches());
 
     for (const cache of caches)
       for (const [index, prefixes] of batches(
@@ -189,7 +186,6 @@ export async function runGarbageCollection(
       await ledger.finish(summary);
       return { finished: true };
     });
-    return summary;
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
     await step.do('record failure', async () => {
@@ -203,64 +199,83 @@ export async function runGarbageCollection(
     });
     throw caught;
   }
+  // After the run has finished, so the upload gate is open and the ledger
+  // needs no calls. A failure here leaves the run's result as it is.
+  if (!dryRun) for (const cache of caches) await prune(cache);
+  return summary;
 
-  async function evict(cache: GcCache): Promise<void> {
-    const before = input.now - cache.retention_days * 24 * 60 * 60;
-    const prefixes = shardPrefixes();
-    let nextPrefix = 0;
-    let unfinished: ShardCursor[] = [];
-    let evictedInCache = 0;
-    for (let page = 0; ; page += 1) {
-      const taken = unfinished.slice(0, SHARDS_PER_EVICTION_STEP);
-      const fresh = prefixes
-        .slice(nextPrefix, nextPrefix + SHARDS_PER_EVICTION_STEP - taken.length)
-        .map((prefix): ShardCursor => ({ prefix, after: null }));
-      if (taken.length === 0 && fresh.length === 0) break;
-      const result = await step.do(
-        `evict ${cache.incarnation} ${page}`,
+  // Operation and upload rows exist so retries are idempotent. Past the
+  // retry window they only take space, and the quota ledger's would slow
+  // every push, so each run removes them.
+  async function prune(cache: GcCache): Promise<void> {
+    const before = input.now - PRUNE_AFTER_SECONDS;
+    // One page per shard per run. A shard rarely has more than that a week;
+    // any backlog drains over the following runs.
+    for (const [index, prefixes] of batches(
+      shardPrefixes(),
+      PRUNE_SHARDS_PER_STEP,
+    ).entries()) {
+      // Listing and deleting are separate steps so a retried delete removes
+      // exactly what was listed: the shard's rows first, then the ledger's,
+      // so a retry can never be charged twice.
+      const settled = await step.do(
+        `prune list ${cache.incarnation} ${index}`,
         async () => {
-          let evicted = 0;
-          let skipped = 0;
-          const more: ShardCursor[] = [];
-          await forEachLimit(
-            [...taken, ...fresh],
-            async ({ prefix, after }) => {
-              const expired = await catalog.expiredPaths(
-                cache,
-                prefix,
-                before,
-                after,
-                SHARD_PAGE,
-              );
-              if (expired.next_after)
-                more.push({ prefix, after: expired.next_after });
-              if (dryRun) {
-                evicted += expired.hashes.length;
-                return;
-              }
-              for (const hash of expired.hashes) {
-                if (
-                  await catalog.evict(cache, hash, `gc:${input.run_id}:${hash}`)
-                )
-                  evicted += 1;
-                else skipped += 1;
-              }
-            },
+          const found: { prefix: string; operation_ids: string[] }[] = [];
+          await forEachLimit(prefixes, async (prefix) => {
+            const stale = await catalog.staleOperations(
+              cache,
+              prefix,
+              before,
+              null,
+              PRUNE_PAGE,
+            );
+            if (stale.operation_ids.length === 0) return;
+            const operationIds = await catalog.settledOperations(
+              cache,
+              stale.operation_ids,
+            );
+            if (operationIds.length)
+              found.push({ prefix, operation_ids: operationIds });
+          });
+          return found.sort((left, right) =>
+            left.prefix.localeCompare(right.prefix),
           );
-          more.sort((left, right) => left.prefix.localeCompare(right.prefix));
-          return { evicted, skipped, more };
         },
       );
-      nextPrefix += fresh.length;
-      unfinished = [...unfinished.slice(taken.length), ...result.more];
-      evictedInCache += result.evicted;
-      summary.evicted_paths += result.evicted;
-      summary.skipped_paths += result.skipped;
-    }
-    if (evictedInCache > 0 && !dryRun)
-      await step.do(`audit eviction ${cache.incarnation}`, async () => {
-        await catalog.auditEviction(cache, input.run_id, evictedInCache);
-        return { audited: true };
+      if (settled.length === 0) continue;
+      await step.do(`prune forget ${cache.incarnation} ${index}`, async () => {
+        await forEachLimit(settled, ({ prefix, operation_ids }) =>
+          catalog.forgetShardOperations(cache, prefix, operation_ids),
+        );
+        await catalog.forgetQuotaOperations(
+          cache,
+          settled.flatMap((shard) => shard.operation_ids),
+        );
+        return { forgotten: settled.length };
       });
+    }
+
+    let after: string | null = null;
+    for (let page = 0; ; page += 1) {
+      const stale: { upload_ids: string[]; next_after: string | null } =
+        await step.do(`prune uploads list ${cache.incarnation} ${page}`, () =>
+          catalog.staleUploads(cache, before, after, PRUNE_PAGE),
+        );
+      if (stale.upload_ids.length)
+        await step.do(
+          `prune uploads purge ${cache.incarnation} ${page}`,
+          async () => {
+            const purged: string[] = [];
+            await forEachLimit(stale.upload_ids, async (id) => {
+              if (await catalog.purgeUpload(id)) purged.push(id);
+            });
+            await catalog.forgetUploads(cache, purged);
+            return { purged: purged.length };
+          },
+        );
+      after = stale.next_after;
+      if (!after) break;
+    }
   }
 }

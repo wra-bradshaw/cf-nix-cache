@@ -37,7 +37,13 @@ class DurableCacheIndexAdapter implements CacheIndex {
     const request =
       mutation.kind === 'upsert'
         ? { kind: 'upsert' as const, record: mutation.record }
-        : { kind: 'delete' as const, store_hash: mutation.store_hash };
+        : {
+            kind: 'delete' as const,
+            store_hash: mutation.store_hash,
+            ...(mutation.unused_before === undefined
+              ? {}
+              : { unused_before: mutation.unused_before }),
+          };
     return {
       ...unwrapPublication(
         await this.stub.prepare({

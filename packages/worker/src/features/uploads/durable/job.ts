@@ -114,6 +114,22 @@ export class UploadJob extends RpcOnlyDurableObject {
     return this.lifecycle.state();
   }
 
+  // Deletes a finished upload's storage. Garbage collection calls this for
+  // allocations past the retry window; an upload still under way stays.
+  async purge(): Promise<RpcResult<{ purged: boolean }>> {
+    let row: ReturnType<UploadStorage['row']>;
+    try {
+      row = this.storage.row();
+    } catch {
+      // Unreadable, so it cannot be resumed either.
+      row = null;
+    }
+    if (row && !TERMINAL.includes(row.state)) return ok({ purged: false });
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+    return ok({ purged: true });
+  }
+
   async alarm(): Promise<void> {
     await this.session.recoverStalledCompletion();
   }

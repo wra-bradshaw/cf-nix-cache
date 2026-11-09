@@ -32,7 +32,7 @@
     "cache_response": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "name", "public", "quota_bytes", "logical_bytes", "encoding_id", "created_at", "lifecycle", "retention_days", "upstream_cache_key_names"],
+      "required": ["id", "name", "public", "quota_bytes", "logical_bytes", "encoding_id", "created_at", "lifecycle", "retention_days", "eviction_min_age_days", "last_eviction", "upstream_cache_key_names"],
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "name": { "type": "string", "pattern": "^[a-z0-9_-]{1,64}$" },
@@ -42,8 +42,26 @@
         "encoding_id": { "const": "fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1" },
         "created_at": { "type": "integer", "minimum": 1 },
         "upstream_cache_key_names": { "type": "array", "maxItems": 32, "items": { "type": "string", "pattern": "^[^:\\s]{1,128}$" }, "description": "Signing key names of upstream caches. By default, push skips paths signed with these keys." },
-        "retention_days": { "type": "integer", "minimum": 0, "maximum": 36500, "description": "Evict paths not accessed for this many days during garbage collection. 0 keeps paths indefinitely." },
+        "retention_days": { "type": "integer", "minimum": 0, "maximum": 36500, "description": "Evict paths not accessed for this many days. 0 keeps paths indefinitely." },
+        "eviction_min_age_days": { "type": "integer", "minimum": 0, "maximum": 36500, "description": "Near the quota, evict least recently used paths, but never one used within this many days. 0 turns quota eviction off." },
+        "last_eviction": { "oneOf": [{ "$ref": "#/$defs/eviction_result" }, { "type": "null" }] },
         "lifecycle": { "enum": ["CREATING", "ACTIVE", "DELETING"] }
+      }
+    },
+    "eviction_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "started_at", "finished_at", "target_bytes", "cutoff", "evicted_paths", "evicted_bytes", "skipped_paths", "floor_reached"],
+      "properties": {
+        "run_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "started_at": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "finished_at": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "target_bytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Bytes the run set out to free to bring the cache under its eviction target." },
+        "cutoff": { "type": ["integer", "null"], "description": "Paths last used before this time were evicted. Null when nothing needed evicting." },
+        "evicted_paths": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "evicted_bytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "skipped_paths": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Paths kept because they were being published or were used during the run." },
+        "floor_reached": { "type": "boolean", "description": "Every path old enough to evict was evicted and the cache is still over its target; the rest were used within eviction_min_age_days." }
       }
     },
     "cache_page": {

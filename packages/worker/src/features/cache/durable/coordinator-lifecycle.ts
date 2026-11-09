@@ -1,6 +1,8 @@
 import { ENCODING_ID, type CacheConfig, type CacheReference } from '../types';
 import { type RpcResult, conflict, failure, ok } from '../../../shared/rpc';
 import { first, type SqlRow, text, integer, json } from '../../../shared/sql';
+import { DEFAULT_MIN_AGE_DAYS } from '../../eviction/policy';
+import type { EvictionResult } from '../../eviction/types';
 
 function encodingId(value: string): CacheConfig['encoding_id'] {
   if (value !== ENCODING_ID)
@@ -33,6 +35,14 @@ function toCache(row: SqlRow): CacheConfig {
     lifecycle,
     retention_days:
       row.retention_days == null ? 0 : integer(row, 'retention_days'),
+    eviction_min_age_days:
+      row.eviction_min_age_days == null
+        ? DEFAULT_MIN_AGE_DAYS
+        : integer(row, 'eviction_min_age_days'),
+    last_eviction:
+      row.last_eviction == null
+        ? null
+        : json<EvictionResult>(row, 'last_eviction'),
     upstream_cache_key_names: json<string[]>(row, 'upstream_cache_key_names'),
   };
 }
@@ -122,6 +132,8 @@ export class CoordinatorLifecycle {
         created_at: input.created_at,
         lifecycle: 'CREATING',
         retention_days: 0,
+        eviction_min_age_days: DEFAULT_MIN_AGE_DAYS,
+        last_eviction: null,
         upstream_cache_key_names: input.upstream_cache_key_names,
       });
     });
@@ -136,6 +148,7 @@ export class CoordinatorLifecycle {
   async configure(input: {
     public?: boolean;
     retention_days?: number;
+    eviction_min_age_days?: number;
     upstream_cache_key_names?: string[];
   }): Promise<RpcResult<CacheConfig>> {
     if (input.public !== undefined && typeof input.public !== 'boolean')
@@ -149,6 +162,17 @@ export class CoordinatorLifecycle {
       return failure(
         'invalid_retention_days',
         'retention_days must be an integer between 0 and 36500',
+        400,
+      );
+    if (
+      input.eviction_min_age_days !== undefined &&
+      (!Number.isInteger(input.eviction_min_age_days) ||
+        input.eviction_min_age_days < 0 ||
+        input.eviction_min_age_days > 36500)
+    )
+      return failure(
+        'invalid_eviction_min_age_days',
+        'eviction_min_age_days must be an integer between 0 and 36500',
         400,
       );
     if (input.upstream_cache_key_names !== undefined) {
@@ -193,6 +217,12 @@ export class CoordinatorLifecycle {
                 ? 0
                 : integer(row, 'retention_days')
               : input.retention_days,
+          eviction_min_age_days:
+            input.eviction_min_age_days === undefined
+              ? row.eviction_min_age_days == null
+                ? DEFAULT_MIN_AGE_DAYS
+                : integer(row, 'eviction_min_age_days')
+              : input.eviction_min_age_days,
           upstream_cache_key_names: input.upstream_cache_key_names
             ? JSON.stringify(input.upstream_cache_key_names)
             : text(row, 'upstream_cache_key_names'),
@@ -201,9 +231,10 @@ export class CoordinatorLifecycle {
         return failure('corrupt_cache', 'cache record is corrupt', 500);
       }
       this.ctx.storage.sql.exec(
-        'UPDATE cache SET public = ?, retention_days = ?, upstream_cache_key_names = ?',
+        'UPDATE cache SET public = ?, retention_days = ?, eviction_min_age_days = ?, upstream_cache_key_names = ?',
         next.public,
         next.retention_days,
+        next.eviction_min_age_days,
         next.upstream_cache_key_names,
       );
       return toCacheResult(next);

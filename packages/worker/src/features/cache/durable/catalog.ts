@@ -8,6 +8,7 @@ import {
   pageCursor,
 } from '../../../shared/sql';
 import { now } from '../../../shared/clock';
+import { DEFAULT_MIN_AGE_DAYS } from '../../eviction/policy';
 import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
 
 function encodingId(value: string): CacheConfig['encoding_id'] {
@@ -255,6 +256,8 @@ export class SystemControl extends RpcOnlyDurableObject {
         created_at: integer(row, 'created_at'),
         lifecycle: lifecycle as CacheConfig['lifecycle'],
         retention_days: 0,
+        eviction_min_age_days: DEFAULT_MIN_AGE_DAYS,
+        last_eviction: null,
         upstream_cache_key_names: [],
       });
     } catch {

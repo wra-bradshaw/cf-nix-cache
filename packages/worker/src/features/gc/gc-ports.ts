@@ -3,7 +3,6 @@ import type { GcSummary } from './types';
 export interface GcCache {
   name: string;
   incarnation: string;
-  retention_days: number;
 }
 
 export interface GcLedgerPort {
@@ -31,19 +30,29 @@ export interface GcCatalogPort {
     after: string | null,
     limit: number,
   ): Promise<{ keys: string[]; next_after: string | null }>;
-  expiredPaths(
+  staleOperations(
     cache: GcCache,
     prefix: string,
     before: number,
     after: string | null,
     limit: number,
-  ): Promise<{ hashes: string[]; next_after: string | null }>;
-  evict(
+  ): Promise<{ operation_ids: string[]; next_after: string | null }>;
+  settledOperations(cache: GcCache, operationIds: string[]): Promise<string[]>;
+  forgetShardOperations(
     cache: GcCache,
-    storeHash: string,
-    operationId: string,
-  ): Promise<boolean>;
-  auditEviction(cache: GcCache, runId: string, paths: number): Promise<void>;
+    prefix: string,
+    operationIds: string[],
+  ): Promise<void>;
+  forgetQuotaOperations(cache: GcCache, operationIds: string[]): Promise<void>;
+  staleUploads(
+    cache: GcCache,
+    before: number,
+    after: string | null,
+    limit: number,
+  ): Promise<{ upload_ids: string[]; next_after: string | null }>;
+  // False while the upload is still under way.
+  purgeUpload(uploadId: string): Promise<boolean>;
+  forgetUploads(cache: GcCache, uploadIds: string[]): Promise<void>;
 }
 
 export interface GcObjectsPort {

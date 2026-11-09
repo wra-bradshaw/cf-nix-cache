@@ -186,26 +186,36 @@ List only upstreams that your clients use and that keep their paths. A signature
 shows that a cache signed a path, not that it still has it, and nothing checks.
 If an upstream evicts a skipped path, clients have to build it.
 
-## Garbage collection
+## Eviction and garbage collection
 
-A scheduled workflow runs weekly, by default on Sundays at 03:00 UTC, and deletes
-manifests and chunks that no cache references. This reclaims the storage of
-deleted paths and caches. Live paths are never removed unless you opt in to
-retention for a cache:
+Caches evict paths before garbage collection reclaims their objects. Near its
+quota, a cache evicts least recently used paths, but never one used within
+`eviction_min_age_days` (default 30 days; 0 turns quota eviction off). Retention
+evicts paths not used for `retention_days`, and 0 keeps them indefinitely. Use
+means a narinfo or NAR request, or a push that finds the path already present.
+Retention judges each path on its own, so a path can outlive one of its
+dependencies.
 
 ```console
-cf-nix-cache cache retention my-cache 30  # evict paths unused for 30 days (0 to disable)
+cf-nix-cache cache eviction my-cache 30   # evict LRU paths unused for 30 days (0 to disable)
+cf-nix-cache cache retention my-cache 30  # evict paths unused for 30 days (0 to keep)
 cf-nix-cache gc run --dry-run             # preview a run, changing nothing
 cf-nix-cache gc run                       # run now
 cf-nix-cache gc status                    # the active run and the last result
 ```
 
-Use means a narinfo or NAR request, or a push that finds the path already
-present. Retention judges each path on its own, so a path can outlive one of its
-dependencies. If a run has objects to delete, new uploads wait while it finishes,
-usually for minutes; a run with nothing to delete does not affect them. To change
-the schedule, edit `schedules` on the `garbage-collect` workflow. See
-[the design](docs/ARCHITECTURE.md#garbage-collection).
+A daily workflow run at 04:00 UTC applies retention and starts a quota run for
+any cache that needs one; a push that takes a cache over 90% of its quota starts
+one immediately. Pushes never wait for eviction. Eviction removes index rows, so
+quota is free as soon as it finishes.
+
+Garbage collection runs weekly, by default on Sundays at 03:00 UTC, and deletes
+manifests and chunks that no cache references. This reclaims the storage of
+evicted and deleted paths and caches. It also prunes rows kept for idempotent
+retries once they are 7 days old. If a run has objects to delete, new uploads
+wait while it finishes, usually for minutes; a run with nothing to delete does
+not affect them. To change either schedule, edit the workflow's `schedules`.
+See [the design](docs/ARCHITECTURE.md#eviction).
 
 ## Security model
 

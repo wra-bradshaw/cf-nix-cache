@@ -2,11 +2,13 @@ import { cloudflareTest } from '@cloudflare/vitest-plugin';
 import { defineConfig } from 'vitest/config';
 
 // Tests run inside workerd, against the real runtime: WebAssembly imports,
-// DigestStream, R2 types and the other APIs the Worker relies on. The four
+// DigestStream, R2 types and the other APIs the Worker relies on. The six
 // SQLite-backed tests cannot run here, because workerd does not implement
 // `node:sqlite`; they run in Node instead (see vitest.node.config.ts).
 const SQLITE_TESTS = [
   'src/features/auth/durable/issuance.test.ts',
+  'src/features/cache/durable/coordinator-eviction.test.ts',
+  'src/features/cache/durable/index-shard.test.ts',
   'src/features/cache/durable/upload-allocations.test.ts',
   'src/features/gc/durable/ledger.test.ts',
   'src/features/gc/garbage-collection.test.ts',

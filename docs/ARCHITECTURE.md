@@ -97,27 +97,65 @@ uses the same `/api` routes as the documented API. Request and response
 schemas are generated for both Worker and Rust contract tooling; domain types
 remain separate where they add semantic validation or application policy.
 
+## Eviction
+
+A cache loses paths in two ways. `retention_days` evicts paths not used for
+that many days. Quota eviction removes least recently used paths when the cache
+approaches its quota. Both are handled by the `evict-cache` Workflow, one run
+per cache. Use means a narinfo request, a NAR request, or a push that finds the
+path already present. A path's references are not considered, so a retained
+path can outlive a dependency; Nix then builds or fetches that dependency
+elsewhere.
+
+A daily run at 04:00 UTC asks every cache whether it needs a run. This is where
+`retention_days` is applied, and it also catches a cache that crossed its quota
+watermark without a run being started. When a finalized publication puts the
+cache's logical bytes over 90% of its quota, the coordinator requests a run
+directly, through a Durable Object alarm. Pushes never wait for a run: the
+space between 90% and 100% is what they fill while it works.
+
+A quota run sums, across all 1024 index shards, the bytes of paths by hour of
+last use, counting only paths not used within `eviction_min_age_days` (default
+30). It picks the cutoff that brings the cache down to 80% of its quota and
+evicts paths last used before it, through the publication protocol. If that
+would not free enough, it evicts everything old enough and records
+`floor_reached`; pushes then fail with `quota_exceeded` at 100%. When a run has
+both a retention and a quota cutoff, it uses the later one, which evicts at
+least as much as either.
+
+Thirty days matches Nix's `narinfo-cache-positive-ttl`. A client may keep a
+narinfo for that long, so evicting a path used more recently could leave the
+client holding a narinfo for a path the cache no longer serves.
+
+A lookup records the path as used in the same transaction that reads it.
+Eviction prepares a delete with its cutoff, and the index refuses the delete if
+the path was used at or after the cutoff; that path is counted in
+`skipped_paths` and stays. A path being published is skipped the same way.
+Eviction removes index rows only, so quota is free as soon as the run finishes;
+the objects are deleted by the next garbage collection.
+
+Each cache reports its setting as `eviction_min_age_days` and its last run as
+`last_eviction`. A value of 0 turns quota eviction off.
+
 ## Garbage collection
 
-Deleting a path or a cache only removes index rows. Manifests and chunks are
-shared by content across every cache, so nothing can tell locally that an
-object has become unused. `GarbageCollectWorkflow` finds this out with
-installation-wide mark-and-sweep, weekly by default:
+Deleting a path or a cache only removes index rows, and eviction removes them
+too. Manifests and chunks are shared by content across every cache, so nothing
+can tell locally that an object has become unused. `GarbageCollectWorkflow`
+finds this out with installation-wide mark-and-sweep, weekly by default:
 
-1. **Evict.** Caches with `retention_days` set drop paths not used for that
-   long, through the normal publication protocol. Use means a narinfo request,
-   a NAR request, or a push that finds the path already present. A path's
-   references are not considered, so a retained path can outlive a dependency;
-   Nix then builds or fetches that dependency elsewhere.
-2. **Mark.** Walk all 1024 index shards of every live cache, then read each
+1. **Mark.** Walk all 1024 index shards of every live cache, then read each
    referenced manifest to mark its chunks. Marks live in the `GcControl`
    Durable Object, because they can outgrow a Worker's memory.
-3. **List.** List the bucket, keeping unmarked objects older than the grace
-   period as candidates. Uploads continue throughout steps 1-3, and a run with
+2. **List.** List the bucket, keeping unmarked objects older than the grace
+   period as candidates. Uploads continue throughout steps 1-2, and a run with
    no candidates ends here without ever delaying one.
-4. **Drain.** Close the upload gate and wait for active uploads to finish.
-5. **Sweep.** Mark the manifests those uploads published, then delete the
+3. **Drain.** Close the upload gate and wait for active uploads to finish.
+4. **Sweep.** Mark the manifests those uploads published, then delete the
    remaining candidates, manifests before chunks. Then reopen the gate.
+
+Garbage collection does not evict paths. Its summary keeps `evicted_paths` and
+`skipped_paths`, always 0, for compatibility with earlier releases.
 
 An object's age cannot show that deleting it is safe, because conditional
 writes deduplicate: an old unreferenced chunk can become referenced
@@ -133,6 +171,13 @@ manifest that exists but cannot be parsed. A run must keep calling in to the
 ledger or it loses the gate, so a dead run blocks uploads for at most 30 minutes.
 Every step is idempotent, and deleting manifests first means an interrupted
 sweep cannot leave a manifest whose chunks are gone.
+
+After a run finishes, each cache is pruned (a dry run prunes nothing): rows kept
+only so retries stay idempotent are removed once they are 7 days old. Settled
+index-shard operations go with their quota ledger rows, and upload allocations
+with the storage of their finished `UploadJob` Durable Objects. A prepared
+operation and a reserved charge stay. The quota ledger's pending total is read
+from a partial index, so its history no longer slows every push.
 
 ## Durable Object migrations
 
@@ -165,9 +210,10 @@ Dependencies point one way: `app` may import `features`, and `features` may
 import `shared` and each other, but `shared` may not import `features` or `app`
 and `features` may not import `app`. Pure modules (most of `shared`, each
 feature's `types.ts`, `auth/authorization`, `cache/publication-protocol`,
-`cache/shards`, `gc/garbage-collection`,
-`gc/gc-ports`, and `uploads/manifest`) may import only other pure modules or
-generated contracts, and may not use Cloudflare or other infrastructure APIs.
+`cache/shards`, `eviction/eviction`, `eviction/eviction-ports`,
+`eviction/policy`, `gc/garbage-collection`, `gc/gc-ports`, and
+`uploads/manifest`) may import only other pure modules or generated
+contracts, and may not use Cloudflare or other infrastructure APIs.
 `packages/worker/scripts/check-boundaries.mts` enforces this as part of the
 worker check command.
 

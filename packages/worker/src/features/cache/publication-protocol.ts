@@ -30,11 +30,15 @@ export class PublicationProtocol {
     mutation: CacheMutation,
   ): Promise<PreparedMutation> {
     const prepared = await this.index.prepare(operationId, mutation);
-    if (prepared.status === 'ABORTED')
+    if (prepared.status === 'ABORTED') {
+      // A retry after the index refused a commit: release the reservation in
+      // case the first attempt could not.
+      await this.quota.abort(operationId);
       throw new PublicationError(
         'operation was aborted before publication',
         false,
       );
+    }
     try {
       const reservation = await this.quota.reserve(operationId, prepared.delta);
       if (reservation.status === 'ABORTED')
@@ -44,7 +48,16 @@ export class PublicationProtocol {
         await this.index.abort(operationId);
       throw error;
     }
-    if (prepared.status !== 'COMMITTED') await this.index.commit(operationId);
+    if (prepared.status !== 'COMMITTED')
+      try {
+        await this.index.commit(operationId);
+      } catch (error) {
+        // The index refused the mutation for good (an eviction of a path that
+        // was just used), so release the reservation instead of leaving it.
+        if (error instanceof PublicationError && !error.retryable)
+          await this.quota.abort(operationId);
+        throw error;
+      }
     await this.quota.finalize(operationId);
     return prepared;
   }

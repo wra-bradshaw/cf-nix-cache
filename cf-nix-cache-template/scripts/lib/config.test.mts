@@ -60,6 +60,11 @@ function validConfig(): TemplateConfig {
         binding: "GARBAGE_COLLECT",
         class_name: "GarbageCollectWorkflow",
       },
+      {
+        name: "evict-cache",
+        binding: "EVICT_CACHE",
+        class_name: "EvictCacheWorkflow",
+      },
     ],
     vars: { CF_NIX_CACHE_CONFIG_SCHEMA: CONFIG_SCHEMA_VERSION },
     observability: { enabled: true },

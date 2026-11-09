@@ -216,6 +216,11 @@ export const EXPECTED_WORKFLOWS = [
     binding: "GARBAGE_COLLECT",
     class_name: "GarbageCollectWorkflow",
   },
+  {
+    name: "evict-cache",
+    binding: "EVICT_CACHE",
+    class_name: "EvictCacheWorkflow",
+  },
 ] as const;
 
 export const REQUIRED_DURABLE_BINDINGS = [

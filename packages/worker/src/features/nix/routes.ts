@@ -3,7 +3,7 @@ import { assertCacheName, STORE_HASH_PATTERN } from '../../shared/identifiers';
 import { DomainError } from '../../shared/errors';
 import type { AppEnv } from '../../shared/http';
 import { assertActive, authFor } from '../cache/access';
-import { getCache, getPath, touchPath } from '../cache/resolve-cache';
+import { getCache, getPath } from '../cache/resolve-cache';
 import { serveNarObject } from './object';
 
 export const nixRoutes = new Hono<AppEnv>();
@@ -55,7 +55,6 @@ async function nixHandler(c: Context<AppEnv>): Promise<Response> {
   await authFor(request, c.env, cache, 'pull');
   const record = await getPath(c.env, cache, storeHash);
   if (narInfo) {
-    c.executionCtx.waitUntil(touchPath(c.env, cache, storeHash));
     return new Response(request.method === 'HEAD' ? null : record.narinfo, {
       headers: {
         'content-type': 'text/plain; charset=utf-8',

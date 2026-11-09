@@ -8,6 +8,7 @@ export { CacheIndexShard } from './features/cache/durable/index-shard';
 export { DeleteCacheWorkflow } from './features/cache/delete-cache-workflow';
 export { UploadJob } from './features/uploads/durable/job';
 export { GarbageCollectWorkflow } from './features/gc/garbage-collect-workflow';
+export { EvictCacheWorkflow } from './features/eviction/evict-cache-workflow';
 export { GcControl } from './features/gc/durable/control';
 export { ProcessUploadWorkflow } from './features/uploads/process-upload-workflow';
 

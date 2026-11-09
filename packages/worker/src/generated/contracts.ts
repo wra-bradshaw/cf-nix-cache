@@ -72,9 +72,13 @@ export interface UploadState {
 export interface ConfigureCache {
   public?: boolean;
   /**
-   * Evict paths not accessed for this many days during garbage collection. 0 keeps paths indefinitely.
+   * Evict paths not accessed for this many days. 0 keeps paths indefinitely.
    */
   retention_days?: number;
+  /**
+   * Near the quota, evict least recently used paths, but never one used within this many days. 0 turns quota eviction off.
+   */
+  eviction_min_age_days?: number;
   /**
    * Signing key names of upstream caches. By default, push skips paths signed with these keys.
    *
@@ -92,9 +96,16 @@ export interface Cache {
   created_at: number;
   lifecycle: 'CREATING' | 'ACTIVE' | 'DELETING';
   /**
-   * Evict paths not accessed for this many days during garbage collection. 0 keeps paths indefinitely.
+   * Evict paths not accessed for this many days. 0 keeps paths indefinitely.
    */
   retention_days: number;
+  /**
+   * Near the quota, evict least recently used paths, but never one used within this many days. 0 turns quota eviction off.
+   */
+  eviction_min_age_days: number;
+  last_eviction: {
+    [k: string]: unknown;
+  } | null;
   /**
    * Signing key names of upstream caches. By default, push skips paths signed with these keys.
    *
@@ -267,10 +278,38 @@ export interface CacheResponse {
    */
   upstream_cache_key_names: string[];
   /**
-   * Evict paths not accessed for this many days during garbage collection. 0 keeps paths indefinitely.
+   * Evict paths not accessed for this many days. 0 keeps paths indefinitely.
    */
   retention_days: number;
+  /**
+   * Near the quota, evict least recently used paths, but never one used within this many days. 0 turns quota eviction off.
+   */
+  eviction_min_age_days: number;
+  last_eviction: EvictionResult | null;
   lifecycle: 'CREATING' | 'ACTIVE' | 'DELETING';
+}
+export interface EvictionResult {
+  run_id: string;
+  started_at: number;
+  finished_at: number;
+  /**
+   * Bytes the run set out to free to bring the cache under its eviction target.
+   */
+  target_bytes: number;
+  /**
+   * Paths last used before this time were evicted. Null when nothing needed evicting.
+   */
+  cutoff: number | null;
+  evicted_paths: number;
+  evicted_bytes: number;
+  /**
+   * Paths kept because they were being published or were used during the run.
+   */
+  skipped_paths: number;
+  /**
+   * Every path old enough to evict was evicted and the cache is still over its target; the rest were used within eviction_min_age_days.
+   */
+  floor_reached: boolean;
 }
 export interface CachePage {
   items: CacheResponse[];

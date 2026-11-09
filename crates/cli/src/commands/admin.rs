@@ -47,6 +47,7 @@ pub(super) async fn cache(api: Api, command: CacheCommand) -> Result<()> {
                 Some(&contract::ConfigureCache {
                     public: Some(public),
                     retention_days: None,
+                    eviction_min_age_days: None,
                     upstream_cache_key_names: Vec::new(),
                 }),
             )
@@ -59,6 +60,20 @@ pub(super) async fn cache(api: Api, command: CacheCommand) -> Result<()> {
                 Some(&contract::ConfigureCache {
                     public: None,
                     retention_days: Some(i64::try_from(days)?),
+                    eviction_min_age_days: None,
+                    upstream_cache_key_names: Vec::new(),
+                }),
+            )
+            .await?,
+        ),
+        CacheCommand::Eviction { name, days } => print_json(
+            &api.request::<Value, _>(
+                Method::PATCH,
+                &format!("/api/caches/{name}/config"),
+                Some(&contract::ConfigureCache {
+                    public: None,
+                    retention_days: None,
+                    eviction_min_age_days: Some(i64::try_from(days)?),
                     upstream_cache_key_names: Vec::new(),
                 }),
             )
@@ -139,6 +154,7 @@ mod tests {
         let body = contract::ConfigureCache {
             public: None,
             retention_days: None,
+            eviction_min_age_days: None,
             upstream_cache_key_names: Vec::new(),
         };
         assert_eq!(serde_json::to_value(body).unwrap(), serde_json::json!({}));

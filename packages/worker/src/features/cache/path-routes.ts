@@ -4,7 +4,7 @@ import { MissingPathsSchema, parseJsonSchema } from '../../shared/schemas';
 import { idempotency, parseJson, type AppEnv } from '../../shared/http';
 import { authFor } from './access';
 import { coordinator } from './stubs';
-import { getCache, getPath, touchPath } from './resolve-cache';
+import { getCache, getPath } from './resolve-cache';
 import { isNotFound, unwrapRpc } from '../../shared/rpc';
 import { publicationFor } from './publication-adapters';
 import { authenticate } from '../auth/authentication';
@@ -29,7 +29,6 @@ pathRoutes.post('/api/caches/:name/missing', async (c) => {
     async (storeHash) => {
       try {
         await getPath(c.env, cache, storeHash);
-        c.executionCtx.waitUntil(touchPath(c.env, cache, storeHash));
         return true;
       } catch (caught) {
         if (isNotFound(caught)) return false;

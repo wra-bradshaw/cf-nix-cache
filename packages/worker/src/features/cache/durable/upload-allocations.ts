@@ -1,5 +1,11 @@
 import { type RpcResult, failure, ok } from '../../../shared/rpc';
-import { first, type SqlRow, text, integer } from '../../../shared/sql';
+import {
+  first,
+  type SqlRow,
+  text,
+  integer,
+  pageCursor,
+} from '../../../shared/sql';
 import { lifecycleFailure } from '../access';
 
 const INFLIGHT_TTL_SECONDS = 60 * 60;
@@ -96,11 +102,12 @@ export class UploadAllocations {
       const id = this.env.UPLOAD_JOB!.newUniqueId().toString();
       const key = chunksKey(id);
       this.ctx.storage.sql.exec(
-        'INSERT INTO upload_allocations (operation_id, fingerprint, upload_id, staging_key) VALUES (?, ?, ?, ?)',
+        'INSERT INTO upload_allocations (operation_id, fingerprint, upload_id, staging_key, created_at) VALUES (?, ?, ?, ?, ?)',
         input.operation_id,
         input.fingerprint,
         id,
         key,
+        input.now,
       );
       if (!inflight || inflight.nar_hash !== input.nar_hash)
         this.ctx.storage.sql.exec(
@@ -154,6 +161,56 @@ export class UploadAllocations {
         input.upload_id,
       ),
     );
+    return ok();
+  }
+
+  // Allocations older than `before`, for pruning. Each one's upload job is
+  // purged before the allocation is forgotten.
+  async stale(input: {
+    before: number;
+    after: string | null;
+    limit: number;
+  }): Promise<RpcResult<{ upload_ids: string[]; next_after: string | null }>> {
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 1000)
+      return failure('invalid_limit', 'limit must be between 1 and 1000', 400);
+    if (typeof input.before !== 'number' || !Number.isFinite(input.before))
+      return failure(
+        'invalid_before',
+        'before must be a finite timestamp',
+        400,
+      );
+    const rows = [
+      ...this.ctx.storage.sql.exec<SqlRow>(
+        'SELECT upload_id FROM upload_allocations WHERE (created_at IS NULL OR created_at < ?) AND upload_id > ? ORDER BY upload_id LIMIT ?',
+        input.before,
+        input.after ?? '',
+        input.limit + 1,
+      ),
+    ];
+    try {
+      return ok({
+        upload_ids: rows
+          .slice(0, input.limit)
+          .map((row) => text(row, 'upload_id')),
+        next_after: pageCursor(rows, input.limit, (row) =>
+          text(row, 'upload_id'),
+        ),
+      });
+    } catch {
+      return failure('corrupt_cache', 'cache record is corrupt', 500);
+    }
+  }
+
+  // A retry with a forgotten idempotency key starts a new upload, which is
+  // safe: the key's client gave up long before.
+  async forget(input: { upload_ids: string[] }): Promise<RpcResult<void>> {
+    this.ctx.storage.transactionSync(() => {
+      for (const uploadId of input.upload_ids)
+        this.ctx.storage.sql.exec(
+          'DELETE FROM upload_allocations WHERE upload_id = ?',
+          uploadId,
+        );
+    });
     return ok();
   }
 

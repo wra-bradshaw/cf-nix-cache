@@ -4,7 +4,6 @@ import type { CacheState, PathRecord } from '../cache/types';
 import { ChunkManifestSchema, parseJsonSchema } from '../../shared/schemas';
 import { DomainError } from '../../shared/errors';
 import { planRange, parseRange } from './range';
-import { touchPath } from '../cache/resolve-cache';
 
 export async function serveNarObject(
   c: Context<AppEnv>,
@@ -52,7 +51,6 @@ export async function serveNarObject(
       'content-range',
       `bytes ${range.start}-${range.end}/${manifest.file_size}`,
     );
-  c.executionCtx.waitUntil(touchPath(c.env, cache, storeHash));
   if (request.method === 'HEAD') return new Response(null, { status, headers });
 
   let planIndex = 0;

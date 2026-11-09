@@ -20,6 +20,8 @@ export default new WebAssembly.Module(readFileSync(${JSON.stringify(id)}));`;
   test: {
     include: [
       'src/features/auth/durable/issuance.test.ts',
+      'src/features/cache/durable/coordinator-eviction.test.ts',
+      'src/features/cache/durable/index-shard.test.ts',
       'src/features/cache/durable/upload-allocations.test.ts',
       'src/features/gc/durable/ledger.test.ts',
       'src/features/gc/garbage-collection.test.ts',

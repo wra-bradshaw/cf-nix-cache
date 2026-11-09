@@ -1,11 +1,6 @@
 import { ChunkManifestSchema, parseJsonSchema } from '../../shared/schemas';
-import {
-  MUTATION_IN_PROGRESS,
-  publicationFor,
-} from '../cache/publication-adapters';
-import { PublicationError } from '../cache/publication-protocol';
 import { coordinator, system, indexShard } from '../cache/stubs';
-import { namedStub, unwrapRpc } from '../../shared/rpc';
+import { idStub, namedStub, unwrapRpc } from '../../shared/rpc';
 import { collectPages } from '../../shared/sql';
 import type { CacheState } from '../cache/types';
 import type { GcPorts } from './garbage-collection';
@@ -65,7 +60,6 @@ export function gcPorts(env: Env, runId: string): GcPorts {
           caches.push({
             name: reference.name,
             incarnation: reference.incarnation,
-            retention_days: config.retention_days,
             state: { ...config, reference },
           });
         }
@@ -78,40 +72,50 @@ export function gcPorts(env: Env, runId: string): GcPorts {
             limit,
           }),
         ),
-      expiredPaths: async (cache, prefix, before, after, limit) =>
+      staleOperations: async (cache, prefix, before, after, limit) =>
         unwrapRpc(
-          await indexShard(env, cache.incarnation, prefix).expiredPaths({
+          await indexShard(env, cache.incarnation, prefix).staleOperations({
             before,
             after,
             limit,
           }),
         ),
-      evict: async (cache, storeHash, operationId) => {
-        try {
-          await publicationFor(env, stateOf(cache), storeHash).execute(
-            operationId,
-            { kind: 'delete', store_hash: storeHash },
-          );
-          return true;
-        } catch (error) {
-          if (
-            error instanceof PublicationError &&
-            (!error.retryable || error.code === MUTATION_IN_PROGRESS)
-          )
-            return false;
-          throw error;
-        }
-      },
-      auditEviction: async (cache, id, paths) => {
+      settledOperations: async (cache, operationIds) =>
         unwrapRpc(
-          await coordinator(env, stateOf(cache).reference).recordAudit({
-            id: `gc-evict:${id}:${cache.incarnation}`,
-            timestamp: Math.floor(Date.now() / 1000),
-            actor: 'garbage-collector',
-            action: 'cache.evict',
-            resource: cache.name,
-            outcome: 'success',
-            metadata: { paths: String(paths), run_id: id },
+          await coordinator(env, stateOf(cache).reference).settledOperations({
+            operation_ids: operationIds,
+          }),
+        ),
+      forgetShardOperations: async (cache, prefix, operationIds) => {
+        unwrapRpc(
+          await indexShard(env, cache.incarnation, prefix).forgetOperations({
+            operation_ids: operationIds,
+          }),
+        );
+      },
+      forgetQuotaOperations: async (cache, operationIds) => {
+        if (operationIds.length === 0) return;
+        unwrapRpc(
+          await coordinator(env, stateOf(cache).reference).forgetOperations({
+            operation_ids: operationIds,
+          }),
+        );
+      },
+      staleUploads: async (cache, before, after, limit) =>
+        unwrapRpc(
+          await coordinator(env, stateOf(cache).reference).staleUploads({
+            before,
+            after,
+            limit,
+          }),
+        ),
+      purgeUpload: async (uploadId) =>
+        unwrapRpc(await idStub(env.UPLOAD_JOB, uploadId).purge()).purged,
+      forgetUploads: async (cache, uploadIds) => {
+        if (uploadIds.length === 0) return;
+        unwrapRpc(
+          await coordinator(env, stateOf(cache).reference).forgetUploads({
+            upload_ids: uploadIds,
           }),
         );
       },

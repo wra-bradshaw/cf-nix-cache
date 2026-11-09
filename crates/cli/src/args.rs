@@ -132,9 +132,14 @@ pub(crate) enum CacheCommand {
         )]
         public: bool,
     },
-    /// Evict paths not accessed for this many days during garbage collection.
-    /// 0 keeps paths indefinitely.
+    /// Evict paths not accessed for this many days. 0 keeps paths indefinitely.
     Retention {
+        name: CacheName,
+        days: u64,
+    },
+    /// Near the quota, evict least recently used paths, but never one used
+    /// within this many days. 0 turns quota eviction off.
+    Eviction {
         name: CacheName,
         days: u64,
     },
