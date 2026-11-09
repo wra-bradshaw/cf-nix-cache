@@ -37,7 +37,7 @@ jobs:
           node bench/verify-worker/upload-nar.mts --check-drift
       - name: Build Nix outputs
         shell: bash
-        run: nix flake check && nix build .#cli .#cli-release
+        run: nix flake check && nix build .#cli .#verifier
       - name: Check, test and build the Worker
         run: pnpm --dir packages/worker check:all
       - name: Check the deployment template
