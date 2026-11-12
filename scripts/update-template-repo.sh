@@ -9,12 +9,27 @@ source_dir=$1 template_dir=$2 repository=$3 version=$4
 
 rsync -a --delete --exclude .git "$source_dir/cf-nix-cache-template/" "$template_dir/"
 
-for attempt in $(seq 30); do
-  npm view "cf-nix-cache@$version" version >/dev/null 2>&1 && break
-  [ "$attempt" = 30 ] && { echo "cf-nix-cache@$version never appeared on npm" >&2; exit 1; }
+package="cf-nix-cache@$version"
+deadline=$((SECONDS + 300))
+until pnpm view "$package" version >/dev/null 2>&1; do
+  if ((SECONDS >= deadline)); then
+    echo "$package never appeared on npm" >&2
+    exit 1
+  fi
+  sleep 15
+done
+
+for attempt in $(seq 15); do
+  if output=$(pnpm --dir "$template_dir" install --lockfile-only 2>&1); then
+    printf '%s\n' "$output"
+    break
+  fi
+  printf '%s\n' "$output" >&2
+  if [ "$attempt" -eq 15 ] || ! grep -q 'ERR_PNPM_NO_MATCHING_VERSION' <<<"$output"; then
+    exit 1
+  fi
   sleep 20
 done
-pnpm --dir "$template_dir" install --lockfile-only
 
 cd "$template_dir"
 if [ -z "$(git status --porcelain)" ]; then

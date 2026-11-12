@@ -57,19 +57,34 @@ workflows, which would leave the version PR without CI and stop its merge from
 publishing. If it expires, the `Release PR` job fails until the secret is
 replaced.
 
-Merging the version PR triggers `Publish release`. To retry a failed publication,
-run `gh workflow run publish-release.yml --ref main`. That workflow rebuilds
-and tests the Worker package in the Nix dev shell, publishes npm from the
-pinned commit, and creates `vX.Y.Z` on GitHub. Configure the npm
+Merging the version PR triggers `Publish release`. Its `check` job is the only
+gate: it reads the release manifest and compares the version in the pushed
+commit with the version at the previous tip of `main`. Every release job
+(`publish`, `Release binary`, `Update public deployment template`) needs that
+job and runs only when the manifest is `releaseReady` and the version changed
+in that push (or the workflow was dispatched manually for a retry). An
+ordinary push to `main` therefore publishes nothing and leaves existing
+releases and their assets untouched. The workflow rebuilds and tests the
+Worker package in the Nix dev shell, publishes npm from the pinned commit,
+creates `vX.Y.Z` on GitHub, and attaches the CLI binaries. Configure the npm
 package's trusted publisher for `.github/workflows/publish-release.yml`; npm
 publishing uses GitHub OIDC and does not require a long-lived npm token.
 `releaseReady` is only set to true by `release:prepare`, so a version PR whose
 preparation failed part-way cannot publish.
 
+To retry a failed publication, run `gh workflow run publish-release.yml --ref
+main` or re-run the failed workflow run from the Actions UI. An explicit
+dispatch skips the version-change comparison and is idempotent: npm is skipped
+when the version is already published, an existing `vX.Y.Z` release is reused,
+and a binary that is already attached to the release is skipped instead of
+being overwritten.
+
 If the `TEMPLATE_REPOSITORY` variable is set to
 `wra-bradshaw/cf-nix-cache-template`, the publish workflow also opens a PR in
 the standalone template repository and generates its `pnpm-lock.yaml` against
-the newly published package. Store `TEMPLATE_REPO_TOKEN` in the `release`
+the newly published package. The job waits for the new version to appear on npm
+and retries a lockfile install while the registry's metadata propagation
+catches up. Store `TEMPLATE_REPO_TOKEN` in the `release`
 environment as a fine-grained token scoped to the template repository with
 **Contents: read and write**, **Pull requests: read and write**, and
 **Workflows: read and write** (the sync also updates the template's

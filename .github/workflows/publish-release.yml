@@ -3,27 +3,68 @@ name: Publish release
 on:
   push:
     branches: [main]
-    paths:
-      - "packages/worker/package.json"
-      - "packages/worker/release-manifest.json"
-      - "cf-nix-cache-template/package.json"
-      - "cf-nix-cache-template/wrangler.jsonc"
   workflow_dispatch:
 
 concurrency:
-  group: publish-release
+  group: publish-release-${{ github.sha }}
 
 permissions:
   contents: write
   id-token: write
 
 jobs:
+  check:
+    runs-on: ubuntu-24.04
+    outputs:
+      release: ${{ steps.gate.outputs.release }}
+      version: ${{ steps.metadata.outputs.version }}
+      package_name: ${{ steps.metadata.outputs.package_name }}
+      tag: ${{ steps.gate.outputs.tag }}
+      sha: ${{ steps.gate.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Check release metadata
+        id: metadata
+        run: node scripts/check-release.mts --github-output
+      - name: Decide whether to publish
+        id: gate
+        if: steps.metadata.outputs.ready == 'true'
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          tag="v$VERSION"
+          sha="$GITHUB_SHA"
+          previous=""
+          release=false
+          if [ "$EVENT" = workflow_dispatch ]; then
+            release=true
+            sha="$(git log -1 --format=%H -S"\"version\": \"$VERSION\"" -- packages/worker/package.json)"
+            sha="${sha:-$GITHUB_SHA}"
+          else
+            previous="$(git show "$BEFORE:packages/worker/package.json" 2>/dev/null | jq -r .version || true)"
+            if [ -n "$previous" ] && [ "$previous" != "$VERSION" ]; then
+              release=true
+            fi
+          fi
+          {
+            echo "tag=$tag"
+            echo "sha=$sha"
+            echo "release=$release"
+          } >> "$GITHUB_OUTPUT"
+          echo "$tag: release=$release (previous version: ${previous:-none})"
+
   publish:
+    needs: check
+    if: needs.check.outputs.release == 'true'
     runs-on: ubuntu-24.04
     environment: release
-    outputs:
-      ready: ${{ steps.release.outputs.ready }}
-      version: ${{ steps.release.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./
@@ -40,15 +81,10 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
 
-      - name: Check release metadata
-        id: release
-        run: pnpm release:check --github-output
-
       - name: Check npm publication state
         id: npm
-        if: steps.release.outputs.ready == 'true'
         env:
-          PACKAGE: ${{ steps.release.outputs.package_name }}@${{ steps.release.outputs.version }}
+          PACKAGE: ${{ needs.check.outputs.package_name }}@${{ needs.check.outputs.version }}
         run: |
           if ! npm view "$PACKAGE" version >/dev/null 2>&1; then
             echo "published=false" >> "$GITHUB_OUTPUT"
@@ -72,18 +108,18 @@ jobs:
           npm publish ./packages/worker --access public --ignore-scripts
 
       - name: Create the GitHub release
-        if: steps.release.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v${{ steps.release.outputs.version }}
+          TAG: ${{ needs.check.outputs.tag }}
+          SHA: ${{ needs.check.outputs.sha }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes --title "$TAG"
+            || gh release create "$TAG" --target "$SHA" --generate-notes --title "$TAG"
 
   binaries:
     name: Release binary (${{ matrix.system }})
-    needs: publish
-    if: needs.publish.outputs.ready == 'true'
+    needs: [check, publish]
+    if: needs.check.outputs.release == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -103,16 +139,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ASSET: cf-nix-cache-${{ matrix.system }}
-          TAG: v${{ needs.publish.outputs.version }}
+          TAG: ${{ needs.check.outputs.tag }}
         run: |
+          if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$ASSET"; then
+            echo "$ASSET is already attached to $TAG; not overwriting it."
+            exit 0
+          fi
           nix build --print-build-logs .#cli-release
           cp result/bin/cf-nix-cache "$ASSET"
-          gh release upload "$TAG" "$ASSET" --clobber
+          gh release upload "$TAG" "$ASSET"
 
   update-template:
     name: Update public deployment template
-    needs: publish
-    if: needs.publish.outputs.ready == 'true' && vars.TEMPLATE_REPOSITORY != ''
+    needs: [check, publish]
+    if: needs.check.outputs.release == 'true' && vars.TEMPLATE_REPOSITORY != ''
     runs-on: ubuntu-24.04
     environment: release
     steps:
@@ -134,5 +174,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.TEMPLATE_REPO_TOKEN }}
           REPOSITORY: ${{ vars.TEMPLATE_REPOSITORY }}
-          VERSION: ${{ needs.publish.outputs.version }}
+          VERSION: ${{ needs.check.outputs.version }}
         run: source/scripts/update-template-repo.sh source template "$REPOSITORY" "$VERSION"
