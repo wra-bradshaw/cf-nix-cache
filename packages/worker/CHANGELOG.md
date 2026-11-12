@@ -1,5 +1,16 @@
 # cf-nix-cache
 
+## 0.11.0
+
+### Minor Changes
+
+- cbcebae: Remove the backwards-compatibility code. The staging upload routes, the `CREATED` state, Durable Object schema migrations, the processor-container upgrade path, and the CLI's handling of older servers are gone: nothing reads old data or talks to old clients and servers. **Existing installations must be recreated** from an empty deployment.
+- cbcebae: Replace the publication protocol with a soft quota. A publication interrupted between reserving a change and committing it locked its path forever, and every later publish of that path failed with `mutation_in_progress`. A path change is now one transaction on the shard that owns the path, so there is nothing to leave behind. Quota is a soft limit, checked when an upload is opened against the total the coordinator was last told, so uploads opened at once can overshoot it by their own size and eviction brings the cache back under the watermark. Each shard reports its total bytes and revision after every change, and the daily eviction run refreshes every shard's total before deciding anything, so a lost report is repaired within a day. Logical bytes count each path's chunks, not distinct R2 objects. **Existing installations must be recreated:** existing caches are not migrated.
+
+### Patch Changes
+
+- 72e3b73: Finish an upload another push abandoned. When two pushes of the same store path ran at once, the second merged into the first's in-flight upload and only polled for its result, so if the first client died while uploading, the second waited for the in-flight entry to expire, up to an hour. A merged push whose chunk list is byte-identical to the upload's is now handed the chunks still missing and can upload and complete them itself; a push whose encoder produced different chunks gets an upload of its own rather than sharing one it could not contribute to.
+
 ## 0.10.0
 
 ### Minor Changes
