@@ -3,20 +3,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { hashSecret } from '../credentials';
 import type { AuditOutbox } from '../../audit/outbox';
-import {
-  BOOTSTRAP_SCHEMA,
-  migrateLegacyBootstrap,
-  scrubStoredTokens,
-  TokenIssuance,
-} from './issuance';
+import { BOOTSTRAP_SCHEMA, TokenIssuance } from './issuance';
 import type { TokenSigner } from './signer';
 
 const TOKENS = `CREATE TABLE tokens (
   jti TEXT PRIMARY KEY, subject TEXT NOT NULL, expires_at INTEGER NOT NULL,
   issued_at INTEGER NOT NULL, grants TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0,
-  token TEXT NOT NULL, operation_id TEXT UNIQUE NOT NULL, fingerprint TEXT NOT NULL
+  operation_id TEXT UNIQUE NOT NULL, fingerprint TEXT NOT NULL
 );`;
-const LEGACY = `CREATE TABLE bootstrap (key INTEGER PRIMARY KEY CHECK (key = 1), operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL);`;
 
 function fakeState() {
   const db = new DatabaseSync(':memory:');
@@ -143,13 +137,10 @@ describe('stored tokens', () => {
     return { db, ctx, arm, bootstrap };
   }
 
-  it('keeps no bearer token, and replays by signing again', async () => {
-    const { db, arm, bootstrap } = issued();
+  it('replays by signing again', async () => {
+    const { arm, bootstrap } = issued();
     await arm('first');
     await bootstrap('first', 'a');
-    expect(db.prepare('SELECT token FROM tokens').all()).toEqual([
-      { token: '' },
-    ]);
     expect(await bootstrap('first', 'a')).toMatchObject({
       ok: true,
       value: { token: 'token-1', repeated: true },
@@ -165,59 +156,5 @@ describe('stored tokens', () => {
       ok: false,
       error: { code: 'token_revoked', status: 409 },
     });
-  });
-
-  it('scrubs tokens stored by earlier releases', async () => {
-    const { db, ctx } = issued();
-    db.exec(
-      "INSERT INTO tokens (jti, subject, expires_at, issued_at, grants, token, operation_id, fingerprint) VALUES ('j', 's', 2, 1, '[]', 'secret', 'o', 'f')",
-    );
-    scrubStoredTokens(ctx);
-    expect(db.prepare('SELECT token FROM tokens').all()).toEqual([
-      { token: '' },
-    ]);
-  });
-});
-
-describe('legacy bootstrap migration', () => {
-  function legacy(consumed: boolean) {
-    const { db, ctx } = fakeState();
-    db.exec(LEGACY);
-    db.exec(BOOTSTRAP_SCHEMA);
-    if (consumed)
-      db.exec(
-        "INSERT INTO bootstrap (key, operation_id, fingerprint) VALUES (1, 'old', 'old')",
-      );
-    return { db, ctx, ...installation(ctx) };
-  }
-
-  it('treats the configured secret as used, then re-arms', async () => {
-    const { db, ctx, env, arm, bootstrap } = legacy(true);
-    await arm('configured');
-    migrateLegacyBootstrap(ctx, env);
-    expect(errorStatus(await bootstrap('configured', 'a'))).toBe(409);
-    await arm('next');
-    expect((await bootstrap('next', 'a')).ok).toBe(true);
-    expect(
-      db
-        .prepare("SELECT name FROM sqlite_master WHERE name = 'bootstrap'")
-        .all(),
-    ).toEqual([]);
-  });
-
-  it('leaves an installation that never bootstrapped available', async () => {
-    const { ctx, env, arm, bootstrap } = legacy(false);
-    await arm('configured');
-    migrateLegacyBootstrap(ctx, env);
-    expect((await bootstrap('configured', 'a')).ok).toBe(true);
-  });
-
-  it('is a no-op on later starts and new installations', async () => {
-    const { ctx, env, arm, bootstrap } = legacy(true);
-    await arm('configured');
-    migrateLegacyBootstrap(ctx, env);
-    await arm('next');
-    migrateLegacyBootstrap(ctx, env);
-    expect((await bootstrap('next', 'a')).ok).toBe(true);
   });
 });

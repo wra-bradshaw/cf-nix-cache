@@ -19,7 +19,6 @@ export type CfNixCacheAPIContract =
   | EncodedCompleteBatch;
 export type Role = 'pull' | 'push' | 'admin';
 export type UploadStatus =
-  | 'CREATED'
   | 'UPLOADING'
   | 'COMPLETING'
   | 'QUEUED'
@@ -200,6 +199,9 @@ export interface EncodedCompleteBatch {
 }
 
 // Source: schemas/manifest.json
+/**
+ * The chunk manifest the Worker validates as ChunkManifest and stores after verifying an upload.
+ */
 export interface CfNixCacheChunkManifest {
   encoding_id: 'fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1';
   nar_hash: string;
@@ -225,11 +227,12 @@ export interface CfNixCacheChunkManifest {
       key: string;
     }[],
   ];
-  processing_version: string;
-  created_at: number;
 }
 
 // Source: schemas/process-job.json
+/**
+ * The ProcessUploadWorkflow payload (ProcessJob) and the chunk list the upload session leaves for it.
+ */
 export interface CfNixCacheUploadJob {
   job_id: string;
   nar_hash: string;
@@ -318,7 +321,6 @@ export interface CachePage {
 export interface UploadStateResponse {
   id: string;
   status:
-    | 'CREATED'
     | 'UPLOADING'
     | 'COMPLETING'
     | 'QUEUED'
@@ -369,7 +371,7 @@ export interface MissingPathsResponse {
   /**
    * Paths another push is uploading right now. They are not in missing; opening an upload of one joins that upload.
    */
-  pending?: {
+  pending: {
     store_hash: string;
     upload_id: string;
   }[];
@@ -393,8 +395,6 @@ export interface GcSummary {
   outcome: 'success' | 'failed';
   started_at: number;
   finished_at: number;
-  evicted_paths: number;
-  skipped_paths: number;
   marked_objects: number;
   missing_manifests: number;
   deleted_objects: number;
@@ -412,7 +412,6 @@ export interface CacheUpstreamsResponse {
 export interface EncodedUploadResponse {
   id: string;
   status:
-    | 'CREATED'
     | 'UPLOADING'
     | 'COMPLETING'
     | 'QUEUED'

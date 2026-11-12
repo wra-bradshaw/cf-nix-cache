@@ -29,10 +29,8 @@ export function hashSecret(value: string): string {
   return createHash("sha256").update(value).digest("base64url");
 }
 
-// Wrangler reports a missing script as `Worker "<name>" not found.`; older
-// releases surface the raw API error code 10007 instead.
-const workerNotFound =
-  /Worker "[^"]+"(?: \(env: [^)]+\))? not found\.|\[code: 10007\]/;
+// Wrangler reports a missing script as `Worker "<name>" not found.`
+const workerNotFound = /Worker "[^"]+"(?: \(env: [^)]+\))? not found\./;
 
 export async function secretNamesFromWrangler(
   options: { allowMissingWorker?: boolean } = {},

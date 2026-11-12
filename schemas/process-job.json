@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cf-nix-cache.dev/schemas/process-job.json",
-  "$comment": "Still canonical for the Worker: the ProcessUploadWorkflow payload (ProcessJob) and the chunk list the upload session leaves for it. The Rust contracts crate no longer re-exports this schema since the processor container was removed; the TypeScript contracts generated from schemas/*.json remain the source of truth.",
   "title": "cf-nix-cache upload job",
+  "description": "The ProcessUploadWorkflow payload (ProcessJob) and the chunk list the upload session leaves for it.",
   "type": "object",
   "additionalProperties": false,
   "required": ["job_id", "chunks_key", "nar_hash", "nar_size", "encoding_id"],

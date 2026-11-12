@@ -40,8 +40,6 @@ const summary = (run_id: string) => ({
   outcome: 'success' as const,
   started_at: 1,
   finished_at: 1,
-  evicted_paths: 0,
-  skipped_paths: 0,
   marked_objects: 0,
   missing_manifests: 0,
   deleted_objects: 0,

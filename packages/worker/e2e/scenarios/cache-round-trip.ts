@@ -412,18 +412,6 @@ export async function runCacheRoundTrip(fixture: E2eFixture): Promise<void> {
       }),
     );
 
-    // CLIs from before client encoding are told to upgrade.
-    const stagingUpload = await request(server, base, '/api/uploads', {
-      method: 'POST',
-      headers: {
-        ...authHeader,
-        'content-type': 'application/json',
-        'Idempotency-Key': 'e2e-legacy-upload',
-      },
-      body: '{}',
-    });
-    expect(stagingUpload.status).toBe(410);
-
     // Deleting a cache clears all of its shards and finishes. The new cache
     // gets a new identity, so it must start out empty.
     const deleting = await request(server, base, `/api/caches/${secondCache}`, {

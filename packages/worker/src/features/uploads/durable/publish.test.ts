@@ -10,7 +10,6 @@ const row: UploadRow = {
   cache_id: 'cache-id',
   incarnation: 'incarnation',
   chunks_key: 'staging/job.chunks.json',
-  encoded: true,
   state: 'PROCESSING',
   manifest,
   compressed_size: 1,
@@ -66,8 +65,6 @@ describe('upload publication', () => {
           key: `chunks/fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1/${hash('2')}.zst`,
         },
       ],
-      processing_version: 'test',
-      created_at: 1,
     };
 
     async function environment(text: () => Promise<string>) {

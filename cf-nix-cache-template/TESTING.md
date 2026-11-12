@@ -29,29 +29,6 @@ finishes well under `limits.cpu_ms` 300000 (check `cpuTime` via
 Run `pnpm run deploy` twice; the public key and all five Worker secret
 names remain unchanged.
 
-## Package upgrade
-
-Update only `cf-nix-cache`; verify `pnpm run check` passes and the deploy
-uses `wrangler.jsonc` unchanged.
-
-## Template upgrade
-
-Deploy the previous template release, then apply the upgrading steps in
-the README with the new package; verify the `v3` migration applies and
-uploads still succeed.
-
-## Stale config
-
-Restore the `PROCESSOR` binding, drop the `v3` migration, or lower
-`limits.cpu_ms` below 300000. `pnpm run check` and `pnpm run deploy`
-fail on the first problem (the upgrade message, or the `cpu_ms` message
-for the limit); `pnpm run doctor` lists every problem at once.
-
-## Rollback
-
-Pin the previous package version of the same template release and
-deploy; verify the previous Worker version serves traffic.
-
 ## Missing/partial secret
 
 Delete one Worker secret; `pnpm run deploy` and `pnpm run doctor` fail

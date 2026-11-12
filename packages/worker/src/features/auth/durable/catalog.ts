@@ -2,12 +2,7 @@ import type { Grant, TokenSummary } from '../types';
 import type { PageResponse } from '../../../shared/cursors';
 import type { RpcResult } from '../../../shared/rpc';
 import { AUDIT_OUTBOX_SCHEMA, AuditOutbox } from '../../audit/outbox';
-import {
-  BOOTSTRAP_SCHEMA,
-  migrateLegacyBootstrap,
-  scrubStoredTokens,
-  TokenIssuance,
-} from './issuance';
+import { BOOTSTRAP_SCHEMA, TokenIssuance } from './issuance';
 import { TokenManagement } from './management';
 import { TokenSigner } from './signer';
 import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
@@ -15,7 +10,7 @@ import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
 const schema = `CREATE TABLE IF NOT EXISTS tokens (
   jti TEXT PRIMARY KEY, subject TEXT NOT NULL, expires_at INTEGER NOT NULL,
   issued_at INTEGER NOT NULL, grants TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0,
-  token TEXT NOT NULL, operation_id TEXT UNIQUE NOT NULL, fingerprint TEXT NOT NULL
+  operation_id TEXT UNIQUE NOT NULL, fingerprint TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS token_operations (operation_id TEXT PRIMARY KEY, jti TEXT NOT NULL);
 ${BOOTSTRAP_SCHEMA}
@@ -29,8 +24,6 @@ export class TokenCatalog extends RpcOnlyDurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(schema);
-    migrateLegacyBootstrap(ctx, env);
-    scrubStoredTokens(ctx);
     this.audit = new AuditOutbox(ctx, env);
     this.issuance = new TokenIssuance(
       ctx,

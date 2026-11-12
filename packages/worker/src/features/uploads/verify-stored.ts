@@ -1,4 +1,3 @@
-import { now } from '../../shared/clock';
 import { ChunkManifestSchema, parseJsonSchema } from '../../shared/schemas';
 import { ENCODING_ID } from '../cache/types';
 import {
@@ -144,8 +143,6 @@ export async function verifyStoredNar(
     file_hash: `sha256:${nixBase32(new Uint8Array(await fileDigest.digest))}`,
     file_size: fileSize,
     chunks: refs as ChunkManifest['chunks'],
-    processing_version: 'worker-v2',
-    created_at: now(),
   };
 }
 

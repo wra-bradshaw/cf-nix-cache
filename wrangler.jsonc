@@ -28,7 +28,6 @@
     "CacheCoordinator": { "type": "durable-object", "storage": "sqlite" },
     "CacheIndexShard": { "type": "durable-object", "storage": "sqlite" },
     "UploadJob": { "type": "durable-object", "storage": "sqlite" },
-    "ProcessorContainer": { "type": "durable-object", "state": "deleted" },
     "GcControl": { "type": "durable-object", "storage": "sqlite" },
   },
   "workflows": [

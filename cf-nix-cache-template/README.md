@@ -79,9 +79,9 @@ Always invoke the helpers through `pnpm run`: `pnpm setup`, `pnpm deploy`, and
 scripts.
 
 `doctor` checks package compatibility, the complete secret set, the R2 bucket
-and lifecycle configuration, leftover configuration from older template
-releases, and observability. It also fails when the installed package version
-differs from its release manifest version; `pnpm run check` and deploys
+and lifecycle configuration, and observability. It also fails when the
+installed package version differs from its release manifest version;
+`pnpm run check` and deploys
 already reject a manifest schema this template does not understand, so that
 doctor check only catches a partially installed package. A partial secret set
 always fails:
@@ -109,39 +109,6 @@ Then run the bootstrap command from the build log again. Re-arming does not
 revoke existing tokens, so revoke a lost token with `DELETE /api/tokens/{jti}`.
 Requests may set `valid_for_seconds` up to 6311520000 (200 years).
 
-The first request after upgrading from a release without re-arming treats the
-secret configured at that moment as used. If bootstrap returns 409 after
-upgrading and setting a new secret together, set another new secret.
-
-Garbage collection needs configuration that older deployments lack. When
-upgrading from a release without it, copy these from this template's
-`wrangler.jsonc` to yours: the `GC_CONTROL` binding, the `v2` migration, the
-`garbage-collect` workflow, and `limits`. Deploys fail until the binding and
-workflow are present. The first scheduled run deletes objects left unreferenced
-by earlier path and cache deletions; preview it with `cf-nix-cache gc run --dry-run`.
-
-Quota eviction needs the `evict-cache` workflow, which older deployments also
-lack. Add it to your `wrangler.jsonc` from this template: name `evict-cache`,
-binding `EVICT_CACHE`, class `EvictCacheWorkflow`, schedule `["0 4 * * *"]` and
-`limits.steps` 25000. Deploys fail until it is present.
-
-### Upgrading from a release with the processor container
-
-Earlier releases verified large uploads in a Cloudflare Container. Uploads are
-now verified inside the Worker, and the `cf-nix-cache` package no longer
-exports `ProcessorContainer`. Take these `wrangler.jsonc` changes from this
-template in the same change that upgrades the package:
-
-- remove the `containers` section and the `PROCESSOR` Durable Object binding;
-- keep `ProcessorContainer` in the `v1` migration and append the `v3`
-  migration, `{ "tag": "v3", "deleted_classes": ["ProcessorContainer"] }`;
-- add `"cpu_ms": 300000` to `limits`.
-
-The `v3` migration deletes the old class, which held no durable data. You can
-also delete `Dockerfile` and any `CF_NIX_CACHE_PROCESSOR_IMAGE` setting. Deploy,
-preview, `pnpm run check` and `doctor` report a config that still needs these
-changes.
-
 Deleting the Worker does not delete a non-empty R2 bucket. To tear down a
 cache, first stop writers, verify the bucket is empty, explicitly delete its
 objects, and then remove the bucket using Wrangler. This is intentionally not
@@ -157,5 +124,4 @@ arguments:
 and `BOOTSTRAP_SECRET_HASH`.
 
 See [TESTING.md](TESTING.md) for the clean-account acceptance matrix,
-including a real `nix copy`, rollback, preview, external-CI, and teardown
-checks.
+including a real `nix copy`, preview, external-CI, and teardown checks.

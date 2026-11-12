@@ -18,7 +18,6 @@ export interface UploadRow {
   cache_id: string;
   incarnation: string;
   chunks_key: string;
-  encoded: boolean;
   state: UploadState;
   manifest: UploadManifest;
   compressed_size: number;

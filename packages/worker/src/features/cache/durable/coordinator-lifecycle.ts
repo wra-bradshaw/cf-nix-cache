@@ -33,12 +33,8 @@ function toCache(row: SqlRow): CacheConfig {
     encoding_id: encodingId(text(row, 'encoding_id')),
     created_at: integer(row, 'created_at'),
     lifecycle,
-    retention_days:
-      row.retention_days == null ? 0 : integer(row, 'retention_days'),
-    eviction_min_age_days:
-      row.eviction_min_age_days == null
-        ? DEFAULT_MIN_AGE_DAYS
-        : integer(row, 'eviction_min_age_days'),
+    retention_days: integer(row, 'retention_days'),
+    eviction_min_age_days: integer(row, 'eviction_min_age_days'),
     last_eviction:
       row.last_eviction == null
         ? null
@@ -213,15 +209,11 @@ export class CoordinatorLifecycle {
                 : 0,
           retention_days:
             input.retention_days === undefined
-              ? row.retention_days == null
-                ? 0
-                : integer(row, 'retention_days')
+              ? integer(row, 'retention_days')
               : input.retention_days,
           eviction_min_age_days:
             input.eviction_min_age_days === undefined
-              ? row.eviction_min_age_days == null
-                ? DEFAULT_MIN_AGE_DAYS
-                : integer(row, 'eviction_min_age_days')
+              ? integer(row, 'eviction_min_age_days')
               : input.eviction_min_age_days,
           upstream_cache_key_names: input.upstream_cache_key_names
             ? JSON.stringify(input.upstream_cache_key_names)

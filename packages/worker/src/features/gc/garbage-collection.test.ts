@@ -307,7 +307,6 @@ describe('garbage collection', () => {
     expect(world.forgottenUploads).toEqual([]);
     expect(summary).toMatchObject({
       dry_run: true,
-      evicted_paths: 0,
       deleted_objects: 2,
     });
   });

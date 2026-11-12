@@ -168,9 +168,9 @@ describe('verifying stored chunks', () => {
     expect((await storeManifest(store, manifest)).result).toMatchObject({
       deduplicated: false,
     });
-    const again = await storeManifest(store, { ...manifest, created_at: 2 });
+    const again = await storeManifest(store, manifest);
     expect(again.result).toMatchObject({ deduplicated: true });
-    expect(again.manifest.created_at).toBe(manifest.created_at);
+    expect(again.manifest).toEqual(manifest);
   });
 
   it('rejects a stored manifest with too many chunks', async () => {
@@ -192,8 +192,6 @@ describe('verifying stored chunks', () => {
       chunks: Array.from({ length: CHUNK_LIST_MAX_CHUNKS + 1 }, () => ({
         ...entry,
       })),
-      processing_version: 'worker-v2',
-      created_at: 1,
     };
     const manifestKey = `manifests/${ENCODING_ID}/${hash}.json`;
     const objects = new Map<string, Uint8Array | string>();

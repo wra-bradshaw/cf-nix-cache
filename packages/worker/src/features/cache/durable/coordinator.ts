@@ -1,15 +1,11 @@
 import type { AuditEvent } from '../../audit/types';
-import {
-  type CacheConfig,
-  type CacheReference,
-  type QuotaReservation,
-  DEFAULT_UPSTREAM_CACHE_KEY_NAMES,
-} from '../types';
+import type { CacheConfig, CacheReference, QuotaReservation } from '../types';
 import { type RpcResult, failure, ok } from '../../../shared/rpc';
 import { AUDIT_OUTBOX_SCHEMA, AuditOutbox } from '../../audit/outbox';
 import { CoordinatorQuota, QUOTA_RESERVED_INDEX } from './quota';
-import { CoordinatorEviction, EVICTION_COLUMNS } from './coordinator-eviction';
+import { CoordinatorEviction } from './coordinator-eviction';
 import type { EvictionResult } from '../../eviction/types';
+import { DEFAULT_MIN_AGE_DAYS } from '../../eviction/policy';
 import { CoordinatorLifecycle } from './coordinator-lifecycle';
 import {
   type Allocation,
@@ -18,31 +14,29 @@ import {
   UploadAllocations,
 } from './upload-allocations';
 import { RpcOnlyDurableObject } from '../../../shared/rpc-only-durable-object';
-import { addMissingColumns } from '../../../shared/sql';
 
 const schema = `CREATE TABLE IF NOT EXISTS cache (
   cache_id TEXT PRIMARY KEY, name TEXT NOT NULL, incarnation TEXT NOT NULL,
   public INTEGER NOT NULL, quota_bytes INTEGER NOT NULL, logical_bytes INTEGER NOT NULL DEFAULT 0,
-  encoding_id TEXT NOT NULL, created_at INTEGER NOT NULL, lifecycle TEXT NOT NULL
+  encoding_id TEXT NOT NULL, created_at INTEGER NOT NULL, lifecycle TEXT NOT NULL,
+  retention_days INTEGER NOT NULL DEFAULT 0, upstream_cache_key_names TEXT NOT NULL,
+  eviction_min_age_days INTEGER NOT NULL DEFAULT ${DEFAULT_MIN_AGE_DAYS},
+  eviction_generation INTEGER NOT NULL DEFAULT 0, eviction_pending INTEGER NOT NULL DEFAULT 0,
+  eviction_requested_at INTEGER NOT NULL DEFAULT 0, last_eviction TEXT
 );
 CREATE TABLE IF NOT EXISTS quota_operations (
   operation_id TEXT PRIMARY KEY, delta INTEGER NOT NULL, status TEXT NOT NULL
 );
 ${QUOTA_RESERVED_INDEX}
 CREATE TABLE IF NOT EXISTS upload_allocations (
-  operation_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, upload_id TEXT NOT NULL UNIQUE, staging_key TEXT NOT NULL
+  operation_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, upload_id TEXT NOT NULL UNIQUE, staging_key TEXT NOT NULL,
+  created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS clear_operations (
   operation_id TEXT PRIMARY KEY, delta INTEGER NOT NULL
 );
 ${INFLIGHT_SCHEMA}
 ${AUDIT_OUTBOX_SCHEMA}`;
-
-const ADDED_COLUMNS: Record<string, string> = {
-  retention_days: 'INTEGER NOT NULL DEFAULT 0',
-  upstream_cache_key_names: `TEXT NOT NULL DEFAULT '${JSON.stringify(DEFAULT_UPSTREAM_CACHE_KEY_NAMES)}'`,
-  ...EVICTION_COLUMNS,
-};
 
 export class CacheCoordinator extends RpcOnlyDurableObject {
   private readonly lifecycle: CoordinatorLifecycle;
@@ -54,10 +48,6 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(schema);
-    addMissingColumns(ctx, 'cache', ADDED_COLUMNS);
-    // Allocations from before created_at existed have NULL, which pruning
-    // treats as old.
-    addMissingColumns(ctx, 'upload_allocations', { created_at: 'INTEGER' });
     this.lifecycle = new CoordinatorLifecycle(ctx);
     this.allocations = new UploadAllocations(ctx, env);
     this.eviction = new CoordinatorEviction(ctx, env);

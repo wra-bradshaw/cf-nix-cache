@@ -2,16 +2,8 @@ import { type RpcResult, failure, ok } from '../../../shared/rpc';
 import { first, integer, text, type SqlRow } from '../../../shared/sql';
 import { now } from '../../../shared/clock';
 import { ensureWorkflow } from '../../../shared/workflows';
-import { DEFAULT_MIN_AGE_DAYS, overHighWatermark } from '../../eviction/policy';
+import { overHighWatermark } from '../../eviction/policy';
 import type { EvictionJob, EvictionResult } from '../../eviction/types';
-
-export const EVICTION_COLUMNS: Record<string, string> = {
-  eviction_min_age_days: `INTEGER NOT NULL DEFAULT ${DEFAULT_MIN_AGE_DAYS}`,
-  eviction_generation: 'INTEGER NOT NULL DEFAULT 0',
-  eviction_pending: 'INTEGER NOT NULL DEFAULT 0',
-  eviction_requested_at: 'INTEGER NOT NULL DEFAULT 0',
-  last_eviction: 'TEXT',
-};
 
 // A cache still over its watermark after a run that freed nothing (every
 // path left is too recent) asks again at most this often.

@@ -181,7 +181,7 @@ export class UploadAllocations {
       );
     const rows = [
       ...this.ctx.storage.sql.exec<SqlRow>(
-        'SELECT upload_id FROM upload_allocations WHERE (created_at IS NULL OR created_at < ?) AND upload_id > ? ORDER BY upload_id LIMIT ?',
+        'SELECT upload_id FROM upload_allocations WHERE created_at < ? AND upload_id > ? ORDER BY upload_id LIMIT ?',
         input.before,
         input.after ?? '',
         input.limit + 1,

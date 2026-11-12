@@ -36,16 +36,10 @@ export class UploadJob extends RpcOnlyDurableObject {
     this.session = new UploadSession(ctx, env, this.storage, this.publisher);
   }
 
-  async access(): Promise<
-    RpcResult<{ cache: string; state: UploadState; encoded: boolean }>
-  > {
+  async access(): Promise<RpcResult<{ cache: string; state: UploadState }>> {
     const row = this.storage.row();
     return row
-      ? ok({
-          cache: row.cache,
-          state: row.state,
-          encoded: row.encoded,
-        })
+      ? ok({ cache: row.cache, state: row.state })
       : failure('not_found', 'upload not found', 404);
   }
 
@@ -102,7 +96,7 @@ export class UploadJob extends RpcOnlyDurableObject {
 
   async abort(): Promise<RpcResult<UploadStateResponse>> {
     const row = this.storage.row();
-    if (row?.encoded && row.state === 'COMPLETING')
+    if (row?.state === 'COMPLETING')
       return failure(
         'invalid_transition',
         'upload cannot be aborted while it is being verified',
@@ -115,7 +109,6 @@ export class UploadJob extends RpcOnlyDurableObject {
   }
 
   async state(): Promise<RpcResult<UploadStateResponse>> {
-    await this.session.scheduleStallRecovery();
     return this.lifecycle.state();
   }
 

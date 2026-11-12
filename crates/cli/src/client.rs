@@ -254,8 +254,7 @@ fn retry_safe(method: &Method, path: &str) -> bool {
         return true;
     }
     if method == Method::POST {
-        return path == "/api/uploads"
-            || path == "/api/uploads/encoded"
+        return path == "/api/uploads/encoded"
             || path == "/api/uploads/encoded/batch"
             || path == "/api/uploads/encoded/batch/complete"
             || path == "/api/bootstrap"
@@ -323,7 +322,6 @@ mod tests {
     fn retries_only_safe_or_explicitly_idempotent_operations() {
         assert!(retry_safe(&Method::GET, "/api/caches/a/info"));
         assert!(retry_safe(&Method::POST, "/api/caches/a/missing"));
-        assert!(retry_safe(&Method::POST, "/api/uploads"));
         assert!(retry_safe(&Method::POST, "/api/bootstrap"));
         assert!(!retry_safe(&Method::POST, "/api/caches"));
         assert!(!retry_safe(&Method::POST, "/api/tokens"));

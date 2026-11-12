@@ -251,10 +251,6 @@ pub(crate) async fn upload_encoded_batch(
         if upload.status != UploadStatus::Uploading {
             continue;
         }
-        if upload.merged && upload.missing_chunks.is_empty() {
-            retry.insert(index);
-            continue;
-        }
         batched.push(index);
         ids.push(upload.id.clone());
         for hash in &upload.missing_chunks {

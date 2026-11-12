@@ -38,7 +38,7 @@ rule via the Wrangler CLI before deploying; custom hostnames are a
 The supported customer distribution is the standalone
 [`cf-nix-cache-template`](cf-nix-cache-template/README.md). It contains only a
 tiny Worker entrypoint, pinned Wrangler/dependency versions, customer-owned
-`wrangler.jsonc`, and setup/upgrade helpers. Cloudflare Workers Builds runs
+`wrangler.jsonc`, and setup helpers. Cloudflare Workers Builds runs
 `pnpm run deploy`; external CI can run the same command. No deployment from that
 template builds Rust: the published package already contains the compiled
 WebAssembly verifier.
@@ -48,7 +48,7 @@ dependency, and customer names, placement, routes, and observability in the
 template's `wrangler.jsonc` stay intact. Large uploads are verified in a
 Workflow step with `limits.cpu_ms` of 300000, which needs the Workers Paid
 plan. The development flake below remains useful for local builds and
-integration tests; it is not the customer upgrade path.
+integration tests.
 
 ## Local checks
 

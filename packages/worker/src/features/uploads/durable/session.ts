@@ -103,12 +103,6 @@ export class UploadSession {
     return this.ctx.storage.sql;
   }
 
-  isSession(): boolean {
-    return Boolean(
-      first(this.sql().exec<SqlRow>('SELECT key FROM session WHERE key = 1')),
-    );
-  }
-
   leaseToken(): string | null {
     const row = first(
       this.sql().exec<SqlRow>('SELECT lease_token FROM session WHERE key = 1'),
@@ -389,8 +383,7 @@ export class UploadSession {
     rawHash: string,
   ): Promise<RpcResult<ChunkClaim & { present: boolean }>> {
     const row = this.storage.row();
-    if (!row || !this.isSession())
-      return failure('not_found', 'upload session not found', 404);
+    if (!row) return failure('not_found', 'upload session not found', 404);
     if (row.state !== 'UPLOADING')
       return failure('not_uploadable', 'upload is not accepting chunks', 409);
     const chunk = first(
@@ -412,8 +405,7 @@ export class UploadSession {
 
   async missingChunks(): Promise<RpcResult<string[]>> {
     const row = this.storage.row();
-    if (!row || !this.isSession())
-      return failure('not_found', 'upload session not found', 404);
+    if (!row) return failure('not_found', 'upload session not found', 404);
     return ok(row.state === 'UPLOADING' ? this.missing() : []);
   }
 
@@ -423,8 +415,7 @@ export class UploadSession {
       if (!row) return failure('not_found', 'upload not found', 404);
       if (row.state !== 'UPLOADING')
         return ok({ kind: 'state', state: row.state });
-      if (!row.encoded || !this.sameChunks(chunks))
-        return ok({ kind: 'incompatible' });
+      if (!this.sameChunks(chunks)) return ok({ kind: 'incompatible' });
       return ok({ kind: 'joined', missing_chunks: this.missing() });
     });
   }
@@ -450,8 +441,7 @@ export class UploadSession {
   async chunkStored(rawHash: string): Promise<RpcResult<void>> {
     return this.serialized(async () => {
       const row = this.storage.row();
-      if (!row || !this.isSession())
-        return failure('not_found', 'upload session not found', 404);
+      if (!row) return failure('not_found', 'upload session not found', 404);
       if (TERMINAL.includes(row.state))
         return failure(
           'invalid_transition',
@@ -495,25 +485,6 @@ export class UploadSession {
     return this.serialized(async () => {
       const row = this.storage.row();
       if (!row) return failure('not_found', 'upload session not found', 404);
-      if (
-        ![
-          'UPLOADING',
-          'COMPLETING',
-          'QUEUED',
-          'PROCESSING',
-          'PUBLISHING',
-          'READY',
-          'FAILED',
-          'ABORTED',
-        ].includes(row.state)
-      )
-        return failure(
-          'invalid_transition',
-          'upload was never opened; push again with a current cf-nix-cache',
-          409,
-        );
-      if (!this.isSession())
-        return failure('not_found', 'upload session not found', 404);
       if (IN_PROGRESS.includes(row.state)) {
         try {
           await ensureWorkflow(
@@ -565,19 +536,10 @@ export class UploadSession {
     });
   }
 
-  scheduleStallRecovery(): Promise<void> {
-    return this.serialized(async () => {
-      if (this.storage.row()?.state !== 'COMPLETING' || !this.isSession())
-        return;
-      if ((await this.ctx.storage.getAlarm()) === null)
-        await this.ctx.storage.setAlarm(Date.now() + INLINE_VERIFY_STALL_MS);
-    });
-  }
-
   recoverStalledCompletion(): Promise<void> {
     return this.serialized(async () => {
       const row = this.storage.row();
-      if (row?.state !== 'COMPLETING' || !this.isSession()) return;
+      if (row?.state !== 'COMPLETING') return;
       console.warn({
         message: 'inline verification stalled; handing it to the workflow',
         job_id: row.job_id,

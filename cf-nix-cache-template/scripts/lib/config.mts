@@ -4,7 +4,6 @@ import { parseJsonc } from "./jsonc.mts";
 import { configPath } from "./paths.mts";
 
 type DurableObjectBinding = { name?: string; class_name?: string };
-type Container = { class_name?: string; [key: string]: unknown };
 type Limits = { cpu_ms?: number; subrequests?: number };
 type WorkflowEntry = {
   name?: string;
@@ -15,7 +14,6 @@ type WorkflowEntry = {
 type EnvScope = {
   r2_buckets?: Array<{ binding?: string; bucket_name?: string }>;
   vars?: Record<string, string>;
-  containers?: Container[];
   durable_objects?: { bindings?: DurableObjectBinding[] };
   limits?: Limits;
   workflows?: WorkflowEntry[];
@@ -25,11 +23,9 @@ type EnvScope = {
 export type TemplateConfig = {
   name?: string;
   r2_buckets?: Array<{ binding?: string; bucket_name?: string }>;
-  containers?: Container[];
   durable_objects?: { bindings?: DurableObjectBinding[] };
   limits?: Limits;
   env?: Record<string, EnvScope>;
-  migrations?: Array<{ tag?: string; deleted_classes?: string[] }>;
   workflows?: WorkflowEntry[];
   observability?: { enabled?: boolean };
   vars?: Record<string, string>;
@@ -96,108 +92,6 @@ export function cpuLimitsProblem(config: TemplateConfig): string | undefined {
       return `env "${envName}": limits.cpu_ms must be at least ${MIN_CPU_MS} (5 minutes, which needs Workers Paid)`;
   }
   return undefined;
-}
-
-export const CONTAINER_UPGRADE_INTRO = `wrangler.jsonc is from a template release that ran the processor container, which has been removed: uploads are now verified in the Worker. Upgrade wrangler.jsonc from the template together with the cf-nix-cache package (see "Upgrading from a release with the processor container" in README.md)`;
-
-export type ContainerUpgradeResult = {
-  intro: string;
-  remedies: string[];
-  problems: string[];
-  includesCpuRemedy: boolean;
-};
-
-export function containerUpgradeResult(
-  config: TemplateConfig,
-): ContainerUpgradeResult {
-  const envRecord: unknown = (config as Record<string, unknown>)?.env;
-  const scopes: unknown[] = [
-    config,
-    ...(isRecord(envRecord) ? Object.values(envRecord) : []),
-  ];
-  const containersOf = (scope: unknown): Container[] => {
-    const raw: unknown = isRecord(scope as unknown)
-      ? (scope as EnvScope).containers
-      : undefined;
-    return Array.isArray(raw) ? (raw as Container[]) : [];
-  };
-  const bindingsOf = (scope: unknown): DurableObjectBinding[] => {
-    const holder: unknown = isRecord(scope as unknown)
-      ? (scope as EnvScope).durable_objects
-      : undefined;
-    const raw: unknown =
-      isRecord(holder) || Array.isArray(holder)
-        ? (holder as { bindings?: unknown }).bindings
-        : undefined;
-    return Array.isArray(raw) ? (raw as DurableObjectBinding[]) : [];
-  };
-  const remedies: string[] = [];
-  if (
-    scopes.some((scope) =>
-      containersOf(scope).some(
-        (container) =>
-          isRecord(container as unknown) &&
-          (container as Container).class_name === "ProcessorContainer",
-      ),
-    )
-  )
-    remedies.push("remove the ProcessorContainer entry from `containers`");
-  if (
-    scopes.some((scope) =>
-      bindingsOf(scope).some(
-        (binding) =>
-          isRecord(binding as unknown) &&
-          ((binding as DurableObjectBinding).name === "PROCESSOR" ||
-            (binding as DurableObjectBinding).class_name ===
-              "ProcessorContainer"),
-      ),
-    )
-  )
-    remedies.push("remove the PROCESSOR Durable Object binding");
-  const migrationsRaw: unknown = (config as Record<string, unknown>)
-    ?.migrations;
-  const migrations: Array<{ tag?: string; deleted_classes?: string[] }> =
-    Array.isArray(migrationsRaw)
-      ? (migrationsRaw as Array<{
-          tag?: string;
-          deleted_classes?: string[];
-        }>)
-      : [];
-  if (
-    !migrations.some(
-      (migration) =>
-        isRecord(migration as unknown) &&
-        Array.isArray(
-          (migration as { deleted_classes?: unknown }).deleted_classes,
-        ) &&
-        (
-          (migration as { deleted_classes?: string[] }).deleted_classes ?? []
-        ).includes("ProcessorContainer"),
-    )
-  )
-    remedies.push(
-      'append the migration { "tag": "v3", "deleted_classes": ["ProcessorContainer"] }',
-    );
-  const cpu = cpuLimitsProblem(config);
-  const includesCpuRemedy = cpu !== undefined && remedies.length > 0;
-  if (includesCpuRemedy) remedies.push(`set ${cpu}`);
-  if (!remedies.length)
-    return {
-      intro: CONTAINER_UPGRADE_INTRO,
-      remedies: [],
-      problems: [],
-      includesCpuRemedy: false,
-    };
-  return {
-    intro: CONTAINER_UPGRADE_INTRO,
-    remedies,
-    problems: remedies.map((remedy) => `${CONTAINER_UPGRADE_INTRO}: ${remedy}`),
-    includesCpuRemedy,
-  };
-}
-
-export function containerUpgradeProblems(config: TemplateConfig): string[] {
-  return containerUpgradeResult(config).problems;
 }
 
 export const EXPECTED_WORKFLOWS = [
@@ -589,13 +483,10 @@ function varsProblems(config: TemplateConfig): string[] {
   return problems;
 }
 
-function tailConfigProblems(
-  config: TemplateConfig,
-  includesCpuRemedy: boolean,
-): string[] {
+function tailConfigProblems(config: TemplateConfig): string[] {
   const problems: string[] = [];
   const cpu = cpuLimitsProblem(config);
-  if (cpu && !includesCpuRemedy)
+  if (cpu)
     problems.push(
       `wrangler.jsonc ${cpu}, or the upload workflow cannot verify large NARs`,
     );
@@ -606,22 +497,7 @@ function tailConfigProblems(
 }
 
 export function configProblems(config: TemplateConfig): string[] {
-  const upgrades = containerUpgradeResult(config);
-  return [
-    ...headConfigProblems(config),
-    ...upgrades.problems,
-    ...tailConfigProblems(config, upgrades.includesCpuRemedy),
-  ];
-}
-
-export function configProblemsWithoutUpgrade(
-  config: TemplateConfig,
-): string[] {
-  const upgrades = containerUpgradeResult(config);
-  return [
-    ...headConfigProblems(config),
-    ...tailConfigProblems(config, upgrades.includesCpuRemedy),
-  ];
+  return [...headConfigProblems(config), ...tailConfigProblems(config)];
 }
 
 export function validateConfig(config: TemplateConfig): void {

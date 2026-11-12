@@ -3,12 +3,12 @@ import { describe, expect, it } from 'vitest';
 import type { RpcResult } from '../../../shared/rpc';
 import { INFLIGHT_SCHEMA, UploadAllocations } from './upload-allocations';
 
-function allocations(): UploadAllocations & { db: DatabaseSync } {
+function allocations(): UploadAllocations {
   const db = new DatabaseSync(':memory:');
   db.exec(`CREATE TABLE cache (lifecycle TEXT NOT NULL);
     INSERT INTO cache VALUES ('ACTIVE');
     CREATE TABLE upload_allocations (
-      operation_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, upload_id TEXT NOT NULL UNIQUE, staging_key TEXT NOT NULL, created_at INTEGER
+      operation_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, upload_id TEXT NOT NULL UNIQUE, staging_key TEXT NOT NULL, created_at INTEGER NOT NULL
     );
     ${INFLIGHT_SCHEMA}`);
   let next = 0;
@@ -24,7 +24,7 @@ function allocations(): UploadAllocations & { db: DatabaseSync } {
   const env = {
     UPLOAD_JOB: { newUniqueId: () => ({ toString: () => `job${next++}` }) },
   } as unknown as Env;
-  return Object.assign(new UploadAllocations(ctx, env), { db });
+  return new UploadAllocations(ctx, env);
 }
 
 function value<T>(result: RpcResult<T>): T {
@@ -132,25 +132,6 @@ describe('pruning old allocations', () => {
     expect(
       value(await ledger.stale({ before: 5000, after: 'job1', limit: 2 })),
     ).toEqual({ upload_ids: ['job2'], next_after: null });
-  });
-
-  it('treats a missing created_at as old', async () => {
-    const ledger = allocations();
-    value(await ledger.allocate(request('a', 'nar-a', 9000)));
-    ledger.db
-      .prepare(
-        'INSERT INTO upload_allocations (operation_id, fingerprint, upload_id, staging_key, created_at) VALUES (?, ?, ?, ?, ?)',
-      )
-      .run(
-        'legacy',
-        'legacy',
-        'job-legacy',
-        'staging/job-legacy.chunks.json',
-        null,
-      );
-    expect(
-      value(await ledger.stale({ before: 100, after: null, limit: 10 })),
-    ).toEqual({ upload_ids: ['job-legacy'], next_after: null });
   });
 
   it('forgets only the given upload ids', async () => {

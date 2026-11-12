@@ -157,8 +157,7 @@ finds this out with installation-wide mark-and-sweep, weekly by default:
 4. **Sweep.** Mark the manifests those uploads published, then delete the
    remaining candidates, manifests before chunks. Then reopen the gate.
 
-Garbage collection does not evict paths. Its summary keeps `evicted_paths` and
-`skipped_paths`, always 0, for compatibility with earlier releases.
+Garbage collection does not evict paths.
 
 An object's age cannot show that deleting it is safe, because conditional
 writes deduplicate: an old unreferenced chunk can become referenced
@@ -185,13 +184,8 @@ from a partial index, so its history no longer slows every push.
 ## Durable Object migrations
 
 Durable Object classes are declared in `wrangler.jsonc` (`exports` at the top
-level, `migrations` in the template's copy). The policy is append-only: never
-edit a past migration, add a new tagged migration for every class change, and
-remove a class with `deleted_classes` rather than by deleting its entry. A
-removed class must hold no durable data worth keeping; `ProcessorContainer`
-was removed this way once verification moved into the Worker. The template
-refuses to deploy a config whose migrations do not delete the removed classes
-it knows about, so an old deployment cannot silently keep a stale class.
+level, `migrations` in the template's copy). One migration declares every class
+as SQLite-backed with `new_sqlite_classes`; all durable state lives in SQLite.
 
 ## Worker structure
 

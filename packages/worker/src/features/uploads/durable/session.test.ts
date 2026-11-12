@@ -687,15 +687,6 @@ async function readAlarm(job: JobStub): Promise<number | null> {
   );
 }
 
-async function clearAlarm(job: JobStub): Promise<void> {
-  await runInDurableObject(
-    job,
-    async (_instance: unknown, state: DurableObjectState) => {
-      await state.storage.deleteAlarm();
-    },
-  );
-}
-
 async function settleState(job: JobStub) {
   const state = await job.state();
   if (!state.ok) throw new Error('state: ' + JSON.stringify(state.error));
@@ -755,20 +746,6 @@ describe('inline verification stall recovery', () => {
     expect(await runDurableObjectAlarm(failed.job)).toBe(true);
     expect((await settleState(failed.job)).status).toBe('FAILED');
     expect(await env.CACHE_BUCKET.get(failed.chunksKey)).toBeNull();
-  }, 60000);
-
-  it('reschedules a missing alarm from state() without moving an existing one', async () => {
-    const { job } = await driveToInlineCompleting('alarm-reschedule');
-    await clearAlarm(job);
-    expect(await readAlarm(job)).toBeNull();
-    expect((await settleState(job)).status).toBe('COMPLETING');
-    const first = await readAlarm(job);
-    expect(first).not.toBeNull();
-    expect(
-      Math.abs(first! - (Date.now() + INLINE_VERIFY_STALL_MS)),
-    ).toBeLessThan(60_000);
-    expect((await settleState(job)).status).toBe('COMPLETING');
-    expect(await readAlarm(job)).toBe(first);
   }, 60000);
 
   it('keeps a workflow-owned upload queued when publishVerified arrives late', async () => {

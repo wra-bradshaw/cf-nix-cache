@@ -100,12 +100,6 @@ export class UploadJobLifecycle {
   async state(): Promise<RpcResult<UploadStateResponse>> {
     const row = this.storage.row();
     if (!row) return failure('not_found', 'upload not found', 404);
-    if (!row.encoded)
-      return failure(
-        'invalid_transition',
-        'upload is no longer supported; push again with a current cf-nix-cache',
-        409,
-      );
     if (!KNOWN_STATES.includes(row.state))
       return failure(
         'invalid_transition',

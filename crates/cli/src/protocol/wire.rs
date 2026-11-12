@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MissingPathsResponse {
     pub missing: Vec<String>,
-    /// Older servers omit this.
-    #[serde(default)]
     pub pending: Vec<PendingUpload>,
 }
 
@@ -36,7 +34,6 @@ pub struct EncodedCompleteBatchResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum UploadStatus {
-    Created,
     Uploading,
     Completing,
     Queued,
@@ -73,10 +70,10 @@ mod tests {
         );
         assert_eq!(state.status, UploadStatus::Publishing);
 
-        let missing: MissingPathsResponse = readable_from_schema::<
-            generated::MissingPathsResponse,
-            _,
-        >(json!({ "missing": ["0".repeat(32)] }));
+        let missing: MissingPathsResponse =
+            readable_from_schema::<generated::MissingPathsResponse, _>(
+                json!({ "missing": ["0".repeat(32)], "pending": [] }),
+            );
         assert_eq!(missing.missing, ["0".repeat(32)]);
         assert!(missing.pending.is_empty());
 
@@ -105,7 +102,6 @@ mod tests {
     #[test]
     fn every_schema_upload_status_is_known() {
         for status in [
-            "CREATED",
             "UPLOADING",
             "COMPLETING",
             "QUEUED",

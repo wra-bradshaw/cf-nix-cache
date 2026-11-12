@@ -5,13 +5,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   CONFIG_SCHEMA_VERSION,
-  CONTAINER_UPGRADE_INTRO,
   EXPECTED_WORKFLOWS,
   MIN_CPU_MS,
   REQUIRED_DURABLE_BINDINGS,
   configProblems,
-  containerUpgradeProblems,
-  containerUpgradeResult,
   cpuLimitsProblem,
   durableObjectWarnings,
   observabilityWarnings,
@@ -39,11 +36,6 @@ function validConfig(): TemplateConfig {
         { name: "GC_CONTROL", class_name: "GcControl" },
       ],
     },
-    migrations: [
-      { tag: "v1" },
-      { tag: "v2" },
-      { tag: "v3", deleted_classes: ["ProcessorContainer"] },
-    ],
     workflows: [
       {
         name: "process-upload",
@@ -122,63 +114,6 @@ test("an environment limit override names the environment", () => {
   const config = validConfig();
   config.env = { preview: { limits: { cpu_ms: 1000 } } };
   assert.match(cpuLimitsProblem(config) ?? "", /preview/);
-});
-
-test("a stale processor-container config names every remediation", () => {
-  const stale = validConfig();
-  stale.containers = [{ class_name: "ProcessorContainer" }];
-  stale.durable_objects?.bindings?.push({
-    name: "PROCESSOR",
-    class_name: "ProcessorContainer",
-  });
-  stale.migrations = [{ tag: "v1" }];
-  stale.limits = { cpu_ms: 1000 };
-  const problems = containerUpgradeProblems(stale);
-  const joined = problems.join("\n");
-  assert.match(joined, /ProcessorContainer/);
-  assert.match(joined, /PROCESSOR/);
-  assert.match(joined, /v3/);
-  assert.match(joined, /cpu_ms/);
-  assert.equal(problems.length, 4);
-  assert.throws(() => validateConfig(stale), /processor container/i);
-});
-
-test("a stale config with enough CPU does not mention cpu_ms", () => {
-  const stale = validConfig();
-  stale.containers = [{ class_name: "ProcessorContainer" }];
-  stale.migrations = [{ tag: "v1" }];
-  const joined = containerUpgradeProblems(stale).join("\n");
-  assert.match(joined, /ProcessorContainer/);
-  assert.doesNotMatch(joined, /cpu_ms/);
-});
-
-test("a stale config reports cpu_ms once, not bundled and standalone", () => {
-  const stale = validConfig();
-  stale.containers = [{ class_name: "ProcessorContainer" }];
-  stale.migrations = [{ tag: "v1" }];
-  stale.limits = { cpu_ms: 1000 };
-  const matches = configProblems(stale).filter((problem) =>
-    problem.includes("cpu_ms"),
-  );
-  assert.equal(matches.length, 1);
-});
-
-test("the upgrade result flags the cpu_ms remediation explicitly", () => {
-  const stale = validConfig();
-  stale.containers = [{ class_name: "ProcessorContainer" }];
-  stale.migrations = [{ tag: "v1" }];
-  stale.limits = { cpu_ms: 1000 };
-  const result = containerUpgradeResult(stale);
-  assert.equal(result.includesCpuRemedy, true);
-  assert.deepEqual(result.problems, containerUpgradeProblems(stale));
-
-  const enoughCpu = validConfig();
-  enoughCpu.containers = [{ class_name: "ProcessorContainer" }];
-  enoughCpu.migrations = [{ tag: "v1" }];
-  assert.equal(containerUpgradeResult(enoughCpu).includesCpuRemedy, false);
-
-  assert.equal(containerUpgradeResult(validConfig()).includesCpuRemedy, false);
-  assert.deepEqual(containerUpgradeResult(validConfig()).problems, []);
 });
 
 test("a missing workflow name is a problem", () => {
@@ -452,44 +387,6 @@ test("observability is warned per scope but stays out of check", () => {
   assert.deepEqual(configProblems(envDisabled), []);
 });
 
-test("an environment-scoped stale container is still an upgrade", () => {
-  const stale = validConfig();
-  stale.env = { preview: { containers: [{ class_name: "ProcessorContainer" }] } };
-  stale.migrations = [{ tag: "v1" }];
-  const result = containerUpgradeResult(stale);
-  assert.ok(result.remedies.length > 0);
-  assert.ok(
-    result.remedies.some((remedy) => remedy.includes("ProcessorContainer")),
-  );
-  assert.ok(
-    result.problems.every((problem) =>
-      problem.startsWith(CONTAINER_UPGRADE_INTRO),
-    ),
-  );
-  assert.throws(() => validateConfig(stale), /processor container/i);
-});
-
-test("an environment-scoped stale binding is still an upgrade", () => {
-  const stale = validConfig();
-  stale.env = {
-    preview: {
-      durable_objects: {
-        bindings: [
-          ...(validConfig().durable_objects?.bindings ?? []),
-          { name: "PROCESSOR", class_name: "ProcessorContainer" },
-        ],
-      },
-    },
-  };
-  stale.migrations = [{ tag: "v1" }];
-  assert.ok(
-    containerUpgradeProblems(stale).some((problem) =>
-      problem.includes("PROCESSOR"),
-    ),
-  );
-  assert.throws(() => validateConfig(stale), /processor container/i);
-});
-
 test("signingKeyName honors NIX_SIGNING_KEY_NAME with a default", () => {
   assert.equal(signingKeyName(validConfig()), "cache.nix-signing");
   const custom = validConfig();
@@ -502,19 +399,6 @@ test("signingKeyName honors NIX_SIGNING_KEY_NAME with a default", () => {
   const noVars: TemplateConfig = { ...validConfig() };
   delete noVars.vars;
   assert.equal(signingKeyName(noVars), "cache.nix-signing");
-});
-
-test("the upgrade result exposes one intro with bulleted remedies", () => {
-  const stale = validConfig();
-  stale.containers = [{ class_name: "ProcessorContainer" }];
-  stale.migrations = [{ tag: "v1" }];
-  const result = containerUpgradeResult(stale);
-  assert.equal(result.intro, CONTAINER_UPGRADE_INTRO);
-  assert.ok(result.remedies.length > 0);
-  assert.deepEqual(
-    result.problems,
-    result.remedies.map((remedy) => `${result.intro}: ${remedy}`),
-  );
 });
 
 test("a durable binding entry without a name is invalid", () => {
@@ -665,21 +549,6 @@ test("unknown extra workflows warn but stay out of check", () => {
   const inherited = validConfig();
   inherited.env = { preview: {} };
   assert.deepEqual(workflowWarnings(inherited), []);
-});
-
-test("upgrade findings deduplicate by exact problem, not intro prefix", () => {
-  const stale = validConfig();
-  stale.containers = [{ class_name: "ProcessorContainer" }];
-  stale.migrations = [{ tag: "v1" }];
-  const result = containerUpgradeResult(stale);
-  const upgradeSet = new Set(result.problems);
-  assert.equal(upgradeSet.size, result.problems.length);
-  for (const problem of result.problems)
-    assert.ok(configProblems(stale).includes(problem));
-  const nonUpgrade = configProblems(stale).filter(
-    (problem) => !upgradeSet.has(problem),
-  );
-  assert.deepEqual(nonUpgrade, []);
 });
 
 test("live bucket refs cover env overrides without duplicating the top level", () => {

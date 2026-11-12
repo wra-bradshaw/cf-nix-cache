@@ -19,7 +19,7 @@ export function auditShardNames(): string[] {
   return Array.from(
     { length: AUDIT_SHARD_COUNT },
     (_, index) => `audit:${index.toString(16).padStart(2, '0')}`,
-  ).concat('audit');
+  );
 }
 
 export function auditStub(env: Env, eventId: string) {

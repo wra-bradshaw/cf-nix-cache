@@ -1,11 +1,11 @@
 # HTTP API
 
-The administrative and upload API is the current `/api` contract. There is no
-legacy compatibility adapter. Every mutating API request must carry an
-`Idempotency-Key`; callers should reuse a key only while retrying one intended
-operation. Reusing a key for a later operation returns the original result (or
-an idempotency conflict). Errors use `{code, message, request_id}` and the
-request/response shapes are defined by the checked-in API schemas.
+The administrative and upload API is the `/api` contract. Every mutating API
+request must carry an `Idempotency-Key`; callers should reuse a key only while
+retrying one intended operation. Reusing a key for a later operation returns
+the original result (or an idempotency conflict). Errors use
+`{code, message, request_id}` and the request/response shapes are defined by the
+checked-in API schemas.
 
 The stock Nix substituter wire protocol remains unchanged:
 
@@ -87,8 +87,7 @@ optional `dry_run` and `grace_seconds`. It returns `202` with a `run_id`. A run
 does nothing if another is active. `GET /api/gc` reports the active run and the
 last finished one. Garbage collection only deletes objects that no cache
 indexes; it does not evict paths. In a dry-run summary, `deleted_objects` and
-`deleted_bytes` are what would be deleted, and `evicted_paths` and
-`skipped_paths` are always 0.
+`deleted_bytes` are what would be deleted.
 
 ## Uploads
 
@@ -124,11 +123,6 @@ completes them together, as `multipart/form-data` with a `request` field holding
 
 While garbage collection is deleting objects, opening an upload returns
 `gc_in_progress` (503); retry with the same `Idempotency-Key`.
-
-The whole-NAR staging upload of earlier versions is gone: `POST /api/uploads`
-and `PUT /api/uploads/{id}/parts/{part-number}` answer `staging_upload_removed`
-(410), and an unfinished staging upload left from before the upgrade is marked
-FAILED when it is next looked at.
 
 Two pushes of the same path share an upload when their chunk lists match.
 `POST /api/caches/{cache}/missing` reports a path that another push is already

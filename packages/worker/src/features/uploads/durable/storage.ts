@@ -37,18 +37,12 @@ export class UploadStorage {
       ),
     );
     if (!row) return null;
-    const session = first(
-      this.ctx.storage.sql.exec<SqlRow>(
-        'SELECT key FROM session WHERE key = 1',
-      ),
-    );
     return {
       job_id: text(row, 'job_id'),
       cache: text(row, 'cache'),
       cache_id: text(row, 'cache_id'),
       incarnation: text(row, 'incarnation'),
       chunks_key: text(row, 'chunks_key'),
-      encoded: Boolean(session),
       state: text(row, 'state') as UploadState,
       manifest: json<UploadManifest>(row, 'manifest'),
       compressed_size: integer(row, 'compressed_size'),

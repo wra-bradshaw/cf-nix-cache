@@ -79,7 +79,7 @@
       "required": ["id", "status", "error"],
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "status": { "enum": ["CREATED", "UPLOADING", "COMPLETING", "QUEUED", "PROCESSING", "PUBLISHING", "READY", "FAILED", "ABORTED"] },
+        "status": { "enum": ["UPLOADING", "COMPLETING", "QUEUED", "PROCESSING", "PUBLISHING", "READY", "FAILED", "ABORTED"] },
         "error": { "type": ["string", "null"], "maxLength": 2000 }
       }
     },
@@ -140,15 +140,13 @@
     "gc_summary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["run_id", "dry_run", "outcome", "started_at", "finished_at", "evicted_paths", "skipped_paths", "marked_objects", "missing_manifests", "deleted_objects", "deleted_bytes"],
+      "required": ["run_id", "dry_run", "outcome", "started_at", "finished_at", "marked_objects", "missing_manifests", "deleted_objects", "deleted_bytes"],
       "properties": {
         "run_id": { "type": "string" },
         "dry_run": { "type": "boolean" },
         "outcome": { "enum": ["success", "failed"] },
         "started_at": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "finished_at": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-        "evicted_paths": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-        "skipped_paths": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "marked_objects": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "missing_manifests": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "deleted_objects": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
@@ -178,7 +176,7 @@
     "missing_paths_response": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["missing"],
+      "required": ["missing", "pending"],
       "properties": {
         "missing": { "type": "array", "items": { "type": "string", "pattern": "^[0-9abcdfghijklmnpqrsvwxyz]{32}$" } },
         "pending": {
@@ -202,7 +200,7 @@
       "required": ["id", "status", "error", "merged", "missing_chunks"],
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "status": { "enum": ["CREATED", "UPLOADING", "COMPLETING", "QUEUED", "PROCESSING", "PUBLISHING", "READY", "FAILED", "ABORTED"] },
+        "status": { "enum": ["UPLOADING", "COMPLETING", "QUEUED", "PROCESSING", "PUBLISHING", "READY", "FAILED", "ABORTED"] },
         "error": { "type": ["string", "null"], "maxLength": 2000 },
         "merged": { "type": "boolean", "description": "The upload belongs to another push of the same NAR. While it is UPLOADING, missing_chunks lists what it still needs; the client may send them and complete it. Otherwise poll its status." },
         "missing_chunks": { "type": "array", "description": "Raw hashes of the chunks the server needs. Send each once.", "items": { "type": "string", "pattern": "^sha256:[0-9abcdfghijklmnpqrsvwxyz]{52}$" } }

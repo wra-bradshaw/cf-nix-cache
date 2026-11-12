@@ -1,6 +1,5 @@
 import {
-  configProblemsWithoutUpgrade,
-  containerUpgradeResult,
+  configProblems,
   durableObjectWarnings,
   observabilityWarnings,
   readConfig,
@@ -35,13 +34,7 @@ export async function doctor(): Promise<void> {
         : "could not inspect the installed release manifest",
     );
   }
-  const upgrades = containerUpgradeResult(config);
-  if (upgrades.remedies.length)
-    findings.push(
-      `${upgrades.intro}:\n${upgrades.remedies.map((remedy) => `- ${remedy}`).join("\n")}`,
-    );
-  for (const problem of configProblemsWithoutUpgrade(config))
-    findings.push(problem);
+  for (const problem of configProblems(config)) findings.push(problem);
   if (manifest !== undefined) {
     try {
       const installedVersion = await installedPackageVersion();

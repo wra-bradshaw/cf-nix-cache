@@ -22,7 +22,6 @@
     ],
   },
   "migrations": [
-    // Never edit a past migration; Wrangler validates the history on `deploy --dry-run`.
     {
       "tag": "v1",
       "new_sqlite_classes": [
@@ -32,11 +31,9 @@
         "CacheCoordinator",
         "CacheIndexShard",
         "UploadJob",
-        "ProcessorContainer",
+        "GcControl",
       ],
     },
-    { "tag": "v2", "new_sqlite_classes": ["GcControl"] },
-    { "tag": "v3", "deleted_classes": ["ProcessorContainer"] },
   ],
   "workflows": [
     {

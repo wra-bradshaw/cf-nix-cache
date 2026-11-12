@@ -68,8 +68,6 @@ export async function runGarbageCollection(
     outcome: 'success',
     started_at: input.now,
     finished_at: input.now,
-    evicted_paths: 0,
-    skipped_paths: 0,
     marked_objects: 0,
     missing_manifests: 0,
     deleted_objects: 0,

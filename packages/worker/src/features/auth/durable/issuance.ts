@@ -31,30 +31,6 @@ type EarlierIssue = {
 
 export const BOOTSTRAP_SCHEMA = `CREATE TABLE IF NOT EXISTS bootstrap_consumed (secret_hash TEXT PRIMARY KEY, operation_id TEXT NOT NULL, fingerprint TEXT NOT NULL);`;
 
-export function scrubStoredTokens(ctx: DurableObjectState): void {
-  ctx.storage.sql.exec("UPDATE tokens SET token = '' WHERE token <> ''");
-}
-
-export function migrateLegacyBootstrap(
-  ctx: DurableObjectState,
-  env: Env,
-): void {
-  const sql = ctx.storage.sql;
-  const legacy = first(
-    sql.exec(
-      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'bootstrap'",
-    ),
-  );
-  if (!legacy || !env.BOOTSTRAP_SECRET_HASH) return;
-  ctx.storage.transactionSync(() => {
-    sql.exec(
-      'INSERT OR IGNORE INTO bootstrap_consumed (secret_hash, operation_id, fingerprint) SELECT ?, operation_id, fingerprint FROM bootstrap WHERE key = 1',
-      env.BOOTSTRAP_SECRET_HASH,
-    );
-    sql.exec('DROP TABLE bootstrap');
-  });
-}
-
 export class TokenIssuance {
   constructor(
     private readonly ctx: DurableObjectState,
@@ -214,13 +190,12 @@ export class TokenIssuance {
     audit: Pick<AuditEvent, 'id' | 'actor' | 'action' | 'resource'>,
   ): RpcResult<IssuedToken> {
     this.ctx.storage.sql.exec(
-      'INSERT INTO tokens (jti, subject, expires_at, issued_at, grants, revoked, token, operation_id, fingerprint) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)',
+      'INSERT INTO tokens (jti, subject, expires_at, issued_at, grants, revoked, operation_id, fingerprint) VALUES (?, ?, ?, ?, ?, 0, ?, ?)',
       signed.jti,
       input.subject,
       input.expires_at,
       signed.issued_at,
       JSON.stringify(input.grants),
-      '',
       operationId,
       input.fingerprint,
     );
