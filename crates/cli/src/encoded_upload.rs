@@ -13,7 +13,7 @@ use anyhow::{bail, Context, Result};
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Method;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     num::NonZeroU64,
     time::{Duration, Instant},
 };
@@ -25,11 +25,19 @@ const CHUNK_CONCURRENCY: usize = 6;
 const ENCODE_CONCURRENCY: usize = 8;
 /// GC holds the upload gate for minutes at most.
 const GATE_WAIT: Duration = Duration::from_secs(30 * 60);
+const REOPEN_ROUNDS: usize = 3;
 
 fn gate_closed(error: &anyhow::Error) -> bool {
     matches!(
         error.downcast_ref::<ApiError>(),
         Some(api) if api.status == 503 && api.code.as_deref() == Some("gc_in_progress")
+    )
+}
+
+fn chunks_missing(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<ApiError>(),
+        Some(api) if api.status == 409 && api.code.as_deref() == Some("chunks_missing")
     )
 }
 
@@ -92,46 +100,79 @@ pub(crate) async fn upload_encoded(
     info: &PathInfo,
 ) -> Result<()> {
     let encoded = encode(path, info).await?;
-    let opened: EncodedUploadResponse = open(
-        api,
-        "/api/uploads/encoded",
-        &request(cache, path, info, &encoded)?,
-    )
-    .await?;
+    let body = request(cache, path, info, &encoded)?;
+    let (state, sent) = upload_and_complete(api, &body, &encoded).await?;
+    drop(encoded);
+    finish(api, state, path, sent).await
+}
+
+async fn upload_and_complete(
+    api: &Api,
+    body: &contract::EncodedUploadRequest,
+    encoded: &EncodedNar,
+) -> Result<(UploadStateResponse, usize)> {
+    let mut opened: EncodedUploadResponse = open(api, "/api/uploads/encoded", body).await?;
+    let mut sent = 0;
+    let mut rounds = 0;
+    loop {
+        if opened.status != UploadStatus::Uploading {
+            return Ok((state_of(&opened), sent));
+        }
+        sent += put_missing(api, &opened, encoded).await?;
+        match complete(api, &opened.id).await {
+            Ok(state) => return Ok((state, sent)),
+            Err(error) if chunks_missing(&error) => {
+                if rounds == REOPEN_ROUNDS {
+                    return Ok((state_of(&opened), sent));
+                }
+                rounds += 1;
+                opened = open(api, "/api/uploads/encoded", body).await?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+async fn put_missing(
+    api: &Api,
+    opened: &EncodedUploadResponse,
+    encoded: &EncodedNar,
+) -> Result<usize> {
     // missing_chunks should already be unique; never upload a chunk twice.
     let mut missing = opened.missing_chunks.clone();
     missing.sort();
     missing.dedup();
-    let state = if opened.merged || opened.status != UploadStatus::Uploading {
-        UploadStateResponse {
-            id: opened.id,
-            status: opened.status,
-            error: opened.error,
-        }
-    } else {
-        let nar = &encoded;
-        let id = opened.id.as_str();
-        // Owned hashes: a borrowed one makes the future fail the Send check
-        // that spawning the upload needs.
-        futures::stream::iter(missing.clone())
-            .map(|hash| async move {
-                let bytes = nar.chunk_bytes(&hash)?;
-                api.put_chunk(id, &hash, bytes)
-                    .await
-                    .with_context(|| format!("uploading chunk {hash}"))
-            })
-            .buffer_unordered(CHUNK_CONCURRENCY)
-            .try_collect::<Vec<()>>()
-            .await?;
-        drop(encoded);
-        api.request(
-            Method::POST,
-            &api_path(&["uploads", &opened.id, "complete"]),
-            None::<&()>,
-        )
-        .await?
-    };
-    finish(api, state, path, missing.len()).await
+    let id = opened.id.as_str();
+    // Owned hashes: a borrowed one makes the future fail the Send check
+    // that spawning the upload needs.
+    futures::stream::iter(missing.clone())
+        .map(|hash| async move {
+            let bytes = encoded.chunk_bytes(&hash)?;
+            api.put_chunk(id, &hash, bytes)
+                .await
+                .with_context(|| format!("uploading chunk {hash}"))
+        })
+        .buffer_unordered(CHUNK_CONCURRENCY)
+        .try_collect::<Vec<()>>()
+        .await?;
+    Ok(missing.len())
+}
+
+async fn complete(api: &Api, id: &str) -> Result<UploadStateResponse> {
+    api.request(
+        Method::POST,
+        &api_path(&["uploads", id, "complete"]),
+        None::<&()>,
+    )
+    .await
+}
+
+fn state_of(opened: &EncodedUploadResponse) -> UploadStateResponse {
+    UploadStateResponse {
+        id: opened.id.clone(),
+        status: opened.status,
+        error: opened.error.clone(),
+    }
 }
 
 async fn finish(api: &Api, state: UploadStateResponse, path: &str, sent: usize) -> Result<()> {
@@ -203,11 +244,18 @@ pub(crate) async fn upload_encoded_batch(
         );
     }
     let mut ids = Vec::new();
+    let mut batched = Vec::new();
     let mut files = BTreeMap::new();
-    for ((_, _, nar), upload) in encoded.iter().zip(&opened.uploads) {
-        if upload.merged || upload.status != UploadStatus::Uploading {
+    let mut retry = BTreeSet::new();
+    for (index, ((_, _, nar), upload)) in encoded.iter().zip(&opened.uploads).enumerate() {
+        if upload.status != UploadStatus::Uploading {
             continue;
         }
+        if upload.merged && upload.missing_chunks.is_empty() {
+            retry.insert(index);
+            continue;
+        }
+        batched.push(index);
         ids.push(upload.id.clone());
         for hash in &upload.missing_chunks {
             if !files.contains_key(hash) {
@@ -217,18 +265,31 @@ pub(crate) async fn upload_encoded_batch(
     }
     let mut completed = BTreeMap::new();
     if !ids.is_empty() {
-        let response: EncodedCompleteBatchResponse = api
+        let response: Result<EncodedCompleteBatchResponse> = api
             .post_form(
                 "/api/uploads/encoded/batch/complete",
                 &serde_json::json!({ "ids": ids }),
                 files.into_iter().collect(),
             )
-            .await?;
-        for state in response.uploads {
-            completed.insert(state.id.clone(), state);
+            .await;
+        match response {
+            Ok(response) => {
+                for state in response.uploads {
+                    completed.insert(state.id.clone(), state);
+                }
+            }
+            Err(error) if chunks_missing(&error) => retry.extend(batched),
+            Err(error) => return Err(error),
         }
     }
-    for ((path, _, _), upload) in encoded.iter().zip(opened.uploads) {
+    for (index, ((path, info, _), upload)) in encoded.iter().zip(opened.uploads).enumerate() {
+        if retry.contains(&index) {
+            outcomes.push((
+                path.to_string(),
+                upload_encoded(api, cache, path, info).await,
+            ));
+            continue;
+        }
         let sent = upload.missing_chunks.len();
         let state = completed.remove(&upload.id).unwrap_or(UploadStateResponse {
             id: upload.id,
@@ -259,5 +320,13 @@ mod tests {
         assert!(!gate_closed(&api_error(503, "other", "")));
         assert!(!gate_closed(&api_error(409, "gc_in_progress", "")));
         assert!(!gate_closed(&anyhow::anyhow!("boom")));
+    }
+
+    #[test]
+    fn chunks_missing_matches_the_complete_error() {
+        assert!(chunks_missing(&api_error(409, "chunks_missing", "")));
+        assert!(!chunks_missing(&api_error(409, "invalid_transition", "")));
+        assert!(!chunks_missing(&api_error(400, "chunks_missing", "")));
+        assert!(!chunks_missing(&anyhow::anyhow!("boom")));
     }
 }

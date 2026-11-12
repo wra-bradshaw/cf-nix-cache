@@ -12,6 +12,7 @@ import { UploadJobLifecycle } from './job-lifecycle';
 import { UploadPublisher } from './publish';
 import {
   type CompletionPlan,
+  type JoinResult,
   type OpenSessionInput,
   type OpenedSession,
   UploadSession,
@@ -60,6 +61,10 @@ export class UploadJob extends RpcOnlyDurableObject {
 
   missingChunks(): Promise<RpcResult<string[]>> {
     return this.session.missingChunks();
+  }
+
+  join(chunks: ChunkClaim[]): Promise<RpcResult<JoinResult>> {
+    return this.session.join(chunks);
   }
 
   chunkStored(rawHash: string): Promise<RpcResult<void>> {

@@ -103,10 +103,11 @@ each chunk) and answers with the raw hashes of the chunks the server lacks, in
 claimed hashes and sizes before it is stored, and a chunk that fails is answered
 with `invalid_chunk` (422) and fails the upload. Completion checks that the
 stored chunks concatenate to a valid NAR with the declared hash, and publishes
-the path, in the same request for NARs up to 256 MiB. Larger ones are queued for
-a verification workflow and complete as `QUEUED`; poll `GET /api/uploads/{id}` until
-`READY`. An upload whose NAR the installation already has needs no chunks at
-all.
+the path, in the same request for NARs up to 256 MiB. If a chunk another client
+is storing is not recorded yet, it answers 409 `chunks_missing`; re-opening the
+upload gives the current missing list. Larger NARs are queued for a verification
+workflow and complete as `QUEUED`; poll `GET /api/uploads/{id}` until `READY`. An
+upload whose NAR the installation already has needs no chunks at all.
 
 Completion stores the upload's chunk list before publishing, so an interrupted
 publication is finished by the verification workflow from the chunks already in
@@ -118,7 +119,8 @@ Small paths, which are one chunk each, can be opened in batches of up to 64 with
 `POST /api/uploads/encoded/batch` (`{uploads: [...]}`, answered in order).
 `POST /api/uploads/encoded/batch/complete` then sends their missing chunks and
 completes them together, as `multipart/form-data` with a `request` field holding
-`{ids: [...]}` and one file field per chunk, named by its raw hash.
+`{ids: [...]}` and one file field per chunk, named by its raw hash. It answers
+409 `chunks_missing` if any upload is still short of chunks.
 
 While garbage collection is deleting objects, opening an upload returns
 `gc_in_progress` (503); retry with the same `Idempotency-Key`.
@@ -128,13 +130,18 @@ and `PUT /api/uploads/{id}/parts/{part-number}` answer `staging_upload_removed`
 (410), and an unfinished staging upload left from before the upgrade is marked
 FAILED when it is next looked at.
 
-Two pushes of the same path never process it twice. `POST
-/api/caches/{cache}/missing` reports a path that another upload is publishing in
-`pending`, with that upload's ID, rather than in `missing`. Opening an upload of
-a NAR that is already in flight returns that upload with `merged: true`; wait
-for it instead of sending anything. A different NAR hash for the same store hash
-is a replacement and gets its own upload, and an in-flight upload that fails is
-replaced by the next push.
+Two pushes of the same path share an upload when their chunk lists match.
+`POST /api/caches/{cache}/missing` reports a path that another push is already
+uploading in `pending`, with that upload's ID, rather than in `missing`. Opening
+an upload of a NAR that is already in flight returns that upload with
+`merged: true`; while it is `UPLOADING`, an identical chunk list (same order,
+raw and compressed hashes and sizes) gets the chunks still missing, which the
+client may upload and complete like the original push, and the first completion
+wins. A merged upload past `UPLOADING` returns its status and no missing chunks;
+poll it. A chunk list that differs, as another zstd build's would, does not
+merge: the client gets its own upload (`merged: false`) with its own missing
+chunks. A different NAR hash for the same store hash is a replacement and gets
+its own upload, and an in-flight upload that fails is replaced by the next push.
 
 Upload identity is an opaque ID allocated by the cache coordinator. A retry
 with the same key and request fingerprint returns the existing job; reusing

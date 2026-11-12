@@ -1,6 +1,6 @@
 use crate::protocol::{
     contracts::{api as contract, responses::CacheUpstreamsResponse},
-    CacheName, MissingPathsResponse, UploadStatus,
+    CacheName, MissingPathsResponse,
 };
 use anyhow::{Context as _, Result};
 use reqwest::Method;
@@ -16,7 +16,6 @@ use crate::{
     client::Api,
     encoded_upload::{upload_encoded, upload_encoded_batch, BATCH_NAR_SIZE, BATCH_PATHS},
     nix::{path_info, signed_by_upstream, store_hash, PathInfo},
-    upload::wait_for_state,
 };
 
 pub(super) async fn push(
@@ -39,7 +38,7 @@ pub(super) async fn push(
         .map(|path| store_hash(path))
         .collect::<Result<Vec<_>>>()?;
     let mut missing = BTreeSet::new();
-    let mut pending = BTreeMap::new();
+    let mut pending = BTreeSet::new();
     for batch in hashes.chunks(100) {
         let body = contract::MissingPaths {
             store_hashes: batch
@@ -55,32 +54,15 @@ pub(super) async fn push(
             )
             .await?;
         missing.extend(result.missing);
-        pending.extend(
-            result
-                .pending
-                .into_iter()
-                .map(|upload| (upload.store_hash, upload.upload_id)),
-        );
+        pending.extend(result.pending.into_iter().map(|upload| upload.store_hash));
     }
-    let mut uploads = Vec::new();
-    let mut waits = Vec::new();
-    for (path, info) in map {
-        let hash = store_hash(&path)?;
-        if missing.contains(&hash) {
-            uploads.push((path, info));
-        } else if let Some(id) = pending.remove(&hash) {
-            waits.push(Work::Wait(path, info, id));
-        } else {
-            println!("already cached {path}");
-        }
-    }
-    let total = uploads.len() + waits.len();
+    let (uploads, in_flight) = plan_paths(map, &missing, &pending)?;
+    let total = uploads.len();
     println!(
-        "pushing {total} paths to \"{cache}\" ({} already cached, {in_upstream} in upstream, {} already being uploaded)",
+        "pushing {total} paths to \"{cache}\" ({} already cached, {in_upstream} in upstream, {in_flight} already being uploaded)",
         considered - total,
-        waits.len(),
     );
-    let work = plan(uploads, waits);
+    let work = plan(uploads);
     let context = Arc::new(Context { api, cache });
     let failures = run_concurrently(work, jobs, move |work| {
         let context = Arc::clone(&context);
@@ -96,14 +78,34 @@ pub(super) async fn push(
     Ok(())
 }
 
+fn plan_paths(
+    map: BTreeMap<String, PathInfo>,
+    missing: &BTreeSet<String>,
+    pending: &BTreeSet<String>,
+) -> Result<(Vec<(String, PathInfo)>, usize)> {
+    let mut uploads = Vec::new();
+    let mut in_flight = 0;
+    for (path, info) in map {
+        let hash = store_hash(&path)?;
+        if missing.contains(&hash) {
+            uploads.push((path, info));
+        } else if pending.contains(&hash) {
+            in_flight += 1;
+            uploads.push((path, info));
+        } else {
+            println!("already cached {path}");
+        }
+    }
+    Ok((uploads, in_flight))
+}
+
 enum Work {
     One(String, PathInfo),
     Batch(Vec<(String, PathInfo)>),
-    Wait(String, PathInfo, String),
 }
 
 /// Large paths first, so that they do not start last and finish alone.
-fn plan(mut uploads: Vec<(String, PathInfo)>, waits: Vec<Work>) -> Vec<Work> {
+fn plan(mut uploads: Vec<(String, PathInfo)>) -> Vec<Work> {
     uploads.sort_by_key(|(_, info)| std::cmp::Reverse(info.nar_size));
     let split = uploads.partition_point(|(_, info)| info.nar_size >= BATCH_NAR_SIZE);
     let small = uploads.split_off(split);
@@ -116,7 +118,6 @@ fn plan(mut uploads: Vec<(String, PathInfo)>, waits: Vec<Work>) -> Vec<Work> {
             .chunks(BATCH_PATHS)
             .map(|batch| Work::Batch(batch.to_vec())),
     );
-    work.extend(waits);
     work
 }
 
@@ -130,13 +131,6 @@ impl Context {
         match work {
             Work::One(path, info) => self.one(&path, &info).await.err().into_iter().collect(),
             Work::Batch(items) => self.batch(items).await,
-            Work::Wait(path, info, id) => match wait_for_state(&self.api, &id, &path).await {
-                Ok(state) if state.status == UploadStatus::Ready => {
-                    println!("uploaded {path} (by another push)");
-                    Vec::new()
-                }
-                _ => self.one(&path, &info).await.err().into_iter().collect(),
-            },
         }
     }
 
@@ -222,6 +216,46 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    fn info() -> PathInfo {
+        serde_json::from_value(serde_json::json!({
+            "narHash": "sha256-abc",
+            "narSize": 1,
+            "references": [],
+        }))
+        .unwrap()
+    }
+
+    fn store_path(hash: &str, name: &str) -> String {
+        format!("/nix/store/{hash}-{name}")
+    }
+
+    #[test]
+    fn pending_paths_are_uploaded_like_missing_ones() {
+        let (missing_hash, pending_hash, cached_hash) =
+            ("0".repeat(32), "1".repeat(32), "2".repeat(32));
+        let (missing_path, pending_path, cached_path) = (
+            store_path(&missing_hash, "missing"),
+            store_path(&pending_hash, "pending"),
+            store_path(&cached_hash, "cached"),
+        );
+        let map = [
+            (missing_path.clone(), info()),
+            (pending_path.clone(), info()),
+            (cached_path, info()),
+        ]
+        .into_iter()
+        .collect();
+        let missing = BTreeSet::from([missing_hash]);
+        let pending = BTreeSet::from([pending_hash]);
+
+        let (uploads, in_flight) = plan_paths(map, &missing, &pending).unwrap();
+
+        assert_eq!(in_flight, 1);
+        assert_eq!(uploads.len(), 2);
+        assert!(uploads.iter().any(|(path, _)| path == &missing_path));
+        assert!(uploads.iter().any(|(path, _)| path == &pending_path));
+    }
 
     #[tokio::test]
     async fn run_concurrently_uses_but_never_exceeds_the_limit() {

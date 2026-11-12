@@ -367,7 +367,7 @@ export interface AuditPage {
 export interface MissingPathsResponse {
   missing: string[];
   /**
-   * Paths another push is uploading right now. They are not in missing; wait for the upload instead of starting another.
+   * Paths another push is uploading right now. They are not in missing; opening an upload of one joins that upload.
    */
   pending?: {
     store_hash: string;
@@ -423,7 +423,7 @@ export interface EncodedUploadResponse {
     | 'ABORTED';
   error: string | null;
   /**
-   * The upload belongs to another push of the same NAR. Wait for it; do not send chunks.
+   * The upload belongs to another push of the same NAR. While it is UPLOADING, missing_chunks lists what it still needs; the client may send them and complete it. Otherwise poll its status.
    */
   merged: boolean;
   /**

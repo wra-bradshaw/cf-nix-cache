@@ -70,8 +70,11 @@ state poll or push enqueues it if the request died without a response. The
 client never re-sends the NAR.
 
 The cache coordinator tracks each path's in-flight upload by store hash and
-NAR hash, so concurrent pushes of a path join one upload instead of processing
-it twice. Entries end when the upload does, and expire after an hour.
+NAR hash, so concurrent pushes of a path with identical chunk lists join one
+upload instead of processing it twice; a push whose encoder produced different
+chunks gets an upload of its own. A joined push may upload the chunks still
+missing and complete the upload itself, so a client that dies does not strand
+the path. Entries end when the upload does, and expire after an hour.
 
 Both paths verify with `crates/verify`, compiled to WebAssembly and bundled
 with the Worker: it decodes each chunk with the C zstd library and validates

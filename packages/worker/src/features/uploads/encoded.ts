@@ -133,19 +133,40 @@ export async function openEncoded(
     }),
   );
   const fingerprint = await fingerprintForEncodedUpload(input);
-  const { allocation, state } = await allocateUpload(env, cache, {
+  let { allocation } = await allocateUpload(env, cache, {
     operation_id: operationId,
     fingerprint,
     manifest: input.manifest,
   });
-  if (allocation.merged)
-    return {
-      id: allocation.id,
-      status: state!,
-      error: null,
-      merged: true,
-      missing_chunks: [],
-    };
+  if (allocation.merged) {
+    const joined = unwrapRpc(
+      await idStub(env.UPLOAD_JOB, allocation.id).join(input.chunks),
+    );
+    if (joined.kind === 'joined')
+      return {
+        id: allocation.id,
+        status: 'UPLOADING',
+        error: null,
+        merged: true,
+        missing_chunks: joined.missing_chunks,
+      };
+    if (joined.kind === 'state')
+      return {
+        id: allocation.id,
+        status: joined.state,
+        error: null,
+        merged: true,
+        missing_chunks: [],
+      };
+    allocation = (
+      await allocateUpload(env, cache, {
+        operation_id: operationId,
+        fingerprint,
+        manifest: input.manifest,
+        merge: false,
+      })
+    ).allocation;
+  }
   const opened = unwrapRpc(
     await idStub(env.UPLOAD_JOB, allocation.id).openSession({
       job_id: allocation.id,

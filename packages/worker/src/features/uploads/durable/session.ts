@@ -52,6 +52,11 @@ export interface OpenedSession {
   missing_chunks: string[];
 }
 
+export type JoinResult =
+  | { kind: 'joined'; missing_chunks: string[] }
+  | { kind: 'state'; state: UploadState }
+  | { kind: 'incompatible' };
+
 export type CompletionPlan =
   | { kind: 'done'; state: UploadStateResponse }
   | {
@@ -410,6 +415,36 @@ export class UploadSession {
     if (!row || !this.isSession())
       return failure('not_found', 'upload session not found', 404);
     return ok(row.state === 'UPLOADING' ? this.missing() : []);
+  }
+
+  join(chunks: ChunkClaim[]): Promise<RpcResult<JoinResult>> {
+    return this.serialized(async () => {
+      const row = this.storage.row();
+      if (!row) return failure('not_found', 'upload not found', 404);
+      if (row.state !== 'UPLOADING')
+        return ok({ kind: 'state', state: row.state });
+      if (!row.encoded || !this.sameChunks(chunks))
+        return ok({ kind: 'incompatible' });
+      return ok({ kind: 'joined', missing_chunks: this.missing() });
+    });
+  }
+
+  private sameChunks(chunks: ChunkClaim[]): boolean {
+    const stored = [
+      ...this.sql().exec<SqlRow>(
+        'SELECT raw_hash, raw_size, compressed_hash, compressed_size FROM session_chunks ORDER BY idx',
+      ),
+    ];
+    if (stored.length !== chunks.length) return false;
+    return stored.every((row, index) => {
+      const chunk = chunks[index]!;
+      return (
+        text(row, 'raw_hash') === chunk.raw_hash &&
+        integer(row, 'raw_size') === chunk.raw_size &&
+        text(row, 'compressed_hash') === chunk.compressed_hash &&
+        integer(row, 'compressed_size') === chunk.compressed_size
+      );
+    });
   }
 
   async chunkStored(rawHash: string): Promise<RpcResult<void>> {

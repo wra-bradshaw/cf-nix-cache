@@ -183,7 +183,7 @@
         "missing": { "type": "array", "items": { "type": "string", "pattern": "^[0-9abcdfghijklmnpqrsvwxyz]{32}$" } },
         "pending": {
           "type": "array",
-          "description": "Paths another push is uploading right now. They are not in missing; wait for the upload instead of starting another.",
+          "description": "Paths another push is uploading right now. They are not in missing; opening an upload of one joins that upload.",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -204,7 +204,7 @@
         "id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "status": { "enum": ["CREATED", "UPLOADING", "COMPLETING", "QUEUED", "PROCESSING", "PUBLISHING", "READY", "FAILED", "ABORTED"] },
         "error": { "type": ["string", "null"], "maxLength": 2000 },
-        "merged": { "type": "boolean", "description": "The upload belongs to another push of the same NAR. Wait for it; do not send chunks." },
+        "merged": { "type": "boolean", "description": "The upload belongs to another push of the same NAR. While it is UPLOADING, missing_chunks lists what it still needs; the client may send them and complete it. Otherwise poll its status." },
         "missing_chunks": { "type": "array", "description": "Raw hashes of the chunks the server needs. Send each once.", "items": { "type": "string", "pattern": "^sha256:[0-9abcdfghijklmnpqrsvwxyz]{52}$" } }
       }
     },

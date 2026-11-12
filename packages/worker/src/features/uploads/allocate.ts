@@ -15,6 +15,7 @@ export async function allocateUpload(
     operation_id: string;
     fingerprint: string;
     manifest: UploadManifest;
+    merge?: boolean;
   },
 ): Promise<{ allocation: Allocation; state?: UploadState }> {
   const stub = coordinator(env, cache.reference);
@@ -25,7 +26,11 @@ export async function allocateUpload(
     nar_hash: request.manifest.nar_hash,
   };
   let allocation = unwrapRpc(
-    await stub.allocateUpload({ ...base, now: now(), merge: true }),
+    await stub.allocateUpload({
+      ...base,
+      now: now(),
+      merge: request.merge ?? true,
+    }),
   );
   for (let attempt = 0; allocation.merged; attempt += 1) {
     const access = await idStub(env.UPLOAD_JOB, allocation.id).access();

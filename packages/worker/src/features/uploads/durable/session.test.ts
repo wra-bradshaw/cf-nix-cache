@@ -1,8 +1,12 @@
-import { zstdCompressSync } from 'node:zlib';
+import { constants, zstdCompressSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { env } from 'cloudflare:workers';
 import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
-import { chunkKey, sha256Nix } from '../encoding';
+import type { EncodedUploadRequest } from '../../../generated/contracts';
+import { getCache } from '../../cache/resolve-cache';
+import { unwrapRpc } from '../../../shared/rpc';
+import { openEncoded, storeChunk } from '../encoded';
+import { chunkKey, sha256Nix, type ChunkClaim } from '../encoding';
 import { chunkList, verifyStoredNar, storeManifest } from '../verify-stored';
 import { narOfFile } from '../test-helpers';
 import type { CacheCoordinator } from '../../cache/durable/coordinator';
@@ -412,6 +416,250 @@ describe('upload session flow through real DOs', () => {
 });
 
 type JobStub = DurableObjectStub<UploadJob>;
+
+async function openChunked(
+  cache: string,
+  reference: { id: string; incarnation: string },
+  coordinator: DurableObjectStub<CacheCoordinator>,
+  tag: string,
+  parts: number,
+) {
+  const nar = narOfFile(encoder.encode(`hello ${tag}`));
+  const size = Math.ceil(nar.length / parts);
+  const claims: ChunkClaim[] = [];
+  const compressed = new Map<string, Uint8Array>();
+  for (let offset = 0; offset < nar.length; offset += size) {
+    const raw = nar.slice(offset, offset + size);
+    const zstd = new Uint8Array(zstdCompressSync(raw));
+    const claim = {
+      raw_hash: await sha256Nix(raw),
+      raw_size: raw.length,
+      compressed_hash: await sha256Nix(zstd),
+      compressed_size: zstd.length,
+    };
+    claims.push(claim);
+    compressed.set(claim.raw_hash, zstd);
+  }
+  const manifest = {
+    cache,
+    store_hash: '3'.repeat(32),
+    store_path: `/nix/store/${'3'.repeat(32)}-hello`,
+    nar_hash: await sha256Nix(nar),
+    nar_size: nar.length,
+    references: [],
+    deriver: null,
+    ca: null,
+  };
+  const allocation = await coordinator.allocateUpload({
+    operation_id: `op-chunked-${tag}`,
+    fingerprint: `fpupload-${tag}`,
+    store_hash: manifest.store_hash,
+    nar_hash: manifest.nar_hash,
+    now: 2,
+    merge: false,
+  });
+  if (!allocation.ok)
+    throw new Error('allocate: ' + JSON.stringify(allocation.error));
+  const jobId = allocation.value.id;
+  const job = env.UPLOAD_JOB.get(env.UPLOAD_JOB.idFromString(jobId));
+  const opened = await job.openSession({
+    job_id: jobId,
+    cache,
+    cache_id: reference.id,
+    incarnation: reference.incarnation,
+    chunks_key: allocation.value.chunks_key,
+    manifest,
+    compressed_size: [...compressed.values()].reduce(
+      (sum, bytes) => sum + bytes.length,
+      0,
+    ),
+    idempotency_key: `idem-${tag}`,
+    fingerprint: `fp-${tag}`,
+    chunks: claims,
+  });
+  if (!opened.ok) throw new Error('open: ' + JSON.stringify(opened.error));
+  return { claims, compressed, job };
+}
+
+async function storeClaim(
+  job: JobStub,
+  claim: ChunkClaim,
+  compressed: Map<string, Uint8Array>,
+) {
+  await storeChunk(env, job, claim.raw_hash, compressed.get(claim.raw_hash)!);
+}
+
+describe('joining an in-flight upload', () => {
+  it('gives a byte-identical encoder the chunks that are still missing', async () => {
+    const cache = 'flow-join';
+    const { reference, coordinator } = await setupCache(cache, 'join1');
+    const { claims, compressed, job } = await openChunked(
+      cache,
+      reference,
+      coordinator,
+      'join1',
+      3,
+    );
+    await storeClaim(job, claims[0]!, compressed);
+    await storeClaim(job, claims[2]!, compressed);
+
+    const joined = await job.join(claims);
+    if (!joined.ok) throw new Error('join: ' + JSON.stringify(joined.error));
+    expect(joined.value).toEqual({
+      kind: 'joined',
+      missing_chunks: [claims[1]!.raw_hash],
+    });
+  }, 60000);
+
+  it('refuses a chunk list that differs from the session', async () => {
+    const cache = 'flow-join-incompatible';
+    const { reference, coordinator } = await setupCache(
+      cache,
+      'join-incompatible1',
+    );
+    const { claims, job } = await openChunked(
+      cache,
+      reference,
+      coordinator,
+      'join-incompatible1',
+      3,
+    );
+    const retimed = claims.map((claim, index) =>
+      index === 1
+        ? { ...claim, compressed_hash: claims[0]!.compressed_hash }
+        : claim,
+    );
+    expect(unwrapRpc(await job.join(retimed))).toEqual({
+      kind: 'incompatible',
+    });
+    expect(unwrapRpc(await job.join(claims.slice(0, 2)))).toEqual({
+      kind: 'incompatible',
+    });
+  }, 60000);
+
+  it('reports the state once the upload is no longer accepting chunks', async () => {
+    const cache = 'flow-join-state';
+    const { reference, coordinator } = await setupCache(cache, 'join-state1');
+    const { claims, compressed, job } = await openChunked(
+      cache,
+      reference,
+      coordinator,
+      'join-state1',
+      2,
+    );
+    for (const claim of claims) await storeClaim(job, claim, compressed);
+    const plan = await job.beginComplete();
+    if (!plan.ok || plan.value.kind !== 'inline')
+      throw new Error('plan: ' + JSON.stringify(plan));
+
+    expect(unwrapRpc(await job.join(claims))).toEqual({
+      kind: 'state',
+      state: 'COMPLETING',
+    });
+  }, 60000);
+});
+
+async function encodedRequest(
+  cache: string,
+  storeHash: string,
+  compress: (raw: Uint8Array) => Uint8Array,
+): Promise<{ input: EncodedUploadRequest; compressed: Uint8Array[] }> {
+  const nar = narOfFile(encoder.encode('hello merged encoded push'));
+  const middle = Math.floor(nar.length / 2);
+  const compressed = [nar.slice(0, middle), nar.slice(middle)].map(compress);
+  const chunks = await Promise.all(
+    [nar.slice(0, middle), nar.slice(middle)].map(async (raw, index) => ({
+      raw_hash: await sha256Nix(raw),
+      raw_size: raw.length,
+      compressed_hash: await sha256Nix(compressed[index]!),
+      compressed_size: compressed[index]!.length,
+    })),
+  );
+  return {
+    input: {
+      manifest: {
+        cache,
+        store_hash: storeHash,
+        store_path: `/nix/store/${storeHash}-hello`,
+        nar_hash: await sha256Nix(nar),
+        nar_size: nar.length,
+        references: [],
+      },
+      encoding_id: 'fastcdc-v2020-min1m-avg4m-max16m-zstd3-v1',
+      chunks: [chunks[0]!, chunks[1]!],
+    },
+    compressed,
+  };
+}
+
+const zstd = (raw: Uint8Array) => new Uint8Array(zstdCompressSync(raw));
+const zstdOtherBuild = (raw: Uint8Array) =>
+  new Uint8Array(
+    zstdCompressSync(raw, { params: { [constants.ZSTD_c_checksumFlag]: 1 } }),
+  );
+
+describe('merged encoded pushes', () => {
+  it('lets an identical encoder finish the upload it merged into', async () => {
+    const cache = 'flow-encoded-join';
+    const storeHash = '4'.repeat(32);
+    await setupCache(cache, 'encoded-join1');
+    const state = await getCache(env, cache);
+    const first = await encodedRequest(cache, storeHash, zstd);
+    const opened = await openEncoded(env, state, 'op-encoded-a', first.input);
+    expect(opened.merged).toBe(false);
+    expect(opened.missing_chunks).toEqual(
+      first.input.chunks.map((chunk) => chunk.raw_hash).sort(),
+    );
+    const job = env.UPLOAD_JOB.get(env.UPLOAD_JOB.idFromString(opened.id));
+    await storeChunk(
+      env,
+      job,
+      first.input.chunks[0]!.raw_hash,
+      first.compressed[0]!,
+    );
+
+    const merged = await openEncoded(
+      env,
+      state,
+      'op-encoded-b',
+      (await encodedRequest(cache, storeHash, zstd)).input,
+    );
+    expect(merged).toMatchObject({
+      id: opened.id,
+      status: 'UPLOADING',
+      merged: true,
+    });
+    expect(merged.missing_chunks).toEqual([first.input.chunks[1]!.raw_hash]);
+  }, 60000);
+
+  it('gives a different encoder an upload of its own', async () => {
+    const cache = 'flow-encoded-incompatible';
+    const storeHash = '5'.repeat(32);
+    const { coordinator } = await setupCache(cache, 'encoded-incompatible1');
+    const state = await getCache(env, cache);
+    const first = await encodedRequest(cache, storeHash, zstd);
+    const opened = await openEncoded(env, state, 'op-encoded-a', first.input);
+    const other = await encodedRequest(cache, storeHash, zstdOtherBuild);
+    expect(other.input.chunks[0]!.compressed_hash).not.toBe(
+      first.input.chunks[0]!.compressed_hash,
+    );
+
+    const own = await openEncoded(env, state, 'op-encoded-b', other.input);
+    expect(own.merged).toBe(false);
+    expect(own.id).not.toBe(opened.id);
+    expect(own.status).toBe('UPLOADING');
+
+    expect(
+      await coordinator.pendingUploads({
+        store_hashes: [storeHash],
+        now: Math.floor(Date.now() / 1000),
+      }),
+    ).toEqual({
+      ok: true,
+      value: [{ store_hash: storeHash, upload_id: opened.id }],
+    });
+  }, 60000);
+});
 
 async function driveToInlineCompleting(tag: string) {
   const cache = `flow-stall-${tag}`;
