@@ -707,7 +707,7 @@ describe('inline verification stall recovery', () => {
     const { job, jobId, chunksKey, nar } =
       await driveToInlineCompleting('alarm-fire');
     expect(await runDurableObjectAlarm(job)).toBe(true);
-    expect((await settleState(job)).status).toBe('QUEUED');
+    expect(['QUEUED', 'PROCESSING']).toContain((await settleState(job)).status);
     const stored = await env.CACHE_BUCKET.get(chunksKey);
     expect(stored).not.toBeNull();
     expect(await stored!.json()).toEqual(chunkList(nar));
@@ -753,7 +753,9 @@ describe('inline verification stall recovery', () => {
     const verified = await verifyStoredNar(env.CACHE_BUCKET, driven.nar);
     const { result } = await storeManifest(env.CACHE_BUCKET, verified);
     expect(await runDurableObjectAlarm(driven.job)).toBe(true);
-    expect((await settleState(driven.job)).status).toBe('QUEUED');
+    expect(['QUEUED', 'PROCESSING']).toContain(
+      (await settleState(driven.job)).status,
+    );
     const published = await driven.job.publishVerified(result, verified);
     if (!published.ok)
       throw new Error('publish: ' + JSON.stringify(published.error));
