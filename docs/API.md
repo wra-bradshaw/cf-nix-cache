@@ -72,15 +72,15 @@ last `evict-cache` run's result, or null. The result has `run_id`,
 `started_at`, `finished_at`, `target_bytes`, `cutoff`, `evicted_paths`,
 `evicted_bytes`, `skipped_paths` and `floor_reached`.
 
-When a finalized publication puts a cache over 90% of its quota, the
-`evict-cache` Workflow starts a run that evicts least recently used paths until
-the cache is back under 80%, never evicting a path used within
-`eviction_min_age_days`. A path read during a run stays, and a push never waits
-for the run. If every path old enough is evicted and the cache is still over
-its target, `floor_reached` is true, and pushes fail with `quota_exceeded` at
-100%. A daily run at 04:00 UTC applies `retention_days` and checks every cache
-for a missed quota trigger. Eviction removes index rows, so quota is free at
-once; garbage collection deletes the objects later.
+When a publication puts a cache over 90% of its quota, the `evict-cache`
+Workflow starts a run that evicts least recently used paths until the cache is
+back under 80%, never evicting a path used within `eviction_min_age_days`. A
+path read during a run stays, and a push never waits for the run. If every path
+old enough is evicted and the cache is still over its target, `floor_reached`
+is true, and pushes fail with `quota_exceeded` at 100%. A daily run at 04:00 UTC
+refreshes every shard's reported usage, applies `retention_days` and checks
+every cache for a missed quota trigger. Eviction removes index rows, so quota is
+free at once; garbage collection deletes the objects later.
 
 `POST /api/gc` requires an admin grant for `*` and starts a run, accepting
 optional `dry_run` and `grace_seconds`. It returns `202` with a `run_id`. A run
@@ -150,8 +150,9 @@ Private-cache token status is edge-cached for up to five seconds after an
 active catalog check. Revocation therefore propagates within that bounded
 window while avoiding a catalog Durable Object hop on every Nix read.
 
-Publication and deletion use the same durable protocol: an index mutation is
-prepared and locked, the exact size delta is reserved in the quota ledger,
-the index is committed, then the reservation is finalized. Pending positive
-reservations count against available quota, so a visible record is always
-backed by a committed or pending-counted charge.
+Logical bytes are the sum of each index shard's latest reported total. A shard
+reports after every change, and the daily run refreshes all of them, so a lost
+report is repaired within a day. Quota is soft: an upload is checked against the
+current total when it is opened, so uploads opened at once can overshoot it by
+their own size, and eviction brings the cache back under the watermark. Logical
+bytes count each path's chunks, not distinct R2 objects.

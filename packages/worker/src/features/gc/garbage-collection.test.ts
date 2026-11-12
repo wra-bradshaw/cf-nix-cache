@@ -47,22 +47,12 @@ interface Path {
   last_accessed: number;
 }
 
-interface Operation {
-  prefix: string;
-  id: string;
-  settled: boolean;
-}
-
 class World {
   readonly ledger = realLedger();
   readonly objects = new Map<string, { size: number; uploaded: number }>();
   readonly manifests = new Map<string, string[]>();
   readonly caches = new Map<GcCache, Path[]>();
   readonly deletions: string[][] = [];
-  // Index and quota operation rows the catalog reports as stale.
-  readonly operations: Operation[] = [];
-  readonly forgottenShard: { prefix: string; ids: string[] }[] = [];
-  readonly forgottenQuota: string[][] = [];
   // Upload jobs and allocation rows the catalog reports as stale.
   readonly uploads = new Map<string, { running: boolean }>();
   readonly forgottenUploads: string[][] = [];
@@ -103,38 +93,6 @@ class World {
             .map((path) => path.manifest),
           next_after: null,
         }),
-        staleOperations: async (_cache, prefix, _before, after, limit) => {
-          const ids = this.operations
-            .filter(
-              (operation) =>
-                operation.prefix === prefix && operation.id > (after ?? ''),
-            )
-            .map((operation) => operation.id)
-            .sort()
-            .slice(0, limit);
-          return {
-            operation_ids: ids,
-            next_after: ids.length === limit ? ids.at(-1)! : null,
-          };
-        },
-        settledOperations: async (_cache, operationIds) =>
-          operationIds.filter(
-            (id) =>
-              this.operations.find((operation) => operation.id === id)
-                ?.settled ?? true,
-          ),
-        forgetShardOperations: async (_cache, prefix, operationIds) => {
-          this.forgottenShard.push({ prefix, ids: operationIds });
-          for (const id of operationIds) {
-            const index = this.operations.findIndex(
-              (operation) => operation.prefix === prefix && operation.id === id,
-            );
-            if (index >= 0) this.operations.splice(index, 1);
-          }
-        },
-        forgetQuotaOperations: async (_cache, operationIds) => {
-          this.forgottenQuota.push(operationIds);
-        },
         staleUploads: async (_cache, _before, after, limit) => {
           const ids = [...this.uploads.keys()]
             .filter((id) => id > (after ?? ''))
@@ -302,8 +260,6 @@ describe('garbage collection', () => {
 
     expect(world.deletions).toEqual([]);
     expect(world.caches.get(cache)).toHaveLength(1);
-    expect(world.forgottenShard).toEqual([]);
-    expect(world.forgottenQuota).toEqual([]);
     expect(world.forgottenUploads).toEqual([]);
     expect(summary).toMatchObject({
       dry_run: true,
@@ -328,59 +284,6 @@ describe('garbage collection', () => {
     value(world.ledger.begin({ run_id: 'other', dry_run: false, now: NOW }));
     expect(await world.run()).toEqual({ skipped: true });
     expect(world.deletions).toEqual([]);
-  });
-});
-
-describe('pruning old operations', () => {
-  it('forgets settled operations from the shard and the quota ledger', async () => {
-    const world = new World();
-    world.cache(); // Pruning runs once per live cache.
-    world.operations.push(
-      { prefix: 'ab', id: 'op-a', settled: true },
-      { prefix: 'ab', id: 'op-b', settled: true },
-    );
-
-    await world.run();
-
-    expect(world.forgottenShard).toEqual([
-      { prefix: 'ab', ids: ['op-a', 'op-b'] },
-    ]);
-    expect(world.forgottenQuota).toEqual([['op-a', 'op-b']]);
-    expect(world.operations).toEqual([]);
-  });
-
-  it('keeps operations whose quota row is still reserved', async () => {
-    const world = new World();
-    world.cache(); // Pruning runs once per live cache.
-    world.operations.push(
-      { prefix: 'ab', id: 'op-reserved', settled: false },
-      { prefix: 'ab', id: 'op-settled', settled: true },
-    );
-
-    await world.run();
-
-    expect(world.forgottenShard).toEqual([
-      { prefix: 'ab', ids: ['op-settled'] },
-    ]);
-    expect(world.forgottenQuota).toEqual([['op-settled']]);
-    expect(world.operations.map((operation) => operation.id)).toEqual([
-      'op-reserved',
-    ]);
-  });
-
-  it('forgets nothing in a dry run', async () => {
-    const world = new World();
-    world.cache(); // Pruning runs once per live cache.
-    world.operations.push({ prefix: 'ab', id: 'op-a', settled: true });
-    world.uploads.set('upload-a', { running: false });
-
-    await world.run({ dry_run: true });
-
-    expect(world.forgottenShard).toEqual([]);
-    expect(world.forgottenQuota).toEqual([]);
-    expect(world.forgottenUploads).toEqual([]);
-    expect(world.uploads.has('upload-a')).toBe(true);
-    expect(world.operations).toHaveLength(1);
   });
 });
 

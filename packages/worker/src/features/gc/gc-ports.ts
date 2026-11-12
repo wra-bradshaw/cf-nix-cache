@@ -30,20 +30,6 @@ export interface GcCatalogPort {
     after: string | null,
     limit: number,
   ): Promise<{ keys: string[]; next_after: string | null }>;
-  staleOperations(
-    cache: GcCache,
-    prefix: string,
-    before: number,
-    after: string | null,
-    limit: number,
-  ): Promise<{ operation_ids: string[]; next_after: string | null }>;
-  settledOperations(cache: GcCache, operationIds: string[]): Promise<string[]>;
-  forgetShardOperations(
-    cache: GcCache,
-    prefix: string,
-    operationIds: string[],
-  ): Promise<void>;
-  forgetQuotaOperations(cache: GcCache, operationIds: string[]): Promise<void>;
   staleUploads(
     cache: GcCache,
     before: number,

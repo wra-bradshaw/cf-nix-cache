@@ -5,6 +5,7 @@ import { DAY_SECONDS, bytesToFree, cutoffFor, mergeBuckets } from './policy';
 import type { EvictionJob, EvictionResult } from './types';
 
 const SHARDS_PER_HISTOGRAM_STEP = 64;
+const SHARDS_PER_REFRESH_STEP = 64;
 const SHARDS_PER_EVICTION_STEP = 32;
 const SHARD_PAGE = 500;
 const CONCURRENCY = 16;
@@ -36,13 +37,23 @@ export async function runEviction(
   if (!job) {
     const caches = await step.do('list caches', () => ports.liveCaches());
     let requested = 0;
-    for (const cache of caches)
+    for (const cache of caches) {
+      if (cache.lifecycle !== 'ACTIVE') continue;
+      for (const [index, prefixes] of batches(
+        shardPrefixes(),
+        SHARDS_PER_REFRESH_STEP,
+      ).entries())
+        await step.do(`refresh ${cache.incarnation} ${index}`, async () => {
+          await ports.refreshUsage(cache, prefixes);
+          return { refreshed: prefixes.length };
+        });
       if (
         await step.do(`request ${cache.incarnation}`, () =>
           ports.requestEviction(cache),
         )
       )
         requested += 1;
+    }
     return { requested };
   }
 
@@ -141,13 +152,7 @@ export async function runEviction(
             if (expired.next_after)
               more.push({ prefix, after: expired.next_after });
             for (const hash of expired.hashes) {
-              const freed = await ports.evict(
-                cache,
-                config!,
-                hash,
-                before,
-                `evict:${input.run_id}:${hash}`,
-              );
+              const freed = await ports.evict(cache, config!, hash, before);
               if (freed === null) skipped += 1;
               else {
                 evicted += 1;

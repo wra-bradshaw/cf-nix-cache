@@ -1,8 +1,8 @@
 import type { AuditEvent } from '../../audit/types';
-import type { CacheConfig, CacheReference, QuotaReservation } from '../types';
+import type { CacheConfig, CacheReference } from '../types';
 import { type RpcResult, failure, ok } from '../../../shared/rpc';
 import { AUDIT_OUTBOX_SCHEMA, AuditOutbox } from '../../audit/outbox';
-import { CoordinatorQuota, QUOTA_RESERVED_INDEX } from './quota';
+import { CoordinatorUsage } from './coordinator-usage';
 import { CoordinatorEviction } from './coordinator-eviction';
 import type { EvictionResult } from '../../eviction/types';
 import { DEFAULT_MIN_AGE_DAYS } from '../../eviction/policy';
@@ -24,16 +24,12 @@ const schema = `CREATE TABLE IF NOT EXISTS cache (
   eviction_generation INTEGER NOT NULL DEFAULT 0, eviction_pending INTEGER NOT NULL DEFAULT 0,
   eviction_requested_at INTEGER NOT NULL DEFAULT 0, last_eviction TEXT
 );
-CREATE TABLE IF NOT EXISTS quota_operations (
-  operation_id TEXT PRIMARY KEY, delta INTEGER NOT NULL, status TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS shard_usage (
+  prefix TEXT PRIMARY KEY, bytes INTEGER NOT NULL, revision INTEGER NOT NULL
 );
-${QUOTA_RESERVED_INDEX}
 CREATE TABLE IF NOT EXISTS upload_allocations (
   operation_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, upload_id TEXT NOT NULL UNIQUE, staging_key TEXT NOT NULL,
   created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS clear_operations (
-  operation_id TEXT PRIMARY KEY, delta INTEGER NOT NULL
 );
 ${INFLIGHT_SCHEMA}
 ${AUDIT_OUTBOX_SCHEMA}`;
@@ -41,7 +37,7 @@ ${AUDIT_OUTBOX_SCHEMA}`;
 export class CacheCoordinator extends RpcOnlyDurableObject {
   private readonly lifecycle: CoordinatorLifecycle;
   private readonly allocations: UploadAllocations;
-  private readonly quota: CoordinatorQuota;
+  private readonly usage: CoordinatorUsage;
   private readonly eviction: CoordinatorEviction;
   private readonly audit: AuditOutbox;
 
@@ -51,7 +47,7 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
     this.lifecycle = new CoordinatorLifecycle(ctx);
     this.allocations = new UploadAllocations(ctx, env);
     this.eviction = new CoordinatorEviction(ctx, env);
-    this.quota = new CoordinatorQuota(ctx, this.eviction);
+    this.usage = new CoordinatorUsage(ctx, this.eviction);
     this.audit = new AuditOutbox(ctx, env);
   }
 
@@ -113,45 +109,15 @@ export class CacheCoordinator extends RpcOnlyDurableObject {
   }
 
   checkQuota(input: { delta: number }): Promise<RpcResult<void>> {
-    return this.quota.check(input);
+    return this.usage.check(input);
   }
 
-  reserve(input: {
-    operation_id: string;
-    delta: number;
-  }): Promise<RpcResult<QuotaReservation>> {
-    return this.quota.reserve(input);
-  }
-
-  finalize(input: { operation_id: string }): Promise<RpcResult<void>> {
-    return this.quota.finalize(input);
-  }
-
-  abort(input: { operation_id: string }): Promise<RpcResult<void>> {
-    return this.quota.abort(input);
-  }
-
-  reconcile(input: { operation_ids: string[] }): Promise<RpcResult<void>> {
-    return this.quota.reconcile(input);
-  }
-
-  clearDelta(input: {
-    operation_id: string;
-    delta: number;
+  reportUsage(input: {
+    prefix: string;
+    bytes: number;
+    revision: number;
   }): Promise<RpcResult<void>> {
-    return this.quota.clearDelta(input);
-  }
-
-  settledOperations(input: {
-    operation_ids: string[];
-  }): Promise<RpcResult<string[]>> {
-    return this.quota.settledOperations(input);
-  }
-
-  forgetOperations(input: {
-    operation_ids: string[];
-  }): Promise<RpcResult<void>> {
-    return this.quota.forgetOperations(input);
+    return this.usage.report(input);
   }
 
   staleUploads(input: {

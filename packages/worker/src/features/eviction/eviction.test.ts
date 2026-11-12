@@ -4,7 +4,12 @@ import type { CacheConfig } from '../cache/types';
 import { DAY_SECONDS, HOUR_SECONDS } from './policy';
 import { runEviction } from './eviction';
 import type { EvictionPorts, EvictionSteps } from './eviction-ports';
-import type { EvictionCacheRef, EvictionJob, EvictionResult } from './types';
+import type {
+  EvictionCacheRef,
+  EvictionJob,
+  EvictionResult,
+  ListedCache,
+} from './types';
 
 const NOW = 1_000_000;
 const OLD = NOW - 30 * DAY_SECONDS;
@@ -16,12 +21,16 @@ interface StoredPath {
   size: number;
 }
 
-function cacheRef(name = 'cache'): EvictionCacheRef {
+function cacheRef(
+  name = 'cache',
+  lifecycle: ListedCache['lifecycle'] = 'ACTIVE',
+): ListedCache {
   return {
     id: `${name}-id`,
     name,
     incarnation: `${name}-inc`,
     coordinator_id: `${name}-coordinator`,
+    lifecycle,
   };
 }
 
@@ -55,14 +64,24 @@ class World {
   }[] = [];
   readonly audits: EvictionResult[] = [];
   readonly histogramBefores: number[] = [];
-  live: EvictionCacheRef[] = [];
+  readonly refreshed = new Map<string, string[]>();
+  readonly events: string[] = [];
+  live: ListedCache[] = [];
   cacheConfig: CacheConfig | null = config();
   refuseRequest = false;
 
   ports(): EvictionPorts {
     return {
       liveCaches: async () => this.live,
+      refreshUsage: async (cache, prefixes) => {
+        const shards = this.refreshed.get(cache.incarnation) ?? [];
+        shards.push(...prefixes);
+        this.refreshed.set(cache.incarnation, shards);
+        for (const prefix of prefixes)
+          this.events.push(`refresh ${cache.incarnation} ${prefix}`);
+      },
       requestEviction: async (cache) => {
+        this.events.push(`request ${cache.incarnation}`);
         this.requested.push(cache);
         return !this.refuseRequest;
       },
@@ -399,6 +418,38 @@ describe('finishing a run', () => {
 });
 
 describe('the scheduled run', () => {
+  it('refreshes every shard before asking for eviction', async () => {
+    const world = new World();
+    const first = cacheRef('first');
+    const second = cacheRef('second');
+    world.live = [first, second];
+
+    await world.run(null);
+
+    for (const cache of [first, second]) {
+      expect(world.refreshed.get(cache.incarnation)).toEqual(shardPrefixes());
+      const request = world.events.indexOf(`request ${cache.incarnation}`);
+      const refreshIndexes = world.events
+        .map((event, index) =>
+          event.startsWith(`refresh ${cache.incarnation} `) ? index : -1,
+        )
+        .filter((index) => index >= 0);
+      expect(refreshIndexes.length).toBe(shardPrefixes().length);
+      expect(request).toBeGreaterThan(refreshIndexes.at(-1)!);
+    }
+  });
+
+  it('skips caches that are not active', async () => {
+    const world = new World();
+    const active = cacheRef('active');
+    const deleting = cacheRef('deleting', 'DELETING');
+    world.live = [deleting, active];
+
+    expect(await world.run(null)).toEqual({ requested: 1 });
+    expect(world.refreshed.has(deleting.incarnation)).toBe(false);
+    expect(world.requested).toEqual([active]);
+  });
+
   it('asks every live cache for eviction', async () => {
     const world = new World();
     const first = cacheRef('first');

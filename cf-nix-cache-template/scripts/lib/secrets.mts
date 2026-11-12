@@ -29,7 +29,6 @@ export function hashSecret(value: string): string {
   return createHash("sha256").update(value).digest("base64url");
 }
 
-// Wrangler reports a missing script as `Worker "<name>" not found.`
 const workerNotFound = /Worker "[^"]+"(?: \(env: [^)]+\))? not found\./;
 
 export async function secretNamesFromWrangler(

@@ -1,10 +1,11 @@
 import type { CacheConfig } from '../cache/types';
-import type { EvictionCacheRef, EvictionResult } from './types';
+import type { EvictionCacheRef, EvictionResult, ListedCache } from './types';
 
 export interface EvictionPorts {
-  liveCaches(): Promise<EvictionCacheRef[]>;
+  liveCaches(): Promise<ListedCache[]>;
   // Asks the cache's coordinator to start a run if it needs one.
   requestEviction(cache: EvictionCacheRef): Promise<boolean>;
+  refreshUsage(cache: EvictionCacheRef, prefixes: string[]): Promise<void>;
   // Null once the cache is gone.
   cacheConfig(cache: EvictionCacheRef): Promise<CacheConfig | null>;
   accessHistogram(
@@ -19,14 +20,11 @@ export interface EvictionPorts {
     after: string | null,
     limit: number,
   ): Promise<{ hashes: string[]; next_after: string | null }>;
-  // The bytes freed, or null if the path was kept: it was being published,
-  // or was used after `before`.
   evict(
     cache: EvictionCacheRef,
     config: CacheConfig,
     storeHash: string,
     before: number,
-    operationId: string,
   ): Promise<number | null>;
   finished(
     cache: EvictionCacheRef,

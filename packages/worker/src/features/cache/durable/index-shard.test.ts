@@ -101,13 +101,11 @@ function lastAccessed(db: DatabaseSync, storeHash: string): number {
   ).value;
 }
 
-function operationStatus(db: DatabaseSync, operationId: string): string {
+function storedBytes(db: DatabaseSync): number {
   return (
     db
-      .prepare(
-        'SELECT status AS value FROM index_operations WHERE operation_id = ?',
-      )
-      .get(operationId) as { value: string }
+      .prepare('SELECT COALESCE(SUM(file_size), 0) AS value FROM paths')
+      .get() as { value: number }
   ).value;
 }
 
@@ -152,272 +150,155 @@ describe('looking a path up', () => {
   });
 });
 
-describe('the eviction guard', () => {
-  it('refuses a delete in prepare for a path used at or after the cutoff', async () => {
+describe('writing paths', () => {
+  it('stores a new path and derives its usage from the rows', async () => {
     const { db, shard } = setupShard();
-    now(9000);
-    insertPath(db, { store_hash: HASH, last_accessed: 5000 });
-    await expect(
-      shard.prepare({
-        operation_id: 'evict-old',
-        mutation: { kind: 'delete', store_hash: HASH, unused_before: 4000 },
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'path_in_use', status: 409 },
-    });
-    await expect(
-      shard.prepare({
-        operation_id: 'evict-equal',
-        mutation: { kind: 'delete', store_hash: HASH, unused_before: 5000 },
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'path_in_use', status: 409 },
-    });
-    await expect(
-      shard.prepare({
-        operation_id: 'evict-fresh',
-        mutation: { kind: 'delete', store_hash: HASH, unused_before: 6000 },
-      }),
-    ).resolves.toMatchObject({ ok: true, value: { status: 'PREPARED' } });
-  });
+    const result = await shard.upsert(record({ file_size: 120 }));
 
-  it('refuses a delete for a missing path guard by letting it through', async () => {
-    const { shard } = setupShard();
-    now(9000);
-    await expect(
-      shard.prepare({
-        operation_id: 'evict-missing',
-        mutation: { kind: 'delete', store_hash: HASH, unused_before: 6000 },
-      }),
-    ).resolves.toMatchObject({ ok: true, value: { status: 'PREPARED' } });
-  });
-
-  it('refuses a commit after a lookup between prepare and commit, and aborts the operation', async () => {
-    const { db, shard } = setupShard();
-    insertPath(db, { store_hash: HASH, last_accessed: 1000 });
-    now(2000);
-    await expect(
-      shard.prepare({
-        operation_id: 'evict-race',
-        mutation: { kind: 'delete', store_hash: HASH, unused_before: 5000 },
-      }),
-    ).resolves.toMatchObject({ ok: true });
-    // A reader touches the path before the eviction commits.
-    now(6000);
-    await shard.lookup(HASH);
-    await expect(shard.commit('evict-race')).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'path_in_use', status: 409 },
-    });
-    expect(operationStatus(db, 'evict-race')).toBe('ABORTED');
-    expect(lastAccessed(db, HASH)).toBe(6000);
-    await expect(shard.commit('evict-race')).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'operation_aborted' },
-    });
-  });
-
-  it('still commits a delete without a guard after a lookup', async () => {
-    const { db, shard } = setupShard();
-    insertPath(db, { store_hash: HASH, last_accessed: 1000 });
-    now(2000);
-    await expect(
-      shard.prepare({
-        operation_id: 'delete-plain',
-        mutation: { kind: 'delete', store_hash: HASH },
-      }),
-    ).resolves.toMatchObject({ ok: true });
-    now(6000);
-    await shard.lookup(HASH);
-    await expect(shard.commit('delete-plain')).resolves.toMatchObject({
+    expect(result).toEqual({
       ok: true,
-      value: { status: 'COMMITTED' },
+      value: { previous_size: null, bytes: 120, revision: 1 },
     });
-    expect(
-      db
-        .prepare('SELECT COUNT(*) AS value FROM paths WHERE store_hash = ?')
-        .get(HASH) as { value: number },
-    ).toMatchObject({ value: 0 });
+    expect(storedBytes(db)).toBe(120);
+    await expect(shard.usage()).resolves.toEqual({
+      ok: true,
+      value: { bytes: 120, revision: 1 },
+    });
+  });
+
+  it('accounts for a replacement with a bigger file', async () => {
+    const { db, shard } = setupShard();
+    await shard.upsert(record({ file_size: 100 }));
+    const result = await shard.upsert(record({ file_size: 250 }));
+
+    expect(result).toEqual({
+      ok: true,
+      value: { previous_size: 100, bytes: 250, revision: 2 },
+    });
+    expect(storedBytes(db)).toBe(250);
+  });
+
+  it('accounts for a replacement with a smaller file', async () => {
+    const { db, shard } = setupShard();
+    await shard.upsert(record({ file_size: 250 }));
+    const result = await shard.upsert(record({ file_size: 40 }));
+
+    expect(result).toEqual({
+      ok: true,
+      value: { previous_size: 250, bytes: 40, revision: 2 },
+    });
+    expect(storedBytes(db)).toBe(40);
+  });
+
+  it('reports the bytes and existence of a deleted path', async () => {
+    const { db, shard } = setupShard();
+    await shard.upsert(record({ store_hash: HASH, file_size: 100 }));
+    await shard.upsert(record({ store_hash: 'b'.repeat(32), file_size: 30 }));
+
+    const deleted = await shard.delete({ store_hash: HASH });
+
+    expect(deleted).toEqual({
+      ok: true,
+      value: { freed: 100, existed: true, bytes: 30, revision: 3 },
+    });
+    expect(storedBytes(db)).toBe(30);
+  });
+
+  it('leaves the revision alone when there is nothing to delete', async () => {
+    const { shard } = setupShard();
+    await shard.upsert(record({ file_size: 100 }));
+
+    const deleted = await shard.delete({ store_hash: 'c'.repeat(32) });
+
+    expect(deleted).toEqual({
+      ok: true,
+      value: { freed: 0, existed: false, bytes: 100, revision: 1 },
+    });
+  });
+
+  it('clears every path, fences the shard, and stays idempotent', async () => {
+    const { db, shard } = setupShard();
+    await shard.upsert(record({ store_hash: HASH, file_size: 100 }));
+    await shard.upsert(record({ store_hash: 'b'.repeat(32), file_size: 50 }));
+
+    const cleared = await shard.clear();
+
+    expect(cleared).toEqual({
+      ok: true,
+      value: { deleted: 2, bytes: 150, revision: 3 },
+    });
+    expect(storedBytes(db)).toBe(0);
+    await expect(shard.clear()).resolves.toEqual({
+      ok: true,
+      value: { deleted: 0, bytes: 0, revision: 4 },
+    });
+    await expect(shard.upsert(record())).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'cache_deleting', status: 410 },
+    });
+  });
+
+  it('refuses an upsert while fenced', async () => {
+    const { shard } = setupShard();
+    await shard.clear();
+
+    await expect(shard.upsert(record({ file_size: 100 }))).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'cache_deleting',
+        message: 'cache index is fenced for deletion',
+        status: 410,
+      },
+    });
+    await expect(shard.usage()).resolves.toMatchObject({
+      ok: true,
+      value: { bytes: 0 },
+    });
   });
 });
 
-describe('pruning old operations', () => {
-  it('lists only settled operations with a path', async () => {
+describe('the eviction guard', () => {
+  it('refuses a delete for a path used at or after the cutoff', async () => {
     const { db, shard } = setupShard();
-    now(10_000);
-    const entry = record({ store_hash: HASH });
-    await shard.prepare({
-      operation_id: 'op-prepared',
-      mutation: { kind: 'upsert', record: entry },
-    });
-    await shard.prepare({
-      operation_id: 'op-committed',
-      mutation: {
-        kind: 'upsert',
-        record: record({ store_hash: 'b'.repeat(32) }),
-      },
-    });
-    await shard.commit('op-committed');
-    await shard.prepare({
-      operation_id: 'op-aborted',
-      mutation: {
-        kind: 'upsert',
-        record: record({ store_hash: 'c'.repeat(32) }),
-      },
-    });
-    await shard.abort('op-aborted');
-    expect(operationStatus(db, 'op-prepared')).toBe('PREPARED');
+    insertPath(db, { store_hash: HASH, last_accessed: 5000 });
 
-    const stale = await shard.staleOperations({
-      before: 20_000,
-      after: null,
-      limit: 100,
+    await expect(
+      shard.delete({ store_hash: HASH, unused_before: 4000 }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'path_in_use', status: 409 },
     });
-    expect(stale).toMatchObject({ ok: true });
-    if (!stale.ok) throw new Error('expected stale operations');
-    expect(stale.value.operation_ids.sort()).toEqual([
-      'op-aborted',
-      'op-committed',
-    ]);
-    expect(stale.value.next_after).toBeNull();
-  });
-
-  it('never lists the record of a cache clear', async () => {
-    const { shard } = setupShard();
-    now(10_000);
-    await shard.prepare({
-      operation_id: 'op-committed',
-      mutation: {
-        kind: 'upsert',
-        record: record({ store_hash: HASH }),
-      },
+    await expect(
+      shard.delete({ store_hash: HASH, unused_before: 5000 }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'path_in_use', status: 409 },
     });
-    await shard.commit('op-committed');
-    await shard.clear('clear-op');
-
-    const stale = await shard.staleOperations({
-      before: 20_000,
-      after: null,
-      limit: 100,
-    });
-    if (!stale.ok) throw new Error('expected stale operations');
-    expect(stale.value.operation_ids).toEqual(['op-committed']);
-  });
-
-  it('pages through stale operations', async () => {
-    const { shard } = setupShard();
-    now(10_000);
-    for (const id of ['op-a', 'op-b', 'op-c']) {
-      await shard.prepare({
-        operation_id: id,
-        mutation: {
-          kind: 'upsert',
-          record: record({ store_hash: `${id}-hash`.padEnd(32, '0') }),
-        },
-      });
-      await shard.commit(id);
-    }
-    const first = await shard.staleOperations({
-      before: 20_000,
-      after: null,
-      limit: 2,
-    });
-    if (!first.ok) throw new Error('expected stale operations');
-    expect(first.value.operation_ids).toEqual(['op-a', 'op-b']);
-    expect(first.value.next_after).toBe('op-b');
-    const second = await shard.staleOperations({
-      before: 20_000,
-      after: first.value.next_after,
-      limit: 2,
-    });
-    if (!second.ok) throw new Error('expected stale operations');
-    expect(second.value.operation_ids).toEqual(['op-c']);
-    expect(second.value.next_after).toBeNull();
-  });
-
-  it('counts a missing created_at as old', async () => {
-    const { db, shard } = setupShard();
-    now(10_000);
-    await shard.prepare({
-      operation_id: 'op-new',
-      mutation: {
-        kind: 'upsert',
-        record: record({ store_hash: HASH }),
-      },
-    });
-    await shard.commit('op-new');
-    db.prepare(
-      "INSERT INTO index_operations (operation_id, store_hash, mutation, delta, status, created_at) VALUES (?, ?, ?, ?, 'COMMITTED', NULL)",
-    ).run(
-      'op-legacy',
-      HASH,
-      JSON.stringify({ kind: 'delete', store_hash: HASH }),
-      0,
-    );
-
-    const stale = await shard.staleOperations({
-      before: 0,
-      after: null,
-      limit: 100,
-    });
-    if (!stale.ok) throw new Error('expected stale operations');
-    expect(stale.value.operation_ids).toEqual(['op-legacy']);
-  });
-
-  it('never forgets a prepared row', async () => {
-    const { db, shard } = setupShard();
-    now(10_000);
-    await shard.prepare({
-      operation_id: 'op-prepared',
-      mutation: { kind: 'upsert', record: record({ store_hash: HASH }) },
-    });
-    await shard.prepare({
-      operation_id: 'op-committed',
-      mutation: {
-        kind: 'upsert',
-        record: record({ store_hash: 'b'.repeat(32) }),
-      },
-    });
-    await shard.commit('op-committed');
-
-    await shard.forgetOperations({
-      operation_ids: ['op-prepared', 'op-committed', 'missing'],
-    });
-
-    expect(operationStatus(db, 'op-prepared')).toBe('PREPARED');
-    expect(
-      db
-        .prepare(
-          'SELECT COUNT(*) AS value FROM index_operations WHERE operation_id = ?',
-        )
-        .get('op-committed') as { value: number },
-    ).toMatchObject({ value: 0 });
-  });
-
-  it('never forgets the record of a cache clear', async () => {
-    const { db, shard } = setupShard();
-    now(10_000);
-    insertPath(db, { store_hash: HASH, file_size: 100 });
-    await shard.prepare({
-      operation_id: 'op-committed',
-      mutation: {
-        kind: 'upsert',
-        record: record({ store_hash: 'b'.repeat(32), file_size: 50 }),
-      },
-    });
-    await shard.commit('op-committed');
-    await shard.clear('clear-op');
-
-    await shard.forgetOperations({
-      operation_ids: ['op-committed', 'clear-op'],
-    });
-
-    // The clear record survives, so a retried clear reports the same totals.
-    await expect(shard.clear('clear-op')).resolves.toMatchObject({
+    expect(storedBytes(db)).toBe(100);
+    await expect(shard.usage()).resolves.toMatchObject({
       ok: true,
-      value: { deleted: 2, bytes: 150 },
+      value: { bytes: 100, revision: 0 },
+    });
+  });
+
+  it('deletes a path last used before the cutoff', async () => {
+    const { db, shard } = setupShard();
+    insertPath(db, { store_hash: HASH, last_accessed: 5000 });
+    await expect(
+      shard.delete({ store_hash: HASH, unused_before: 6000 }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { freed: 100, existed: true },
+    });
+  });
+
+  it('lets a delete of a missing path through', async () => {
+    const { shard } = setupShard();
+    await expect(
+      shard.delete({ store_hash: HASH, unused_before: 6000 }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { freed: 0, existed: false },
     });
   });
 });

@@ -301,8 +301,7 @@ export class CoordinatorLifecycle {
         return failure('corrupt_cache', 'cache record is corrupt', 500);
       }
       this.ctx.storage.sql.exec('DELETE FROM audit_outbox');
-      this.ctx.storage.sql.exec('DELETE FROM clear_operations');
-      this.ctx.storage.sql.exec('DELETE FROM quota_operations');
+      this.ctx.storage.sql.exec('DELETE FROM shard_usage');
       this.ctx.storage.sql.exec('DELETE FROM upload_allocations');
       this.ctx.storage.sql.exec('DELETE FROM inflight_uploads');
       this.ctx.storage.sql.exec('DELETE FROM cache');

@@ -204,10 +204,13 @@ cf-nix-cache gc run                       # run now
 cf-nix-cache gc status                    # the active run and the last result
 ```
 
-A daily workflow run at 04:00 UTC applies retention and starts a quota run for
-any cache that needs one; a push that takes a cache over 90% of its quota starts
-one immediately. Pushes never wait for eviction. Eviction removes index rows, so
-quota is free as soon as it finishes.
+A daily workflow run at 04:00 UTC refreshes every shard's reported usage, then
+applies retention and starts a quota run for any cache that needs one; a
+publication that takes a cache over 90% of its quota starts one immediately.
+Quota is soft: an upload is checked against the current total when it is opened,
+so uploads opened at once can overshoot it by their own size, and eviction
+brings the cache back under the watermark. Pushes never wait for eviction.
+Eviction removes index rows, so quota is free as soon as it finishes.
 
 Garbage collection runs weekly, by default on Sundays at 03:00 UTC, and deletes
 manifests and chunks that no cache references. This reclaims the storage of

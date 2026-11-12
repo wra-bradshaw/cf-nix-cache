@@ -18,8 +18,6 @@ describe('cache deletion', () => {
     const cleared: string[] = [];
     const ok = (value?: unknown) => ({ ok: true, value });
     const quota = {
-      reconcile: async () => ok(),
-      clearDelta: async () => ok(),
       flushAudit: async () => ok(),
       remove: async () => ok(),
     };
@@ -28,7 +26,7 @@ describe('cache deletion', () => {
         getByName: (name: string) => ({
           clear: async () => {
             cleared.push(name);
-            return ok({ deleted: 1, bytes: 1, reconcile_operation_ids: [] });
+            return ok({ deleted: 1, bytes: 1, revision: 1 });
           },
         }),
       },

@@ -11,7 +11,6 @@ import type {
 const DEFAULT_GRACE_SECONDS = 24 * 60 * 60;
 const SWEPT_PREFIXES = ['manifests/', 'chunks/'];
 const SHARDS_PER_STEP = 128;
-const PRUNE_SHARDS_PER_STEP = 16;
 const PRUNE_PAGE = 200;
 // Longer than any retry of an operation: Workflow step retries and CLI
 // retries end within hours.
@@ -202,58 +201,8 @@ export async function runGarbageCollection(
   if (!dryRun) for (const cache of caches) await prune(cache);
   return summary;
 
-  // Operation and upload rows exist so retries are idempotent. Past the
-  // retry window they only take space, and the quota ledger's would slow
-  // every push, so each run removes them.
   async function prune(cache: GcCache): Promise<void> {
     const before = input.now - PRUNE_AFTER_SECONDS;
-    // One page per shard per run. A shard rarely has more than that a week;
-    // any backlog drains over the following runs.
-    for (const [index, prefixes] of batches(
-      shardPrefixes(),
-      PRUNE_SHARDS_PER_STEP,
-    ).entries()) {
-      // Listing and deleting are separate steps so a retried delete removes
-      // exactly what was listed: the shard's rows first, then the ledger's,
-      // so a retry can never be charged twice.
-      const settled = await step.do(
-        `prune list ${cache.incarnation} ${index}`,
-        async () => {
-          const found: { prefix: string; operation_ids: string[] }[] = [];
-          await forEachLimit(prefixes, async (prefix) => {
-            const stale = await catalog.staleOperations(
-              cache,
-              prefix,
-              before,
-              null,
-              PRUNE_PAGE,
-            );
-            if (stale.operation_ids.length === 0) return;
-            const operationIds = await catalog.settledOperations(
-              cache,
-              stale.operation_ids,
-            );
-            if (operationIds.length)
-              found.push({ prefix, operation_ids: operationIds });
-          });
-          return found.sort((left, right) =>
-            left.prefix.localeCompare(right.prefix),
-          );
-        },
-      );
-      if (settled.length === 0) continue;
-      await step.do(`prune forget ${cache.incarnation} ${index}`, async () => {
-        await forEachLimit(settled, ({ prefix, operation_ids }) =>
-          catalog.forgetShardOperations(cache, prefix, operation_ids),
-        );
-        await catalog.forgetQuotaOperations(
-          cache,
-          settled.flatMap((shard) => shard.operation_ids),
-        );
-        return { forgotten: settled.length };
-      });
-    }
-
     let after: string | null = null;
     for (let page = 0; ; page += 1) {
       const stale: { upload_ids: string[]; next_after: string | null } =

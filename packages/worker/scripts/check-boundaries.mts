@@ -42,7 +42,6 @@ const impureSharedModules = new Set([
 ]);
 const pureFeatureModules = new Set([
   'auth/authorization.ts',
-  'cache/publication-protocol.ts',
   'cache/shards.ts',
   'eviction/eviction.ts',
   'eviction/eviction-ports.ts',

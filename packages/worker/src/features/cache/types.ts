@@ -19,33 +19,6 @@ export interface PathRecord {
   created_at: number;
 }
 
-export type CacheMutation =
-  | { kind: 'upsert'; record: PathRecord }
-  | {
-      kind: 'delete';
-      store_hash: string;
-      // Eviction only: refuse the delete if the path was used at or after this
-      // time, so a path read while it is being evicted stays.
-      unused_before?: number;
-    }
-  | { kind: 'clear' };
-
-export interface PreparedMutation {
-  operation_id: string;
-  cache: string;
-  store_hash?: string;
-  delta: number;
-  previous: PathRecord | null;
-  record: PathRecord | null;
-  status: 'PREPARED' | 'COMMITTED' | 'ABORTED';
-}
-
-export interface QuotaReservation {
-  operation_id: string;
-  delta: number;
-  status: 'RESERVED' | 'FINALIZED' | 'ABORTED';
-}
-
 export interface CacheReference {
   id: string;
   name: string;

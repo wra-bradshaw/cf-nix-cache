@@ -2,7 +2,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CoordinatorEviction } from './coordinator-eviction';
-import { CoordinatorQuota, QUOTA_RESERVED_INDEX } from './quota';
+import { CoordinatorUsage } from './coordinator-usage';
 import type { EvictionResult } from '../../eviction/types';
 import type { RpcResult } from '../../../shared/rpc';
 
@@ -80,6 +80,8 @@ function setup(
   workflow: WorkflowFake = workflowFake(),
 ): {
   db: DatabaseSync;
+  ctx: DurableObjectState;
+  env: Env;
   eviction: CoordinatorEviction;
   workflow: WorkflowFake;
   alarms: number[];
@@ -97,6 +99,9 @@ function setup(
     eviction_pending INTEGER NOT NULL DEFAULT 0,
     eviction_requested_at INTEGER NOT NULL DEFAULT 0,
     last_eviction TEXT
+  );
+  CREATE TABLE shard_usage (
+    prefix TEXT PRIMARY KEY, bytes INTEGER NOT NULL, revision INTEGER NOT NULL
   );`);
   if (row) {
     const full = { ...DEFAULT_ROW, ...row };
@@ -155,6 +160,8 @@ function setup(
   const env = { EVICT_CACHE: workflow } as unknown as Env;
   return {
     db,
+    ctx,
+    env,
     eviction: new CoordinatorEviction(ctx, env),
     workflow,
     alarms,
@@ -276,6 +283,23 @@ describe('triggering on growth', () => {
     expect(state(db)).toMatchObject({
       eviction_generation: 1,
       eviction_pending: 1,
+    });
+    expect(alarms).toEqual([NOW_MS]);
+  });
+});
+
+describe('reporting through the usage ledger', () => {
+  it('starts a run when a shard report crosses the watermark', async () => {
+    now();
+    const { db, ctx, env, alarms } = setup({ logical_bytes: 0 });
+    const usage = new CoordinatorUsage(ctx, new CoordinatorEviction(ctx, env));
+
+    value(await usage.report({ prefix: 'aa', bytes: 95, revision: 1 }));
+
+    expect(state(db)).toMatchObject({
+      eviction_generation: 1,
+      eviction_pending: 1,
+      eviction_requested_at: NOW,
     });
     expect(alarms).toEqual([NOW_MS]);
   });
@@ -538,21 +562,29 @@ describe('finishing a run', () => {
   });
 });
 
-function quotaSetup(): {
-  db: DatabaseSync;
-  quota: CoordinatorQuota;
-  afterGrowth: ReturnType<typeof vi.fn>;
-} {
+interface UsageRow {
+  lifecycle?: string;
+  logical_bytes?: number;
+  quota_bytes?: number;
+}
+
+function usageSetup(options: UsageRow | null = {}) {
   const db = new DatabaseSync(':memory:');
   db.exec(`CREATE TABLE cache (
     lifecycle TEXT NOT NULL, logical_bytes INTEGER NOT NULL DEFAULT 0,
     quota_bytes INTEGER NOT NULL DEFAULT 0
   );
-  INSERT INTO cache VALUES ('ACTIVE', 0, 100);
-  CREATE TABLE quota_operations (
-    operation_id TEXT PRIMARY KEY, delta INTEGER NOT NULL, status TEXT NOT NULL
-  );
-  ${QUOTA_RESERVED_INDEX}`);
+  CREATE TABLE shard_usage (
+    prefix TEXT PRIMARY KEY, bytes INTEGER NOT NULL, revision INTEGER NOT NULL
+  );`);
+  if (options)
+    db.prepare(
+      'INSERT INTO cache (lifecycle, logical_bytes, quota_bytes) VALUES (?, ?, ?)',
+    ).run(
+      options.lifecycle ?? 'ACTIVE',
+      options.logical_bytes ?? 0,
+      options.quota_bytes ?? 100,
+    );
   const exec = (query: string, ...args: unknown[]) => {
     const verb = query.trimStart().split(/\s+/)[0]!.toUpperCase();
     if (
@@ -582,78 +614,154 @@ function quotaSetup(): {
     },
   } as unknown as DurableObjectState;
   const afterGrowth = vi.fn(async () => undefined);
-  const quota = new CoordinatorQuota(ctx, {
+  const usage = new CoordinatorUsage(ctx, {
     afterGrowth,
   } as unknown as CoordinatorEviction);
-  return { db, quota, afterGrowth };
+  return { db, usage, afterGrowth };
 }
 
-describe('pruning quota operations', () => {
-  it('settles every operation that is no longer reserved', async () => {
-    const { quota } = quotaSetup();
-    value(await quota.reserve({ operation_id: 'reserved', delta: 10 }));
-    value(await quota.reserve({ operation_id: 'finalized', delta: 10 }));
-    value(await quota.finalize({ operation_id: 'finalized' }));
-    value(await quota.reserve({ operation_id: 'aborted', delta: 10 }));
-    value(await quota.abort({ operation_id: 'aborted' }));
+function logical(db: DatabaseSync): number {
+  return (
+    db.prepare('SELECT logical_bytes AS value FROM cache').get() as {
+      value: number;
+    }
+  ).value;
+}
 
-    await expect(
-      quota.settledOperations({
-        operation_ids: ['reserved', 'finalized', 'aborted', 'missing'],
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      value: ['finalized', 'aborted', 'missing'],
-    });
+function shardRows(
+  db: DatabaseSync,
+): { prefix: string; bytes: number; revision: number }[] {
+  return db
+    .prepare('SELECT prefix, bytes, revision FROM shard_usage ORDER BY prefix')
+    .all() as {
+    prefix: string;
+    bytes: number;
+    revision: number;
+  }[];
+}
+
+describe('reporting shard usage', () => {
+  it('sums the shard totals into logical_bytes', async () => {
+    const { db, usage } = usageSetup();
+
+    value(await usage.report({ prefix: 'aa', bytes: 30, revision: 1 }));
+    value(await usage.report({ prefix: 'bb', bytes: 25, revision: 1 }));
+    value(await usage.report({ prefix: 'aa', bytes: 45, revision: 2 }));
+
+    expect(logical(db)).toBe(70);
+    expect(shardRows(db)).toEqual([
+      { prefix: 'aa', bytes: 45, revision: 2 },
+      { prefix: 'bb', bytes: 25, revision: 1 },
+    ]);
   });
 
-  it('forgets settled operations but keeps reserved ones', async () => {
-    const { db, quota } = quotaSetup();
-    value(await quota.reserve({ operation_id: 'reserved', delta: 10 }));
-    value(await quota.reserve({ operation_id: 'finalized', delta: 10 }));
-    value(await quota.finalize({ operation_id: 'finalized' }));
+  it('replaces a shard share instead of adding it again', async () => {
+    const { db, usage } = usageSetup();
 
-    value(
-      await quota.forgetOperations({
-        operation_ids: ['reserved', 'finalized'],
-      }),
-    );
+    value(await usage.report({ prefix: 'aa', bytes: 30, revision: 1 }));
+    value(await usage.report({ prefix: 'aa', bytes: 50, revision: 2 }));
 
-    const remaining = db
-      .prepare('SELECT operation_id AS id, status FROM quota_operations')
-      .all() as { id: string; status: string }[];
-    expect(remaining).toEqual([{ id: 'reserved', status: 'RESERVED' }]);
+    expect(logical(db)).toBe(50);
   });
 
-  it('ignores finalized, aborted and negative deltas in the pending sum', async () => {
-    const { quota } = quotaSetup();
-    // A finalized reservation is settled bytes, not pending.
-    value(await quota.reserve({ operation_id: 'f', delta: 60 }));
-    value(await quota.finalize({ operation_id: 'f' }));
-    // 60 settled + 40 pending fits in 100 only if the 60 is not pending too.
+  it('ignores a report whose revision is not newer', async () => {
+    const { db, usage } = usageSetup();
+
+    value(await usage.report({ prefix: 'aa', bytes: 30, revision: 2 }));
+    value(await usage.report({ prefix: 'aa', bytes: 100, revision: 1 }));
+    value(await usage.report({ prefix: 'aa', bytes: 200, revision: 2 }));
+
+    expect(logical(db)).toBe(30);
+    expect(shardRows(db)).toEqual([{ prefix: 'aa', bytes: 30, revision: 2 }]);
+  });
+
+  it('never creates a cache or shard row when the cache is gone', async () => {
+    const { db, usage } = usageSetup(null);
+
     await expect(
-      quota.reserve({ operation_id: 'g', delta: 40 }),
-    ).resolves.toMatchObject({ ok: true });
-    // An aborted reservation holds nothing back.
-    value(await quota.abort({ operation_id: 'g' }));
-    await expect(
-      quota.reserve({ operation_id: 'h', delta: 40 }),
-    ).resolves.toMatchObject({ ok: true });
-    // A negative reservation frees bytes; it never offsets pending growth.
-    value(await quota.finalize({ operation_id: 'h' }));
-    value(await quota.reserve({ operation_id: 'n', delta: -10 }));
-    await expect(
-      quota.reserve({ operation_id: 'i', delta: 5 }),
+      usage.report({ prefix: 'aa', bytes: 30, revision: 1 }),
     ).resolves.toMatchObject({
       ok: false,
-      error: { code: 'quota_exceeded' },
+      error: { code: 'not_found', status: 404 },
+    });
+    expect(shardRows(db)).toEqual([]);
+  });
+
+  it('refuses a shrunk shard total that would take the cache negative', async () => {
+    const { db, usage } = usageSetup({ logical_bytes: 0 });
+    db.prepare(
+      'INSERT INTO shard_usage (prefix, bytes, revision) VALUES (?, ?, ?)',
+    ).run('aa', 50, 1);
+
+    await expect(
+      usage.report({ prefix: 'aa', bytes: 10, revision: 2 }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'quota_invariant', status: 409 },
+    });
+    expect(logical(db)).toBe(0);
+    expect(shardRows(db)).toEqual([{ prefix: 'aa', bytes: 50, revision: 1 }]);
+  });
+
+  it('rejects a report that is not a non-negative integer total', async () => {
+    const { usage } = usageSetup();
+
+    for (const input of [
+      { prefix: 'aa', bytes: -1, revision: 1 },
+      { prefix: 'aa', bytes: 1.5, revision: 1 },
+      { prefix: 'aa', bytes: 1, revision: -1 },
+      { prefix: '', bytes: 1, revision: 1 },
+    ])
+      await expect(usage.report(input)).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'invalid_usage', status: 400 },
+      });
+  });
+
+  it('asks eviction for a run only when a shard grows', async () => {
+    const { usage, afterGrowth } = usageSetup();
+
+    value(await usage.report({ prefix: 'aa', bytes: 91, revision: 1 }));
+    expect(afterGrowth).toHaveBeenCalledOnce();
+    value(await usage.report({ prefix: 'aa', bytes: 50, revision: 2 }));
+    expect(afterGrowth).toHaveBeenCalledOnce();
+    value(await usage.report({ prefix: 'bb', bytes: 10, revision: 1 }));
+    expect(afterGrowth).toHaveBeenCalledTimes(2);
+    value(await usage.report({ prefix: 'aa', bytes: 5, revision: 1 }));
+    value(await usage.report({ prefix: 'bb', bytes: 0, revision: 2 }));
+    expect(afterGrowth).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('checking quota at upload open', () => {
+  it('accepts bytes that fit', async () => {
+    const { usage } = usageSetup({ logical_bytes: 50, quota_bytes: 100 });
+    await expect(usage.check({ delta: 50 })).resolves.toMatchObject({
+      ok: true,
     });
   });
 
-  it('notifies eviction after finalizing growth', async () => {
-    const { quota, afterGrowth } = quotaSetup();
-    value(await quota.reserve({ operation_id: 'op', delta: 10 }));
-    value(await quota.finalize({ operation_id: 'op' }));
-    expect(afterGrowth).toHaveBeenCalledOnce();
+  it('refuses bytes that would exceed the quota', async () => {
+    const { usage } = usageSetup({ logical_bytes: 50, quota_bytes: 100 });
+    await expect(usage.check({ delta: 51 })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'quota_exceeded', status: 409 },
+    });
+  });
+
+  it('refuses a cache that is being deleted', async () => {
+    const { usage } = usageSetup({ lifecycle: 'DELETING' });
+    await expect(usage.check({ delta: 1 })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'cache_deleting', status: 410 },
+    });
+  });
+
+  it('reports a missing cache', async () => {
+    const { usage } = usageSetup(null);
+    await expect(usage.check({ delta: 1 })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'not_found', status: 404 },
+    });
   });
 });

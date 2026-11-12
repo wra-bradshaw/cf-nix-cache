@@ -6,7 +6,7 @@ import { authFor } from './access';
 import { coordinator } from './stubs';
 import { getCache, getPath } from './resolve-cache';
 import { isNotFound, unwrapRpc } from '../../shared/rpc';
-import { publicationFor } from './publication-adapters';
+import { pathIndex } from './path-index';
 import { authenticate } from '../auth/authentication';
 import { auditEvent } from '../audit/event';
 import { now } from '../../shared/clock';
@@ -60,10 +60,7 @@ pathRoutes.delete('/api/caches/:name/paths/:storeHash', async (c) => {
   const admin = await authenticate(c.req.raw, c.env, cache.name, 'admin');
   const storeHash = c.req.param('storeHash');
   assertStoreHash(storeHash);
-  const prepared = await publicationFor(c.env, cache, storeHash).execute(
-    `delete:${cache.reference.incarnation}:${storeHash}:${operationId}`,
-    { kind: 'delete', store_hash: storeHash },
-  );
+  const deleted = await pathIndex(c.env, cache.reference).delete(storeHash);
   unwrapRpc(
     await coordinator(c.env, cache.reference).recordAudit(
       auditEvent(
@@ -75,5 +72,5 @@ pathRoutes.delete('/api/caches/:name/paths/:storeHash', async (c) => {
       ),
     ),
   );
-  return c.json({ deleted: Boolean(prepared.previous) });
+  return c.json({ deleted: deleted.existed });
 });

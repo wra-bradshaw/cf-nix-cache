@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { manifest } from '../../../shared/test-fixtures';
+import { failure, ok, type RpcResult } from '../../../shared/rpc';
+import type { PathRecord } from '../../cache/types';
 import type { UploadRow } from './upload-row';
 import { UploadPublisher } from './publish';
 import type { UploadStorage } from './storage';
@@ -67,7 +69,15 @@ describe('upload publication', () => {
       ],
     };
 
-    async function environment(text: () => Promise<string>) {
+    interface EnvironmentOptions {
+      upsert?: (record: PathRecord) => Promise<RpcResult<unknown>>;
+      reportUsage?: () => Promise<RpcResult<void>>;
+    }
+
+    async function environment(
+      text: () => Promise<string>,
+      options: EnvironmentOptions = {},
+    ) {
       const { privateKey } = (await crypto.subtle.generateKey(
         { name: 'Ed25519' },
         true,
@@ -80,15 +90,26 @@ describe('upload publication', () => {
         coordinator_id: '0'.repeat(64),
         lifecycle: 'ACTIVE',
       };
-      const prepare = vi.fn(async () => ({
-        ok: false,
-        error: { code: 'unavailable', message: 'lost', status: 503 },
-      }));
+      const upserts: PathRecord[] = [];
+      const shard = {
+        upsert: async (record: PathRecord) => {
+          upserts.push(record);
+          return options.upsert
+            ? options.upsert(record)
+            : ok({
+                previous_size: null,
+                bytes: record.file_size,
+                revision: upserts.length,
+              });
+        },
+      };
+      const reportUsage = vi.fn(options.reportUsage ?? (async () => ok()));
       const coordinator = {
         getCache: async () => ({
           ok: true,
           value: { id: 'cache-id', name: 'cache', lifecycle: 'ACTIVE' },
         }),
+        reportUsage,
       };
       const env = {
         NIX_PRIVATE_JWK: JSON.stringify(
@@ -104,10 +125,13 @@ describe('upload publication', () => {
           idFromString: (id: string) => id,
           get: () => coordinator,
         },
-        CACHE_INDEX: { getByName: () => ({ prepare }) },
-        CACHE_BUCKET: { get: async () => ({ text }) },
+        CACHE_INDEX: { getByName: () => shard },
+        CACHE_BUCKET: {
+          get: async () => ({ text }),
+          delete: async () => undefined,
+        },
       } as unknown as Env;
-      return { env, prepare };
+      return { env, upserts, reportUsage };
     }
 
     function statefulStorage() {
@@ -133,12 +157,24 @@ describe('upload publication', () => {
       } as unknown as UploadStorage;
     }
 
-    it('sends an identical mutation when the clock has moved', async () => {
-      const { env, prepare } = await environment(async () =>
-        JSON.stringify(stored),
+    const receipt = { manifest_key: 'm.json', deduplicated: false };
+
+    it('writes the same record on a retry after the clock moved', async () => {
+      let attempts = 0;
+      const { env, upserts } = await environment(
+        async () => JSON.stringify(stored),
+        {
+          upsert: async (record) =>
+            attempts++ === 0
+              ? failure('unavailable', 'lost', 503)
+              : ok({
+                  previous_size: null,
+                  bytes: record.file_size,
+                  revision: 1,
+                }),
+        },
       );
       const publisher = new UploadPublisher(env, statefulStorage());
-      const receipt = { manifest_key: 'm.json', deduplicated: false };
       vi.useFakeTimers({ now: 1_000_000 });
       try {
         await publisher.publish(receipt);
@@ -147,13 +183,34 @@ describe('upload publication', () => {
       } finally {
         vi.useRealTimers();
       }
-      const [first, second] = prepare.mock.calls as unknown as [
-        [{ mutation: unknown }],
-        [{ mutation: unknown }],
-      ];
-      expect(JSON.stringify(second[0].mutation)).toBe(
-        JSON.stringify(first[0].mutation),
-      );
+      expect(upserts).toHaveLength(2);
+      expect(upserts[1]).toEqual(upserts[0]);
+    });
+
+    it('does not fail the upload when reporting usage fails', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { env } = await environment(async () => JSON.stringify(stored), {
+        reportUsage: async () => failure('unavailable', 'lost', 503),
+      });
+      await expect(
+        new UploadPublisher(env, statefulStorage()).publish(receipt),
+      ).resolves.toMatchObject({ ok: true });
+    });
+
+    it('fails the upload permanently when the cache is being deleted', async () => {
+      const { env } = await environment(async () => JSON.stringify(stored), {
+        upsert: async () => failure('cache_deleting', 'deleting', 410),
+      });
+      await expect(
+        new UploadPublisher(env, statefulStorage()).publish(receipt),
+      ).resolves.toEqual({
+        ok: false,
+        error: {
+          code: 'publication_failed',
+          message: 'deleting',
+          status: 410,
+        },
+      });
     });
 
     it('retries a failed manifest read instead of failing the upload', async () => {
@@ -161,20 +218,14 @@ describe('upload publication', () => {
         throw new Error('connection reset');
       });
       await expect(
-        new UploadPublisher(env, statefulStorage()).publish({
-          manifest_key: 'm.json',
-          deduplicated: false,
-        }),
+        new UploadPublisher(env, statefulStorage()).publish(receipt),
       ).rejects.toThrow('connection reset');
     });
 
     it('permanently rejects a manifest that is not JSON', async () => {
       const { env } = await environment(async () => 'not json');
       await expect(
-        new UploadPublisher(env, statefulStorage()).publish({
-          manifest_key: 'm.json',
-          deduplicated: false,
-        }),
+        new UploadPublisher(env, statefulStorage()).publish(receipt),
       ).resolves.toMatchObject({
         ok: false,
         error: { code: 'invalid_input', status: 422 },

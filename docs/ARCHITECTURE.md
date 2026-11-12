@@ -12,8 +12,6 @@ stock Nix / CLI
       │ HTTPS / current API DTOs
       ▼
 transport ──► application use cases ──► typed ports
-                                      ├─ CacheIndex / prepare-commit protocol
-                                      ├─ QuotaLedger / reservation protocol
                                       └─ Durable Object / Workflow adapters
 ```
 
@@ -33,21 +31,19 @@ through routing; the coordinator remains the serving authority, so catalog
 traffic is reduced without allowing a CREATING or DELETING transition to serve
 data. Global control-plane operations require a wildcard admin grant.
 
-Publication, replacement, and direct deletion all use the same
-`PublicationProtocol`: `prepare(operation_id) -> reserve(operation_id)
--> commit(operation_id) -> finalize(operation_id)`. Prepare locks the store
-hash and records the exact delta. Quota reservations include pending positive
-deltas. Every operation is safe to repeat after a restart; an uncommitted
-reservation is aborted and a committed index mutation retains its pending
-charge until finalization. Cache teardown does not go through that protocol:
-`DeleteCacheWorkflow` calls the shard's `clear` and the coordinator's
-`reconcile` and `clearDelta` directly, once per shard. Clearing first fences
-the index shard and aborts prepared mutations, preventing a publication already
-in flight from recreating paths after the shard is cleared. Already-reserved
-publications are reconciled and finalized during deletion before their shard
-delta is applied, so a response loss cannot strand teardown. R2 lifecycle rules clean
-abandoned staging data, and garbage collection (below) reclaims manifests and
-chunks. Because a path can be replaced, public NAR responses use a bounded cache lifetime rather than an
+Each index shard owns its paths: a publish, a delete or an eviction is one
+transaction on one shard. After each change the shard reports its total bytes
+and a revision to the coordinator; the coordinator keeps the latest report per
+shard, and their sum is the cache's logical bytes. Reports are best-effort, so
+the daily `evict-cache` run re-reads every shard's total before deciding on
+eviction. Quota is soft: it is checked against the current total when an upload
+is opened, so uploads opened at once can overshoot it by their own size, and
+eviction brings the cache back under the watermark. Logical bytes count each
+path's chunks, not distinct R2 objects. Cache deletion fences each shard,
+refusing new publishes with `cache_deleting`, and clears it, then removes the
+coordinator. R2 lifecycle rules clean abandoned staging data, and garbage
+collection (below) reclaims manifests and chunks. Because a path can be
+replaced, public NAR responses use a bounded cache lifetime rather than an
 immutable year-long cache directive.
 
 Uploads are encoded by the CLI, which already reads every byte of the NAR: it
@@ -110,30 +106,30 @@ path already present. A path's references are not considered, so a retained
 path can outlive a dependency; Nix then builds or fetches that dependency
 elsewhere.
 
-A daily run at 04:00 UTC asks every cache whether it needs a run. This is where
-`retention_days` is applied, and it also catches a cache that crossed its quota
-watermark without a run being started. When a finalized publication puts the
-cache's logical bytes over 90% of its quota, the coordinator requests a run
-directly, through a Durable Object alarm. Pushes never wait for a run: the
-space between 90% and 100% is what they fill while it works.
+A daily run at 04:00 UTC refreshes every shard's reported usage, then asks
+every cache whether it needs a run. This is where `retention_days` is applied,
+and it also catches a cache that crossed its quota watermark without a run
+being started. When a publication puts the cache's logical bytes over 90% of
+its quota, the coordinator requests a run directly, through a Durable Object
+alarm. Pushes never wait for a run: the space between 90% and 100% is what they
+fill while it works.
 
 A quota run sums, across all 1024 index shards, the bytes of paths by hour of
 last use, counting only paths not used within `eviction_min_age_days` (default
 30). It picks the cutoff that brings the cache down to 80% of its quota and
-evicts paths last used before it, through the publication protocol. If that
-would not free enough, it evicts everything old enough and records
-`floor_reached`; pushes then fail with `quota_exceeded` at 100%. When a run has
-both a retention and a quota cutoff, it uses the later one, which evicts at
-least as much as either.
+evicts paths last used before it. If that would not free enough, it evicts
+everything old enough and records `floor_reached`; pushes then fail with
+`quota_exceeded` at 100%. When a run has both a retention and a quota cutoff, it
+uses the later one, which evicts at least as much as either.
 
 Thirty days matches Nix's `narinfo-cache-positive-ttl`. A client may keep a
 narinfo for that long, so evicting a path used more recently could leave the
 client holding a narinfo for a path the cache no longer serves.
 
 A lookup records the path as used in the same transaction that reads it.
-Eviction prepares a delete with its cutoff, and the index refuses the delete if
-the path was used at or after the cutoff; that path is counted in
-`skipped_paths` and stays. A path being published is skipped the same way.
+Eviction deletes a path only if it was not used since the cutoff, checked in the
+same transaction as the delete; such a path is counted in `skipped_paths` and
+stays. A path published during the run is skipped the same way.
 Eviction removes index rows only, so quota is free as soon as the run finishes;
 the objects are deleted by the next garbage collection.
 
@@ -174,12 +170,10 @@ ledger or it loses the gate, so a dead run blocks uploads for at most 30 minutes
 Every step is idempotent, and deleting manifests first means an interrupted
 sweep cannot leave a manifest whose chunks are gone.
 
-After a run finishes, each cache is pruned (a dry run prunes nothing): rows kept
-only so retries stay idempotent are removed once they are 7 days old. Settled
-index-shard operations go with their quota ledger rows, and upload allocations
-with the storage of their finished `UploadJob` Durable Objects. A prepared
-operation and a reserved charge stay. The quota ledger's pending total is read
-from a partial index, so its history no longer slows every push.
+After a run finishes, each cache is pruned (a dry run prunes nothing): upload
+rows kept only so retries stay idempotent are removed once they are 7 days old,
+and upload allocations go with the storage of their finished `UploadJob`
+Durable Objects.
 
 ## Durable Object migrations
 
@@ -206,7 +200,7 @@ an illegal move throws instead of stranding an upload.
 Dependencies point one way: `app` may import `features`, and `features` may
 import `shared` and each other, but `shared` may not import `features` or `app`
 and `features` may not import `app`. Pure modules (most of `shared`, each
-feature's `types.ts`, `auth/authorization`, `cache/publication-protocol`,
+feature's `types.ts`, `auth/authorization`,
 `cache/shards`, `eviction/eviction`, `eviction/eviction-ports`,
 `eviction/policy`, `gc/garbage-collection`, `gc/gc-ports`, and
 `uploads/manifest`) may import only other pure modules or generated

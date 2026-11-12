@@ -12,32 +12,6 @@ declare global {
   }
 }
 
-// SQLite has no ADD COLUMN IF NOT EXISTS, so schema changes to existing
-// tables check which columns are already there.
-export function addMissingColumns(
-  ctx: DurableObjectState,
-  table: string,
-  columns: Record<string, string>,
-): void {
-  let present: Set<string>;
-  try {
-    present = new Set(
-      [...ctx.storage.sql.exec<SqlRow>(`PRAGMA table_info(${table})`)].map(
-        (column) => text(column, 'name'),
-      ),
-    );
-  } catch (error) {
-    throw new Error(`corrupt_schema: ${table} schema record is corrupt`, {
-      cause: error,
-    });
-  }
-  for (const [name, definition] of Object.entries(columns))
-    if (!present.has(name))
-      ctx.storage.sql.exec(
-        `ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`,
-      );
-}
-
 export function first<T>(cursor: Iterable<T>): T | undefined {
   for (const row of cursor) return row;
   return undefined;

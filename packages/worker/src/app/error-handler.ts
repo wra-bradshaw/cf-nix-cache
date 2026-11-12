@@ -1,5 +1,4 @@
 import { AuthError } from '../features/auth/errors';
-import { PublicationError } from '../features/cache/publication-protocol';
 import { DomainError } from '../shared/errors';
 import { RangeRequestError } from '../features/nix/range';
 import { ApiCallError } from '../shared/rpc';
@@ -41,8 +40,6 @@ export function handleError(caught: unknown, c: RequestContext): Response {
       });
     return errorResponse(c, caught.code, caught.message, caught.status);
   }
-  if (caught instanceof PublicationError)
-    return errorResponse(c, caught.code, caught.message, caught.status);
   if (caught instanceof RangeRequestError)
     return errorResponse(c, 'range_not_satisfiable', caught.message, 416);
   // Error objects serialize to `{}` in structured Workers logs.

@@ -72,35 +72,6 @@ export function gcPorts(env: Env, runId: string): GcPorts {
             limit,
           }),
         ),
-      staleOperations: async (cache, prefix, before, after, limit) =>
-        unwrapRpc(
-          await indexShard(env, cache.incarnation, prefix).staleOperations({
-            before,
-            after,
-            limit,
-          }),
-        ),
-      settledOperations: async (cache, operationIds) =>
-        unwrapRpc(
-          await coordinator(env, stateOf(cache).reference).settledOperations({
-            operation_ids: operationIds,
-          }),
-        ),
-      forgetShardOperations: async (cache, prefix, operationIds) => {
-        unwrapRpc(
-          await indexShard(env, cache.incarnation, prefix).forgetOperations({
-            operation_ids: operationIds,
-          }),
-        );
-      },
-      forgetQuotaOperations: async (cache, operationIds) => {
-        if (operationIds.length === 0) return;
-        unwrapRpc(
-          await coordinator(env, stateOf(cache).reference).forgetOperations({
-            operation_ids: operationIds,
-          }),
-        );
-      },
       staleUploads: async (cache, before, after, limit) =>
         unwrapRpc(
           await coordinator(env, stateOf(cache).reference).staleUploads({

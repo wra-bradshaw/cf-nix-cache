@@ -3,8 +3,7 @@ import { DomainError } from '../../../shared/errors';
 import { ApiCallError, failure, ok, type RpcResult } from '../../../shared/rpc';
 import { ChunkManifestSchema, parseJsonSchema } from '../../../shared/schemas';
 import { MANIFEST_MAX_BYTES } from '../verify-stored';
-import { publicationFor } from '../../cache/publication-adapters';
-import { PublicationError } from '../../cache/publication-protocol';
+import { pathIndex } from '../../cache/path-index';
 import { getCache } from '../../cache/resolve-cache';
 import type { CacheState, PathRecord } from '../../cache/types';
 import { renderNarInfo } from '../../nix/narinfo';
@@ -133,16 +132,13 @@ export class UploadPublisher {
         409,
       );
     try {
-      await publicationFor(this.env, cache, row.manifest.store_hash).execute(
-        `publish:${row.job_id}`,
-        { kind: 'upsert', record },
-      );
+      await pathIndex(this.env, cache.reference).upsert(record);
     } catch (error) {
-      if (error instanceof PublicationError)
+      if (error instanceof ApiCallError)
         return failure(
           'publication_failed',
           error.message,
-          error.retryable ? 503 : 409,
+          error.status >= 500 ? 503 : error.status,
         );
       throw error;
     }

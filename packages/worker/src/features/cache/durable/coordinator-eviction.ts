@@ -33,10 +33,6 @@ export class CoordinatorEviction {
     private readonly env: Env,
   ) {}
 
-  // After a reservation is finalized. Costs one row read unless the cache
-  // has just crossed its watermark.
-  // Never fails the publication that called it: the daily check catches a
-  // request missed here.
   async afterGrowth(): Promise<void> {
     try {
       const requested = this.ctx.storage.transactionSync(() => {

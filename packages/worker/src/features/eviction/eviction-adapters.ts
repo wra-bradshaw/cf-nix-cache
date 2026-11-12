@@ -1,16 +1,13 @@
-import {
-  MUTATION_IN_PROGRESS,
-  publicationFor,
-} from '../cache/publication-adapters';
-import { PublicationError } from '../cache/publication-protocol';
+import { pathIndex } from '../cache/path-index';
 import { coordinator, indexShard, system } from '../cache/stubs';
 import type { CacheReference } from '../cache/types';
-import { unwrapRpc } from '../../shared/rpc';
+import { mapLimit } from '../../shared/concurrency';
+import { ApiCallError, unwrapRpc } from '../../shared/rpc';
 import { collectPages } from '../../shared/sql';
 import type { EvictionPorts } from './eviction-ports';
 import type { EvictionCacheRef } from './types';
 
-const PATH_IN_USE = 'path_in_use';
+const CONCURRENCY = 16;
 
 function reference(
   cache: EvictionCacheRef,
@@ -26,17 +23,20 @@ export function evictionPorts(env: Env): EvictionPorts {
         await collectPages(async (after) =>
           unwrapRpc(await system(env).listCaches({ after, limit: 100 })),
         )
-      )
-        .filter((cache) => cache.lifecycle === 'ACTIVE')
-        .map(({ id, name, incarnation, coordinator_id }) => ({
-          id,
-          name,
-          incarnation,
-          coordinator_id,
-        })),
+      ).map(({ id, name, incarnation, coordinator_id, lifecycle }) => ({
+        id,
+        name,
+        incarnation,
+        coordinator_id,
+        lifecycle,
+      })),
     requestEviction: async (cache) =>
       unwrapRpc(await coordinator(env, reference(cache)).requestEviction())
         .requested,
+    refreshUsage: async (cache, prefixes) => {
+      const index = pathIndex(env, reference(cache));
+      await mapLimit(prefixes, CONCURRENCY, (prefix) => index.refresh(prefix));
+    },
     cacheConfig: async (cache) => {
       const result = await coordinator(env, reference(cache)).getCache();
       if (!result.ok && result.error.code === 'not_found') return null;
@@ -56,27 +56,18 @@ export function evictionPorts(env: Env): EvictionPorts {
           limit,
         }),
       ),
-    evict: async (cache, config, storeHash, before, operationId) => {
+    evict: async (cache, config, storeHash, before) => {
       try {
-        const prepared = await publicationFor(
-          env,
-          { ...config, reference: reference(cache, config.lifecycle) },
-          storeHash,
-        ).execute(operationId, {
-          kind: 'delete',
-          store_hash: storeHash,
-          unused_before: before,
-        });
-        return prepared.previous?.file_size ?? 0;
+        return (
+          await pathIndex(env, reference(cache, config.lifecycle)).delete(
+            storeHash,
+            { unusedBefore: before },
+          )
+        ).freed;
       } catch (error) {
-        if (
-          error instanceof PublicationError &&
-          (error.code === PATH_IN_USE ||
-            error.code === MUTATION_IN_PROGRESS ||
-            !error.retryable)
-        )
-          return null;
-        throw error;
+        if (!(error instanceof ApiCallError)) throw error;
+        if (error.status >= 500) throw error;
+        return null;
       }
     },
     finished: async (cache, generation, result) => {
