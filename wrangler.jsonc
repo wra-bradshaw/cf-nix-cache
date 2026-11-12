@@ -69,7 +69,11 @@
   // NIX_PUBLIC_KEYS is a required Worker secret, not a var: a var of the same
   // name collides with the secret. Local development reads it from .dev.vars
   // (see .dev.vars.example).
-  "observability": { "enabled": true },
+  "observability": {
+    "enabled": true,
+    "issues": { "enabled": true },
+    "traces": { "enabled": true },
+  },
   "limits": { "subrequests": 10000000, "cpu_ms": 300000 },
   "env": {
     "production": {
